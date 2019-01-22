@@ -42,6 +42,9 @@ import numpy as np
 from tensorflow_probability.python.distributions import distribution
 from tensorflow_probability.python.internal import distribution_util
 from tensorflow_probability.python.internal import reparameterization
+from tensorflow_probability.python.internal import dtype_util
+
+import tensorflow as tf
 
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
@@ -73,22 +76,29 @@ class ZeroInflated(distribution.Distribution):
                name="ZeroInflated"):
     """Initialize a zero-inflated distribution.
 
-    A `ZeroInflated` is defined by a zero-inflation rate (`pi`, representing the probabilities of excess zeroes) and a `Distribution` object
+    A `ZeroInflated` is defined by a zero-inflation rate
+    (`pi`, representing the probabilities of excess zeros)
+    and a `Distribution` object
     having matching dtype, batch shape, event shape, and continuity
     properties (the dist).
 
     Args:
-      pi: A zero-inflation rate, representing the probabilities of excess zeroes.
+      pi: A zero-inflation rate.
+        Representing the probabilities of excess zeroes.
+
       dist: A `Distribution` instance.
         The instance must have `batch_shape` matching the zero-inflation rate.
+
       validate_args: Python `bool`, default `False`. If `True`, raise a runtime
         error if batch or event ranks are inconsistent between pi and any of
         the distributions. This is only checked if the ranks cannot be
         determined statically at graph construction time.
+
       allow_nan_stats: Boolean, default `True`. If `False`, raise an
        exception if a statistic (e.g. mean/mode/etc...) is undefined for any
         batch member. If `True`, batch members with valid parameters leading to
         undefined statistics will return NaN for this statistic.
+
       name: A name for this distribution (optional).
 
     Raises:
@@ -112,24 +122,27 @@ class ZeroInflated(distribution.Distribution):
           "dist must be a Distribution instance"
           " but saw: %s" % dist)
 
-    dtype = dist.dtype
-    static_event_shape = dist.event_shape
-    static_batch_shape = pi.get_shape()
-
-    if static_event_shape.ndims is None:
-      raise ValueError(
-          "Expected to know rank(event_shape) from dist, but "
-          "the distribution does not provide a static number of ndims")
-
     # Ensure that all batch and event ndims are consistent.
     with ops.name_scope(name, values=[pi]):
+      dtype = dtype_util.common_dtype([pi], preferred_dtype=tf.float32)
+      pi = tf.convert_to_tensor(pi, name="pi", dtype=dtype)
+
+      dtype = dist.dtype
+      static_event_shape = dist.event_shape
+      static_batch_shape = pi.get_shape()
+
+      if static_event_shape.ndims is None:
+        raise ValueError(
+            "Expected to know rank(event_shape) from dist, but "
+            "the distribution does not provide a static number of ndims")
+
       with ops.control_dependencies([check_ops.assert_positive(pi)] if
                                     validate_args else []):
         pi_batch_shape = array_ops.shape(pi)
         pi_batch_rank = array_ops.size(pi_batch_shape)
         if validate_args:
           dist_batch_shape = dist.batch_shape_tensor()
-          dist_batch_rank = array_ops.size(batch_shape_dist)
+          dist_batch_rank = array_ops.size(dist_batch_shape)
           check_message = ("dist batch shape must match pi batch shape")
           self._assertions = [check_ops.assert_equal(
               pi_batch_rank, dist_batch_rank, message=check_message)]
@@ -145,7 +158,7 @@ class ZeroInflated(distribution.Distribution):
         self._static_batch_shape = static_batch_shape
 
     # We let the zero-inflated distribution access _graph_parents since its arguably
-    # more like a baseclass.
+    # more like a base class.
     graph_parents = [self._pi]  # pylint: disable=protected-access
     graph_parents += self._dist._graph_parents  # pylint: disable=protected-access
 
@@ -205,7 +218,8 @@ class ZeroInflated(distribution.Distribution):
       n = ops.convert_to_tensor(n, name="n")
       static_n = tensor_util.constant_value(n)
       n = int(static_n) if static_n is not None else n
-      pi_samples = self.pi.sample(n, seed=seed)
+      pi_samples = self.pi
+      # pi_samples = self.pi.sample(n, seed=seed)
 
       static_samples_shape = pi_samples.get_shape()
       if static_samples_shape.is_fully_defined():

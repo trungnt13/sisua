@@ -5,24 +5,48 @@ import numpy as np
 from six import string_types
 from odin.utils import ctext
 
-def save_data_to_csv(outpath, header, row, data, print_log=False):
-  if data is not None:
-    if print_log:
-      print("Saving '%s' to '%s' ..." % (ctext(data.shape, 'cyan'),
-                                         ctext(outpath, 'yellow')))
-    with open(outpath, 'w') as f:
-      # preprocessing the head
-      if isinstance(header, (tuple, list, np.ndarray, set)):
-        header = ",".join([str(val)
-                           if isinstance(val, (string_types, np.string_)) else
-                           "D%d" % i
-                           for i, val in enumerate(header)])
-      f.write('Cell,' + header + '\n')
-      # write the data
-      for i, j in zip(row, data):
-        f.write(i + ',')
-        f.write(','.join(['%g' % x for x in j]))
-        f.write('\n')
+def save_data_to_csv(outpath, header, row, data):
+  if data is None:
+    return
+  if '.csv' not in outpath:
+    outpath += '.csv'
+
+  assert len(row) == len(data), "Data length mismatch!"
+  with open(outpath, 'w') as f:
+    # preprocessing the head
+    if isinstance(header, (tuple, list, np.ndarray, set)):
+      header = ",".join([str(val)
+                         if isinstance(val, (string_types, np.string_)) else
+                         "D%d" % i
+                         for i, val in enumerate(header)])
+    f.write('Cell,' + header + '\n')
+    # write the data
+    for i, j in zip(row, data):
+      f.write(i + ',')
+      f.write(','.join(['%g' % x for x in j]))
+      f.write('\n')
+
+def save_data_to_R(outpath, header, row, data):
+  if data is None:
+    return
+  if '.feather' not in outpath:
+    outpath += '.feather'
+
+  import pandas as pd
+  try:
+    import feather
+  except ImportError as e:
+    raise RuntimeError(
+        "Cannot export to R, require python package 'feather-format'")
+
+  row = np.array(row)
+  if isinstance(header, string_types):
+    header = header.split(',')
+  header = np.array(header)
+  df = pd.DataFrame(data=data, index=row, columns=header,
+                    dtype=data.dtype)
+
+  feather.write_dataframe(df, outpath)
 
 def load_npz_sorted(path):
   """ This always return a list of loaded results """

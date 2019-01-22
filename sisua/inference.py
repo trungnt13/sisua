@@ -12,6 +12,7 @@ from odin.stats import train_valid_test_split, describe
 from odin.utils import get_script_path, ctext, batching
 from odin import nnet as N, backend as K, training
 
+from sisua import is_verbose
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
 from sisua.data import get_dataset, SingleCellDataset
 from sisua.utils.others import validating_dataset
@@ -34,8 +35,7 @@ class Inference(BaseEstimator):
 
   def __init__(self, model_name, model_config={},
                xnorm=None, tnorm=None, ynorm=None,
-               cellsize_normalize_factor=1,
-               verbose=True):
+               cellsize_normalize_factor=1):
     super(Inference, self).__init__()
     self._name = model_name
     self._model = N.Lambda.search(name=model_name,
@@ -77,7 +77,6 @@ class Inference(BaseEstimator):
     self._gene_dim = model_config.get('gene_dim', None)
     self._prot_dim = model_config.get('prot_dim', None)
 
-    self._verbose = bool(verbose)
     self._is_fitted = False
 
     self._xnorm = model_config.get('xnorm', xnorm)
@@ -97,13 +96,13 @@ class Inference(BaseEstimator):
                         binary_output=True)
     return (self._name, model, self._config, self._gmm_threshold,
             self._gene_dim, self._prot_dim,
-            self._verbose, self._is_fitted,
+            self._is_fitted,
             self._xnorm, self._tnorm, self._ynorm)
 
   def __setstate__(self, states):
     (self._name, model, self._config, self._gmm_threshold,
      self._gene_dim, self._prot_dim,
-     self._verbose, self._is_fitted,
+     self._is_fitted,
      self._xnorm, self._tnorm, self._ynorm) = states
     # reload the model
     self._model = N.deserialize(model, force_restore_vars=True)
@@ -134,10 +133,6 @@ class Inference(BaseEstimator):
   @property
   def is_fitted(self):
     return self._is_fitted
-
-  @property
-  def verbose(self):
-    return self._verbose
 
   @property
   def gene_dim(self):
@@ -183,7 +178,7 @@ class Inference(BaseEstimator):
     self.n_mcmc_samples_plh = K.placeholder(shape=(), dtype='int32',
                                             name='n_mcmc_samples')
 
-    if self.verbose:
+    if is_verbose():
       print(ctext("Input placeholders:", 'lightyellow'))
       print(" *", ctext(X_plh, 'cyan'))
       print(" *", ctext(T_plh, 'cyan'))
@@ -194,6 +189,9 @@ class Inference(BaseEstimator):
 
     # ====== applying the model ====== #
     kw = dict(self._config)
+    kw['xnorm'] = self._xnorm
+    kw['tnorm'] = self._tnorm
+    kw['ynorm'] = self._ynorm
     # select objective for multitask model
     # ce - categorical cross entropy
     # mse - mean squared error
@@ -240,7 +238,7 @@ class Inference(BaseEstimator):
     # ====== predicted labels ====== #
     y_ = outputs['y_'] if 'y_' in outputs else None
 
-    if self.verbose:
+    if is_verbose():
       print(ctext("Network outputs:", 'lightyellow'))
       print("   Latent           :", ctext(Z, 'cyan'))
       print("   zero-inflated PI :", ctext(pi, 'cyan'))
@@ -471,7 +469,7 @@ class Inference(BaseEstimator):
     # validation sample to evaluate supervised tasks
     m_valid = np.ones(shape=(n_valid,), dtype='float32')
 
-    if self.verbose:
+    if is_verbose():
       print(ctext("Training data:", 'lightyellow'))
       print("X train:", ctext(X_train.shape, 'cyan'),
             describe(X_train, shorten=True))
@@ -524,7 +522,7 @@ class Inference(BaseEstimator):
     # overlapping metrics for summary
     overlap_metrics = sorted(set([self.outputs['loss']] + self.outputs['metr']),
                              key=lambda x: x.name)
-    if self.verbose:
+    if is_verbose():
       print(ctext("Metrics for monitoring:", 'lightyellow'))
       for m in overlap_metrics:
         print("  %s:" % ctext(m.name, 'cyan'), m)

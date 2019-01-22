@@ -10,7 +10,7 @@ from odin.fuel import MmapData, Dataset
 from odin.stats import sparsity_percentage
 
 def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
-                              return_dataset=False):
+                              return_dataset=False, print_log=False):
   """
 
   Parameters
@@ -67,12 +67,13 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
   all_exp = sorted(all_exp,
                    key=lambda x: os.path.basename(x))
   # ====== logging ====== #
-  print(ctext("Found following experiments:", 'lightyellow'))
-  for i in all_exp:
-    print('*', os.path.basename(i))
+  if bool(print_log):
+    print(ctext("Found following experiments:", 'lightyellow'))
+    for i in all_exp:
+      print('*', os.path.basename(i))
 
   if return_dataset:
-    return all_exp, gene_ds, prot_ds
+    return all_exp, ds_name_or_path, gene_ds, prot_ds
   return all_exp
 
 def anything2image(x):

@@ -12,6 +12,7 @@ from odin import nnet as N, backend as K
 from odin.utils import ctext
 
 from sisua.distributions.zero_inflated import ZeroInflated
+from sisua import is_verbose
 
 _space_char = re.compile("\s")
 _non_alphanumeric_char = re.compile("\W")
@@ -88,13 +89,13 @@ def create_network(hdim, batchnorm=True, n_layers=2,
       N.Dropout(level=xdrop) if xdrop > 0 else None,
       [dense_batchnorm("Layer%d" % i) for i in range(n_layers)],
       N.Dropout(level=edrop) if edrop > 0 else None,
-  ], debug=True, name='EncoderNetwork%s' % name)
+  ], debug=is_verbose(), name='EncoderNetwork%s' % name)
 
   f_decoder = N.Sequence([
       N.Dropout(level=zdrop) if zdrop > 0 else None,
       [dense_batchnorm("Layer%d" % i) for i in range(n_layers)],
       N.Dropout(level=ddrop) if ddrop > 0 else None,
-  ], debug=True, name="DecoderNetwork%s" % name)
+  ], debug=is_verbose(), name="DecoderNetwork%s" % name)
 
   return f_encoder, f_decoder
 
@@ -110,11 +111,12 @@ def parse_loss_function(true, logit, mask, loss_name):
   else:
     mask_2D = tf.expand_dims(mask, axis=-1)
   # ====== log ====== #
-  print(ctext("Parsing loss function:", 'lightyellow'))
-  print("  true :", ctext(true, 'cyan'))
-  print("  logit:", ctext(logit, 'cyan'))
-  print("  mask :", ctext(mask, 'cyan'))
-  print("  name :", ctext(loss_name, 'cyan'))
+  if is_verbose():
+    print(ctext("Parsing loss function:", 'lightyellow'))
+    print("  true :", ctext(true, 'cyan'))
+    print("  logit:", ctext(logit, 'cyan'))
+    print("  mask :", ctext(mask, 'cyan'))
+    print("  name :", ctext(loss_name, 'cyan'))
   # ====== search for appropritate loss function ====== #
   if loss_name == 'sg':
     loss = 0
@@ -141,8 +143,9 @@ def parse_loss_function(true, logit, mask, loss_name):
                                         weights=mask_2D)
   else:
     raise RuntimeError("Unknown loss type: %s" % loss_name)
-  print("  loss :", ctext(loss, 'lightcyan'))
-  print("  pred :", ctext(pred, 'lightcyan'))
+  if is_verbose():
+    print("  loss :", ctext(loss, 'lightcyan'))
+    print("  pred :", ctext(pred, 'lightcyan'))
   return pred, loss
 
 # ===========================================================================
@@ -185,13 +188,16 @@ def parse_variable_distribution(X, D, dist_name, name):
   """
   dist_name = _normalize_text(dist_name)
   out_dim = X.shape.as_list()[-1]
+  d_dim = D.shape.as_list()[-1] # decoder output dimension
+
   assert dist_name in _dist_name, \
   "Support distribution: %s; given: '%s'" % (', '.join(_dist_name), dist_name)
   # ====== some log ====== #
-  print(ctext("Parsing variable distribution:", 'lightyellow'))
-  print("  Variable    :", ctext(X, 'cyan'))
-  print("  Decoder     :", ctext(D, 'cyan'))
-  print("  name        :", ctext('%s/%s' % (dist_name, name), 'cyan'))
+  if is_verbose():
+    print(ctext("Parsing variable distribution:", 'lightyellow'))
+    print("  Variable    :", ctext(X, 'cyan'))
+    print("  Decoder     :", ctext(D, 'cyan'))
+    print("  name        :", ctext('%s/%s' % (dist_name, name), 'cyan'))
   # ******************** create distribution ******************** #
   with tf.variable_scope(name):
     # ====== Bernoulli ====== #
@@ -317,15 +323,16 @@ def parse_variable_distribution(X, D, dist_name, name):
     ),
   name="%s_stdev_total" % name)
   # ******************** print the dist ******************** #
-  print("  dist        :", ctext(out, 'cyan'))
-  for name, p in sorted(out.parameters.items()):
-    if name in ('allow_nan_stats', 'validate_args'):
-      continue
-    print("      %-8s:" % name, ctext(p, 'magenta'))
-  print("  NLLK        :", ctext(NLLK, 'cyan'))
-  print("  Expected    :", ctext(expected, 'cyan'))
-  print("  StdExplained:", ctext(stdev_explained, 'cyan'))
-  print("  StdTotal    :", ctext(stdev_total, 'cyan'))
+  if is_verbose():
+    print("  dist        :", ctext(out, 'cyan'))
+    for name, p in sorted(out.parameters.items()):
+      if name in ('allow_nan_stats', 'validate_args'):
+        continue
+      print("      %-8s:" % name, ctext(p, 'magenta'))
+    print("  NLLK        :", ctext(NLLK, 'cyan'))
+    print("  Expected    :", ctext(expected, 'cyan'))
+    print("  StdExplained:", ctext(stdev_explained, 'cyan'))
+    print("  StdTotal    :", ctext(stdev_total, 'cyan'))
   return out, expected, stdev_explained, stdev_total, NLLK
 
 # ===========================================================================
@@ -369,12 +376,13 @@ def parse_latent_distribution(E, zdim, dist_name, name,
   E = tuple(E)
   n_inputs = len(E)
   # ====== some log ====== #
-  print(ctext("Parsing LATENT distribution:", 'lightyellow'))
-  print("  name        :", ctext('%s/%s' % (dist_name, name), 'cyan'))
-  print("  Encoder     :", ctext(E, 'cyan'))
-  print("  zdim        :", ctext(zdim, 'cyan'))
-  print("  n_samples   :", ctext(n_samples, 'cyan'))
-  print("  analytic    :", ctext(analytic, 'cyan'))
+  if is_verbose():
+    print(ctext("Parsing LATENT distribution:", 'lightyellow'))
+    print("  name        :", ctext('%s/%s' % (dist_name, name), 'cyan'))
+    print("  Encoder     :", ctext(E, 'cyan'))
+    print("  zdim        :", ctext(zdim, 'cyan'))
+    print("  n_samples   :", ctext(n_samples, 'cyan'))
+    print("  analytic    :", ctext(analytic, 'cyan'))
   # ====== store multiple results ====== #
   Z_ = []
   qZ_given_ = []
@@ -432,23 +440,24 @@ def parse_latent_distribution(E, zdim, dist_name, name,
         kl = tf.reduce_sum(kl, axis=-1, keepdims=False)
       KL_.append(kl)
   # ******************** print the dist ******************** #
-  for z, qz, zsamples, kl in zip(Z_, qZ_given_, Z_samples_given_, KL_):
+  if is_verbose():
+    for z, qz, zsamples, kl in zip(Z_, qZ_given_, Z_samples_given_, KL_):
+      print("  ---")
+      print("  Z           :", ctext(z, 'cyan'))
+      print("  q(Z|X)      :", ctext(qz, 'cyan'))
+      for name, p in sorted(qz.parameters.items()):
+        if name in ('allow_nan_stats', 'validate_args'):
+          continue
+        print("      %-8s:" % name, ctext(p, 'magenta'))
+      print("  KL          :", ctext(kl, 'cyan'))
+      print("  Samples     :", ctext(zsamples, 'cyan'))
+
     print("  ---")
-    print("  Z           :", ctext(z, 'cyan'))
-    print("  q(Z|X)      :", ctext(qz, 'cyan'))
-    for name, p in sorted(qz.parameters.items()):
+    print("  p(Z)        :", ctext(pZ, 'cyan'))
+    for name, p in sorted(pZ.parameters.items()):
       if name in ('allow_nan_stats', 'validate_args'):
         continue
       print("      %-8s:" % name, ctext(p, 'magenta'))
-    print("  KL          :", ctext(kl, 'cyan'))
-    print("  Samples     :", ctext(zsamples, 'cyan'))
-
-  print("  ---")
-  print("  p(Z)        :", ctext(pZ, 'cyan'))
-  for name, p in sorted(pZ.parameters.items()):
-    if name in ('allow_nan_stats', 'validate_args'):
-      continue
-    print("      %-8s:" % name, ctext(p, 'magenta'))
   # ====== return ====== #
   ret = tuple(zip(Z_, qZ_given_, Z_samples_given_, KL_))
   return ret[0] if len(ret) == 1 else ret

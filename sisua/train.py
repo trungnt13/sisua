@@ -24,8 +24,7 @@ from sisua.data import (get_dataset, EXP_DIR, UNIVERSAL_RANDOM_SEED,
                         DROPOUT_TEST)
 from sisua.utils import (plot_cell_types, plot_evaluate_classifier,
                          plot_evaluate_reconstruction, plot_evaluate_regressor,
-                         fast_scatter, show_image, save_data_to_csv,
-                         plot_monitoring_epoch,
+                         fast_scatter, show_image, plot_monitoring_epoch,
                          LearningCurves)
 from sisua.inference import Inference
 
@@ -111,17 +110,10 @@ def main():
   ) = get_dataset(args.ds, xclip=args.xclip, yclip=args.yclip,
                   override=False)
   # ====== data for training and testing ====== #
-  X_train_imp = gene_ds.get_data(data_type='train', dropout=args['ximpu'])
-  y_train_imp = prot_ds.get_data(data_type='train', dropout=args['yimpu'])
-
-  X_test_imp = gene_ds.get_data(data_type='test', dropout=args['ximpu'])
-  y_test_imp = prot_ds.get_data(data_type='test', dropout=args['yimpu'])
-
-  X_train_org = gene_ds.get_data(data_type='train', dropout=0)
-  y_train_org = prot_ds.get_data(data_type='train', dropout=0)
-
-  X_test_org = gene_ds.get_data(data_type='test', dropout=0)
-  y_test_org = prot_ds.get_data(data_type='test', dropout=0)
+  X_train = gene_ds.get_data(data_type='train', dropout=args['ximpu'])
+  y_train = prot_ds.get_data(data_type='train', dropout=args['yimpu'])
+  X_test = gene_ds.get_data(data_type='test', dropout=args['ximpu'])
+  y_test = prot_ds.get_data(data_type='test', dropout=args['yimpu'])
   # ===========================================================================
   # model identify
   # ===========================================================================
@@ -141,9 +133,9 @@ def main():
       'spvs%.3d' % (args.ps * 100),
       'net%.2d%.3d%.3d' % (args.nlayer, args.hdim, args.zdim),
       'drop%.2d%.2d%.2d%.2d' % (args.xdrop * 100,
-                              args.edrop * 100,
-                              args.zdrop * 100,
-                              args.ddrop * 100),
+                                args.edrop * 100,
+                                args.zdrop * 100,
+                                args.ddrop * 100),
       'alytcT' if bool(args.analytic) else 'alytcF',
       'iwT' if bool(args.iw) else 'iwF',
       'bnormT' if bool(args.batchnorm) else 'bnormF',
@@ -175,7 +167,7 @@ def main():
   infer = Inference(model_name=MODEL_NAME,
                     model_config=args,
                     cellsize_normalize_factor=gene_ds.cell_median)
-  infer.fit(X=X_train_imp, y=y_train_imp,
+  infer.fit(X=X_train, y=y_train,
             supervised_percent=args['ps'], validation_percent=0.1,
             n_mcmc_samples=args['nsample_train'],
             batch_size=args['batch'], n_epoch=args['epoch'],
@@ -189,13 +181,12 @@ def main():
   # ===========================================================================
   stdio(os.path.join(MODEL_DIR, 'score.log'))
   for name, x, y in zip(("Train", "Test"),
-                        (X_train_imp, X_test_imp),
-                        (y_train_imp, y_test_imp)):
+                        (X_train, X_test),
+                        (y_train, y_test)):
     scores = infer.score(x, y, n_mcmc_samples=args['nsample_test'])
     print("======== %s ========" % name)
     for k, v in scores.items():
       print("  ", '%-32s' % k.split(":")[0].split('/')[-1], v)
-
 # ===========================================================================
 # Calling the main
 # ===========================================================================
