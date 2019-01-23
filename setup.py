@@ -10,7 +10,8 @@ author = 'University of Eastern Finland'
 
 requirements = [
     "tensorflow-gpu",
-    "tensorflow-probability"
+    "tensorflow-probability",
+    'git+https://github.com/imito/odin'
 ]
 
 links = [
