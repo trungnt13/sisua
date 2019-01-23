@@ -9,9 +9,9 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
+    "odin=0.1.0",
     "tensorflow-gpu",
     "tensorflow-probability",
-    'git+https://github.com/imito/odin'
 ]
 
 links = [
