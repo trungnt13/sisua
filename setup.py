@@ -10,8 +10,8 @@ author = 'University of Eastern Finland'
 
 requirements = [
     "odin",
-    "tf-nightly-gpu",
-    "tfp-nightly"
+    "tensorflow-gpu",
+    "tensorflow-probability"
 ]
 
 links = [
