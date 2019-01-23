@@ -9,7 +9,6 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin",
     "tensorflow-gpu",
     "tensorflow-probability"
 ]
