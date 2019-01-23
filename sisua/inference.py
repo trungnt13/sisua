@@ -48,6 +48,11 @@ class Inference(BaseEstimator):
         zdim=model_config['zdim'],
         nlayer=model_config['nlayer'],
 
+        ps=model_config['ps'],
+
+        ximpu=model_config['ximpu'],
+        yimpu=model_config['yimpu'],
+
         xdist=model_config['xdist'],
         ydist=model_config['ydist'],
         zdist=model_config['zdist'],
@@ -596,10 +601,29 @@ class Inference(BaseEstimator):
     return self._make_prediction('Z', X, y, n_mcmc_samples)
 
   def predict_W(self, X, y=None, n_mcmc_samples=100):
+    """ Return a tuple of
+    (W_expected, W_stdev_total, W_stdev_explained)
+
+    if not a variational model,
+    then W_stdev_total and W_stdev_explained are None
+    """
     return self._make_prediction('W', X, y, n_mcmc_samples)
 
   def predict_V(self, X, y=None, n_mcmc_samples=100):
+    """ Return a tuple of
+    (V_expected, V_stdev_total, V_stdev_explained)
+
+    if not a zero-inflated model then return (None, None, None)
+
+    if not a variational model,
+    then V_stdev_total and V_stdev_explained are None
+    """
     return self._make_prediction('V', X, y, n_mcmc_samples)
 
   def predict_PI(self, X, y=None, n_mcmc_samples=100):
+    """ Return a matrix (n_sample, n_gene) of Zero-inflated
+    rate
+
+    if not a zero-inflated model, then return None
+    """
     return self._make_prediction('PI', X, y, n_mcmc_samples)

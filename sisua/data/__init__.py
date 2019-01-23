@@ -294,6 +294,9 @@ class SingleCellDataset(object):
       new_data.append(d)
     return tuple(new_data)
 
+  def __getitem__(self, key):
+    return self.get_data(data_type=key, dropout=0)
+
   def get_data(self, data_type='all', dropout=0):
     data_type = str(data_type).lower()
     assert data_type in ('all', 'train', 'test')
@@ -341,7 +344,8 @@ def get_dataset(dataset_name,
                 xclip=None, yclip=None,
                 override=False):
   """ Return
-  Dataset, normalized dataset name
+
+  dataset, normalized dataset name, labels, cell_gene, cell_protein
   """
   ds, ds_name = _find_match_dataset(dataset_name, override)
   print(ds)

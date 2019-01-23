@@ -6,25 +6,17 @@ from setuptools import setup, find_packages
 with open('README.md') as readme_file:
   readme = readme_file.read()
 
+author = 'University of Eastern Finland'
+
 requirements = [
-    "numpy>=1.0, <1.15",
-    "torch>=0.4.1",
-    "matplotlib>=2.0",
-    "scikit-learn>=0.18, <0.20.0",
-    "scipy>=1.1",
-    "h5py>=2.8",
-    "pandas>=0.2",
-    "loompy>=2.0",
-    "tqdm >= 4",
-    "anndata >= 0.6",
-    "xlrd >= 1.0",
-    "jupyter>=1.0.0",
-    "nbconvert>=5.4.0",
-    "nbformat>=4.4.0",
-    "ipython>=7",
+    "odin",
+    "tf-nightly-gpu",
+    "tfp-nightly"
 ]
 
-author = 'University of Eastern Finland'
+links = [
+    'git+https://github.com/imito/odin',
+]
 
 setup(
     author=author,
@@ -42,6 +34,7 @@ setup(
     ],
     description="SemI-SUpervised generative Autoencoder for single cell data",
     install_requires=requirements,
+    dependency_links=links,
     license="MIT license",
     long_description=readme,
     include_package_data=True,

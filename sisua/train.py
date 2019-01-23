@@ -42,7 +42,7 @@ def main():
         ('log', 'bin', 'raw', 'prob')
   ).add('-ximpu',
         'The percents for dropout entries to test imputation on X (gene count)',
-        0.1,
+        0,
   ).add('-tnorm',
         'normalization method for target reconstruction data',
         'raw',
@@ -71,7 +71,8 @@ def main():
   ).add('-hdim', 'number of dimension for hidden layer', 256
   ).add('-zdim', 'number of dimension for latent space', 64
   ).add('-nlayer', 'number of dense layers', 2
-  ).add('-xdrop', 'dropout level for input X', 0.5
+  # ====== dropout ====== #
+  ).add('-xdrop', 'dropout level for input X', 0.3
   ).add('-edrop', 'dropout level for ENCODER output before the latent', 0
   ).add('-ddrop', 'dropout level for DECODER output before reconstruction', 0
   ).add('-zdrop', 'dropout level on latent space', 0
