@@ -15,7 +15,7 @@ requirements = [
 ]
 
 links = [
-    'git+https://github.com/imito/odin-ai',
+    'git+https://github.com/imito/odin-ai/tarball/master#egg=odin-ai',
 ]
 
 setup(
