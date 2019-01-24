@@ -1,8 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import os
 
 from setuptools import setup, find_packages
 
+# ===========================================================================
+# Helper
+# ===========================================================================
+def get_tensorflow_version():
+  import subprocess
+  try:
+    task = subprocess.Popen(["nvcc", "--version"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    out = task.stdout.read()
+    if "release 9.0" in str(out, 'utf-8'):
+      return "tensorflow-gpu=1.12.0"
+  except FileNotFoundError as e:
+    pass
+  return "tensorflow=1.12.0"
+
+# ===========================================================================
+# Main
+# ===========================================================================
 with open('README.md') as readme_file:
   readme = readme_file.read()
 
@@ -10,8 +30,8 @@ author = 'University of Eastern Finland'
 
 requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
-    "tensorflow-gpu",
-    "tensorflow-probability",
+    get_tensorflow_version(),
+    "tensorflow-probability=0.5.0",
     "seaborn>=0.9",
     "pandas",
 ]
