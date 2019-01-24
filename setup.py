@@ -29,6 +29,7 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
+    "pip>=19.0",
     "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
     get_tensorflow_version(),
     "tensorflow-probability==0.5.0",
