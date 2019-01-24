@@ -29,6 +29,7 @@ setup(
         'Topic :: Scientific/Engineering :: Bio-Informatics',
     ],
     description="SemI-SUpervised generative Autoencoder for single cell data",
+    scripts=['bin/sisua-train'],
     setup_requires=['pip>=19.0'],
     install_requires=requirements,
     license="MIT license",
