@@ -1,7 +1,6 @@
 from __future__ import print_function, division, absolute_import
 import os
-from numbers import Number
-from six import string_types
+import inspect
 from collections import OrderedDict
 
 import numpy as np
@@ -12,6 +11,7 @@ from odin.stats import train_valid_test_split, describe
 from odin.utils import get_script_path, ctext, batching
 from odin import nnet as N, backend as K, training
 
+import sisua
 from sisua import is_verbose
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
 from sisua.data import get_dataset, SingleCellDataset
@@ -38,9 +38,10 @@ class Inference(BaseEstimator):
                cellsize_normalize_factor=1):
     super(Inference, self).__init__()
     self._name = model_name
-    self._model = N.Lambda.search(name=model_name,
-                                  path=os.path.join(get_script_path(), 'models'),
-                                  prefix='models_')
+    self._model = N.Lambda.search(
+        name=model_name,
+        path=os.path.join(os.path.dirname(inspect.getfile(sisua)), 'models'),
+        prefix='models_')
 
     assert isinstance(model_config, dict)
     self._config = dict(
