@@ -15,7 +15,7 @@ requirements = [
 ]
 
 links = [
-    'git+https://github.com/imito/odin',
+    'git+https://github.com/imito/odin@0.1.0',
 ]
 
 setup(
