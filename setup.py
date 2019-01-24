@@ -9,14 +9,9 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.1#egg=odin-0.1.1",
+    "odin-ai @ git+https://github.com/imito/odin-ai",
     "tensorflow-gpu",
     "tensorflow-probability",
-]
-
-
-links = [
-    'git+https://github.com/imito/odin-ai@0.1.1#egg=odin-0.1.1'
 ]
 
 setup(
@@ -34,8 +29,8 @@ setup(
         'Topic :: Scientific/Engineering :: Bio-Informatics',
     ],
     description="SemI-SUpervised generative Autoencoder for single cell data",
+    setup_requires=['pip>=19.0'],
     install_requires=requirements,
-    dependency_links=links,
     license="MIT license",
     long_description=readme,
     include_package_data=True,
