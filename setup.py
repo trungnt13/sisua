@@ -9,13 +9,13 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odinuef",
+    "odin-ai",
     "tensorflow-gpu",
     "tensorflow-probability",
 ]
 
 links = [
-    'git+https://github.com/imito/odin@0.1.0#egg=odinuef',
+    'git+https://github.com/imito/odin-ai@0.1.0#egg=odin-ai',
 ]
 
 setup(
