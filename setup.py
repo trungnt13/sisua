@@ -9,13 +9,13 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin==0.1.0",
+    "odin==0.1.0alpha",
     "tensorflow-gpu",
     "tensorflow-probability",
 ]
 
 links = [
-    'git+https://github.com/imito/odin/tarball/master#egg=odin-0.1.0',
+    'git+https://github.com/imito/odin@0.1.0#egg=odin-0.1.0alpha',
 ]
 
 setup(
