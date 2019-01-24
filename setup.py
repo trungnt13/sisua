@@ -12,6 +12,8 @@ requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
     "tensorflow-gpu",
     "tensorflow-probability",
+    "seaborn>=0.9"
+    "pandas",
 ]
 
 setup(
