@@ -15,10 +15,10 @@ def get_tensorflow_version():
                             stderr=subprocess.PIPE)
     out = task.stdout.read()
     if "release 9.0" in str(out, 'utf-8'):
-      return "tensorflow-gpu=1.12.0"
+      return "tensorflow-gpu==1.12.0"
   except FileNotFoundError as e:
     pass
-  return "tensorflow=1.12.0"
+  return "tensorflow==1.12.0"
 
 # ===========================================================================
 # Main
@@ -31,7 +31,7 @@ author = 'University of Eastern Finland'
 requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
     get_tensorflow_version(),
-    "tensorflow-probability=0.5.0",
+    "tensorflow-probability==0.5.0",
     "seaborn>=0.9",
     "pandas",
 ]
