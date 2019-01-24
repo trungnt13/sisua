@@ -9,7 +9,7 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai @ git+https://github.com/imito/odin-ai",
+    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
     "tensorflow-gpu",
     "tensorflow-probability",
 ]
