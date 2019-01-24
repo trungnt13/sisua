@@ -15,7 +15,7 @@ requirements = [
 ]
 
 links = [
-    'https://github.com/imito/odin/tarball/master#egg=odin-0.1.0',
+    'git+https://github.com/imito/odin/tarball/master#egg=odin-0.1.0',
 ]
 
 setup(
