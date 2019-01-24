@@ -12,6 +12,8 @@ requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
     "tensorflow-gpu",
     "tensorflow-probability",
+    "seaborn>=0.9"
+    "pandas",
 ]
 
 setup(
@@ -29,6 +31,7 @@ setup(
         'Topic :: Scientific/Engineering :: Bio-Informatics',
     ],
     description="SemI-SUpervised generative Autoencoder for single cell data",
+    scripts=['bin/sisua-train'],
     setup_requires=['pip>=19.0'],
     install_requires=requirements,
     license="MIT license",
