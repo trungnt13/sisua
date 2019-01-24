@@ -14,8 +14,9 @@ requirements = [
     "tensorflow-probability",
 ]
 
+
 links = [
-    'https://github.com/imito/odin-ai/tarball/master#egg=odin-ai',
+    'git+https://github.com/imito/odin-ai@0.1.1#egg=odin-0.1.1'
 ]
 
 setup(
