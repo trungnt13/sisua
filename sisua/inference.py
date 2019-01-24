@@ -31,7 +31,13 @@ possible_outputs = ('Z',
 # Inference class
 # ===========================================================================
 class Inference(BaseEstimator):
-  """ Inference """
+  """ Inference
+
+  Parameters
+  ----------
+  model_name : string
+      pass
+  """
 
   def __init__(self, model_name, model_config={},
                xnorm=None, tnorm=None, ynorm=None,

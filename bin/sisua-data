@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+import os
+import shutil
+from odin.utils import ArgController
+from sisua.data import get_dataframe
+
+if __name__ == "__main__":
+  arg = ArgController(
+  ).add('ds', 'name of the dataset'
+  ).add('path', 'path for exporting the dataset in feather format'
+  ).add('--protein', 'enable saving protein data', False
+  ).add('--csv', 'force to save data in csv instead of feather-format', False
+  ).parse()
+
+  (train_gene, test_gene), (train_prot, test_prot) = get_dataframe(arg.ds)
+  outpath = arg.path
+  if not os.path.exists(outpath):
+    os.mkdir(outpath)
+  elif os.path.isfile(outpath):
+    raise RuntimeError("Output path at '%s' must be a folder" % outpath)
+
+  is_feather_available = False
+  try:
+    import feather
+    is_feather_available = True
+  except ImportError as e:
+    print('"feather-format" package is required to save data more efficient!')
+    is_feather_available = False
+
+  if bool(arg.csv):
+    is_feather_available = False
+
+  if is_feather_available:
+    path = os.path.join(outpath, 'X_train')
+    feather.write_dataframe(train_gene, path)
+    print("Write [train] gene matrix to:", path)
+
+    path = os.path.join(outpath, 'X_test')
+    feather.write_dataframe(test_gene, path)
+    print("Write [test] gene matrix to:", path)
+
+    if bool(arg.protein):
+      path = os.path.join(outpath, 'y_train')
+      feather.write_dataframe(train_prot, path)
+      print("Write [train] protein matrix to:", path)
+
+      path = os.path.join(outpath, 'y_test')
+      feather.write_dataframe(test_prot, path)
+      print("Write [test] protein matrix to:", path)
+  else:
+    path = os.path.join(outpath, 'X_train.csv')
+    train_gene.to_csv(path_or_buf=path, sep=',', header=True, index=True)
+    print("Write [train] gene matrix to:", path)
+
+    path = os.path.join(outpath, 'X_test.csv')
+    test_gene.to_csv(path_or_buf=path, sep=',', header=True, index=True)
+    print("Write [test] gene matrix to:", path)
+
+    if bool(arg.protein):
+      path = os.path.join(outpath, 'y_train.csv')
+      train_prot.to_csv(path_or_buf=path, sep=',', header=True, index=True)
+      print("Write [train] protein matrix to:", path)
+
+      path = os.path.join(outpath, 'y_test.csv')
+      test_prot.to_csv(path_or_buf=path, sep=',', header=True, index=True)
+      print("Write [test] protein matrix to:", path)

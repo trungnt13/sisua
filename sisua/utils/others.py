@@ -39,11 +39,12 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
   ds_name_or_path = str(ds_name_or_path)
   if os.path.isdir(ds_name_or_path):
     exp_path = ds_name_or_path
-    (ds, ds_name_or_path, _, gene_ds, prot_ds) = get_dataset(
+    (ds, gene_ds, prot_ds) = get_dataset(
         os.path.dirname(ds_name_or_path))
   else:
-    (ds, ds_name_or_path, _, gene_ds, prot_ds) = get_dataset(ds_name_or_path)
+    (ds, gene_ds, prot_ds) = get_dataset(ds_name_or_path)
     exp_path = os.path.join(EXP_DIR, ds_name_or_path)
+  ds_name_or_path = ds.name
   assert os.path.isdir(exp_path), exp_path
   # ====== Extract all experiments ====== #
   all_exp = [os.path.join(exp_path, i)

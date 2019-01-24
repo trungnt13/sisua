@@ -1,8 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import os
-
+import pip
 from setuptools import setup, find_packages
+
+if float(pip.__version__) < 19.0:
+  raise RuntimeError(
+      "'sisua' package require pip version >= 19.0, your pip version is %s, "
+      "run `pip install pip --upgrade` to upgrade!" % str(pip.__version__))
 
 # ===========================================================================
 # Helper
@@ -29,7 +34,6 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "pip>=19.0",
     "odin-ai @ git+https://github.com/imito/odin-ai@0.1.2#egg=odin-0.1.2",
     get_tensorflow_version(),
     "tensorflow-probability==0.5.0",
@@ -52,7 +56,7 @@ setup(
         'Topic :: Scientific/Engineering :: Bio-Informatics',
     ],
     description="SemI-SUpervised generative Autoencoder for single cell data",
-    scripts=['bin/sisua-train'],
+    scripts=['bin/sisua-train', 'bin/sisua-data'],
     setup_requires=['pip>=19.0'],
     install_requires=requirements,
     license="MIT license",

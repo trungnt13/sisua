@@ -2,6 +2,7 @@ from __future__ import print_function, division, absolute_import
 
 import os
 import re
+import pandas as pd
 from numbers import Number
 from six import string_types
 
@@ -16,78 +17,6 @@ from odin.stats import (train_valid_test_split, describe,
 from sisua.data.path import EXP_DIR
 from sisua.data.const import UNIVERSAL_RANDOM_SEED, DROPOUT_TEST
 from sisua.utils.others import validating_dataset
-
-# ===========================================================================
-# Helper
-# ===========================================================================
-_space_char = re.compile("\s")
-_non_alphanumeric_char = re.compile("\W")
-
-def _normalize_text(text, sorting=True):
-  text = str(text).strip().lower()
-  text = re.sub("\s\s+", " ", text)
-  text = _space_char.sub(' ', text)
-  text = _non_alphanumeric_char.sub(' ', text)
-  if bool(sorting):
-    text = ' '.join(sorted(text.split(' ')))
-  return text
-
-def _find_match_dataset(dataset_name, override):
-  from .pbmc_CITEseq import read_CITEseq_PBMC
-  from .pbmc10x_pp import read_10xPBMC_PP
-  from .cbmc_CITEseq import read_CITEseq_CBMC
-  from .mnist import read_MNIST
-  from .facs_gene_protein import read_FACS, read_full_FACS
-  from .facs_corrupted import read_FACS_corrupted
-  from .fashion_mnist import (read_fashion_MNIST, read_fashion_MNIST_drop,
-                              read_MNIST_drop)
-
-  to_dsname = lambda s: re.sub("\s\s+", " ", s).lower().replace(' ', '_')
-
-  data_meta = {
-      'PBMC CITEseq': read_CITEseq_PBMC,
-      'PBMC 10x pp': read_10xPBMC_PP,
-      'CBMC CITEseq': read_CITEseq_CBMC,
-      'MNIST original': read_MNIST,
-      'MNIST dropout': read_MNIST_drop,
-      'FMNIST original': read_fashion_MNIST,
-      'FMNIST dropout': read_fashion_MNIST_drop,
-      'FACS 7protein': lambda override: read_full_FACS(override=override),
-      'FACS 5protein': lambda override: read_FACS(n_protein=5, override=override),
-      'FACS 2protein': lambda override: read_FACS(n_protein=2, override=override),
-      'FACS corrupt ': read_FACS_corrupted,
-      'PBMC 5000': lambda override: read_CITEseq_PBMC(override,
-                                                      version_5000genes=True)
-  }
-  # ====== special case: get all dataset ====== #
-  if _normalize_text(dataset_name) == 'all':
-    out_ds = {}
-    for name, func in data_meta.items():
-      try:
-        ds = func(override=override)
-        out_ds[to_dsname(name)] = ds
-      except NotImplementedError:
-        pass
-    print("Found dataset:",
-      ctext(', '.join(sorted(out_ds.keys())), 'lightyellow'))
-    return out_ds
-  # ====== get particular dataset ====== #
-  dataset_name = _normalize_text(dataset_name)
-  all_dataset = [name for name in sorted(data_meta.keys())
-                 if dataset_name in name.lower()]
-  if len(all_dataset) == 0:
-    all_dataset = [name for name in sorted(data_meta.keys())]
-
-  fuzzy_match = [min(
-      edit_distance(dataset_name, _normalize_text(name, sorting=True)),
-      edit_distance(dataset_name, _normalize_text(name, sorting=False))
-  ) for name in all_dataset]
-  match = all_dataset[np.argmin(fuzzy_match)]
-  print("Found dataset:", ctext(match, 'lightyellow'))
-
-  ds = data_meta[match](override=override)
-  validating_dataset(ds)
-  return ds, to_dsname(match)
 
 # ===========================================================================
 # The dataset object
@@ -343,22 +272,87 @@ class SingleCellDataset(object):
 def get_dataset(dataset_name,
                 xclip=None, yclip=None,
                 override=False):
-  """ Return
-
-  dataset, normalized dataset name, labels, cell_gene, cell_protein
   """
-  ds, ds_name = _find_match_dataset(dataset_name, override)
-  print(ds)
+  Return
+  ------
+  dataset: `odin.fuel.dataset.Dataset` contains original data
+  cell_gene: instance of `sisua.data.SingleCellDataset` for cell-gene matrix
+  cell_protein: instance of `sisua.data.SingleCellDataset` for cell-protein matrix
+  """
+  from sisua.data.pbmc_CITEseq import read_CITEseq_PBMC
+  from sisua.data.pbmc10x_pp import read_10xPBMC_PP
+  from sisua.data.cbmc_CITEseq import read_CITEseq_CBMC
+  from sisua.data.mnist import read_MNIST
+  from sisua.data.facs_gene_protein import read_FACS, read_full_FACS
+  from sisua.data.facs_corrupted import read_FACS_corrupted
+  from sisua.data.fashion_mnist import (read_fashion_MNIST, read_fashion_MNIST_drop,
+                                        read_MNIST_drop)
+  data_meta = {
+      'pbmc_citeseq': read_CITEseq_PBMC,
+      'pbmc_10x': read_10xPBMC_PP,
+      'pbmc_5000': lambda override: read_CITEseq_PBMC(override,
+                                                     version_5000genes=True),
+      'cbmc_citeseq': read_CITEseq_CBMC,
 
+      'mnist': read_MNIST,
+      'mnist_org': read_MNIST,
+      'mnist_imp': read_MNIST_drop,
+
+      'fmnist': read_fashion_MNIST,
+      'fmnist_org': read_fashion_MNIST,
+      'fmnist_imp': read_fashion_MNIST_drop,
+
+      'facs_7': lambda override: read_full_FACS(override=override),
+      'facs_5': lambda override: read_FACS(n_protein=5, override=override),
+      'facs_2': lambda override: read_FACS(n_protein=2, override=override),
+      'facs_corrupt': read_FACS_corrupted,
+  }
+  # ====== special case: get all dataset ====== #
+  dataset_name = str(dataset_name).lower().strip()
+  if dataset_name not in data_meta:
+    raise RuntimeError(
+        'Cannot find dataset with name: "%s", all dataset include: %s'
+        % (dataset_name, ",".join(list(data_meta.keys()))))
+  ds = data_meta[dataset_name](override=override)
+  validating_dataset(ds)
+  # ====== get particular dataset ====== #
   cell_gene = SingleCellDataset(
-      data=ds['X'], rowname=ds['X_row'], colname=ds['X_col'],
-      max_clip=xclip)
+      data = ds['X'], rowname = ds['X_row'], colname = ds['X_col'],
+      max_clip = xclip)
 
   cell_prot = SingleCellDataset(
-      data=ds['y'], rowname=ds['X_row'], colname=ds['y_col'],
-      max_clip=yclip)
+      data = ds['y'], rowname = ds['X_row'], colname = ds['y_col'],
+      max_clip = yclip)
 
   assert cell_gene.md5 == cell_prot.md5
-  labels = cell_prot.col_name
   # ******************** return ******************** #
-  return ds, ds_name, labels, cell_gene, cell_prot
+  setattr(ds, 'name', dataset_name)
+  setattr(cell_gene, 'name', dataset_name)
+  setattr(cell_prot, 'name', dataset_name)
+  return ds, cell_gene, cell_prot
+
+def get_dataframe(dataset_name,
+                  xclip=None, yclip=None,
+                  override=False):
+  """ Return 2 tuples of the DataFrame instance of:
+
+    * (train_gene, test_gene)
+    * (train_prot, test_prot)
+  """
+  ds, gene_ds, prot_ds = get_dataset(dataset_name=dataset_name,
+                                     xclip=xclip, yclip=yclip,
+                                     override=override)
+  train_gene = pd.DataFrame(data=gene_ds['train'],
+                            index=gene_ds.row_name[0],
+                            columns=gene_ds.col_name)
+  test_gene = pd.DataFrame(data=gene_ds['test'],
+                           index=gene_ds.row_name[1],
+                           columns=gene_ds.col_name)
+
+  train_prot = pd.DataFrame(data=prot_ds['train'],
+                            index=prot_ds.row_name[0],
+                            columns=prot_ds.col_name)
+  test_prot = pd.DataFrame(data=prot_ds['test'],
+                           index=prot_ds.row_name[1],
+                           columns=prot_ds.col_name)
+  return (train_gene, test_gene), (train_prot, test_prot)

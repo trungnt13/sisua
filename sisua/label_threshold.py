@@ -462,7 +462,8 @@ if __name__ == '__main__':
   ).add("-norm", "method for normalizing: raw, log", 'log', ('log', 'raw')
   ).parse()
 
-  ds, ds_name = get_dataset(args.dataset, override=False)
+  ds, gene_ds, prot_ds = get_dataset(args.dataset, override=False)
+  ds_name = ds.name
   print("Start label thresholding for:", ctext(ds_name, 'lightyellow'))
   path = ds.path
   # ====== protein.count ====== #

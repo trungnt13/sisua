@@ -20,6 +20,7 @@ from odin.utils import (unique_labels, ctext, auto_logging, batching,
                         mpi, stdio, one_hot, Progbar, async_mpi,
                         md5_checksum)
 
+from sisua import set_verbose
 from sisua.data import (get_dataset, EXP_DIR, UNIVERSAL_RANDOM_SEED,
                         DROPOUT_TEST)
 from sisua.utils import (plot_cell_types, plot_evaluate_classifier,
@@ -106,10 +107,9 @@ def main():
   # ===========================================================================
   # Loading data
   # ===========================================================================
-  (ds, ds_name, labels,
-   gene_ds, prot_ds
-  ) = get_dataset(args.ds, xclip=args.xclip, yclip=args.yclip,
-                  override=False)
+  set_verbose(True)
+  (ds, gene_ds, prot_ds) = get_dataset(args.ds, xclip=args.xclip, yclip=args.yclip,
+                                       override=False)
   # ====== data for training and testing ====== #
   X_train = gene_ds.get_data(data_type='train', dropout=args['ximpu'])
   y_train = prot_ds.get_data(data_type='train', dropout=args['yimpu'])
@@ -143,7 +143,7 @@ def main():
       'cntsmT' if bool(args.count_sum) else 'cntsmF',
       'cstrnT' if bool(args.constraint) else 'cstrnF',
   ])
-  BASE_DIR = os.path.join(EXP_DIR, ds_name)
+  BASE_DIR = os.path.join(EXP_DIR, ds.name)
   if not os.path.exists(BASE_DIR):
     os.mkdir(BASE_DIR)
 
