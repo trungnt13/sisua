@@ -4,7 +4,7 @@ import os
 import pip
 from setuptools import setup, find_packages
 
-if float(pip.__version__) < 19.0:
+if float(pip.__version__.split('.')[0]) < 19.0:
   raise RuntimeError(
       "'sisua' package require pip version >= 19.0, your pip version is %s, "
       "run `pip install pip --upgrade` to upgrade!" % str(pip.__version__))
