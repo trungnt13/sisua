@@ -31,16 +31,60 @@ possible_outputs = ('Z',
 # Inference class
 # ===========================================================================
 class Inference(BaseEstimator):
-  """ Inference
+  """ Performing inference given pre-defined model
+
+  Notation
+  --------
+  X : [n_samples, n_genes]
+      the gene expression matrix for single cell data, each row is
+      one cell
+
+  T : [n_samples, n_genes]
+      the target variables for the reconstruction objective, each row
+      is a corresponding cell data for `X`
+
+  C : [n_samples, 1]
+      the size factor (i.e. count-sum, library size) for each cell
+      in each row
+
+  y : [n_samples, n_proteins]
+      the protein markers level for each single cell, each row is
+      one cell
+
+  Z : [n_samples, zdim]
+      the latent space, mean of the latent distribution
 
   Parameters
   ----------
   model_name : string
-      pass
+      name of the model defined in `sisua.models`
+
+  config : dict
+      The following attribute are allowed
+      hdim - number of hidden units for each hidden layer
+      zdim - number of latent dimension
+      nlayer - number of layers for both encoder and decoder
+      ps - percents of data used for supervised learning (from 0. to 1.)
+      ximpu - percents of X will be corrupted for imputation experiment
+      yimpu - percents of y will be corrupted for imputation experiment
+      xdist - the distribution name for X
+      ydist - the distribution name for y
+      zdist - the distribution name for Z
+      batchnorm - enable batch-normalization
+      xdrop - dropout level for input X (from 0. to 1.)
+      edrop - dropout level for encoder output (from 0. to 1.)
+      zdrop - dropout level for latent space (from 0. to 1.)
+      ddrop - dropout level for decoder output (from 0. to 1.)
+      count_sum - enable using count-sum features in latent space
+      analytic - using analytic KL-divergence
+      constraint - enable constrained distribution
+      iw - using important weight sampling to avoid under or over flowing
+
+  cellsize_normalize_factor : float
   """
 
   def __init__(self, model_name, model_config={},
-               xnorm=None, tnorm=None, ynorm=None,
+               xnorm='raw', tnorm='raw', ynorm='prob',
                cellsize_normalize_factor=1):
     super(Inference, self).__init__()
     self._name = model_name
@@ -51,30 +95,30 @@ class Inference(BaseEstimator):
 
     assert isinstance(model_config, dict)
     self._config = dict(
-        hdim=model_config['hdim'],
-        zdim=model_config['zdim'],
-        nlayer=model_config['nlayer'],
+        hdim=model_config.get('hdim', 256),
+        zdim=model_config.get('zdim', 64),
+        nlayer=model_config.get('nlayer', 2),
 
-        ps=model_config['ps'],
+        ps=model_config.get('ps', 0.8),
 
-        ximpu=model_config['ximpu'],
-        yimpu=model_config['yimpu'],
+        ximpu=model_config.get('ximpu', 0),
+        yimpu=model_config.get('yimpu', 0),
 
-        xdist=model_config['xdist'],
-        ydist=model_config['ydist'],
-        zdist=model_config['zdist'],
+        xdist=model_config.get('xdist', 'zinb'),
+        ydist=model_config.get('ydist', 'bernoulli'),
+        zdist=model_config.get('zdist', 'normal'),
 
-        batchnorm=model_config['batchnorm'],
+        batchnorm=model_config.get('batchnorm', True),
 
-        xdrop=model_config['xdrop'],
-        edrop=model_config['edrop'],
-        zdrop=model_config['zdrop'],
-        ddrop=model_config['ddrop'],
+        xdrop=model_config.get('xdrop', 0.3),
+        edrop=model_config.get('edrop', 0),
+        zdrop=model_config.get('zdrop', 0),
+        ddrop=model_config.get('ddrop', 0),
 
-        count_sum=model_config['count_sum'],
-        analytic=model_config['analytic'],
-        constraint=model_config['constraint'],
-        iw=model_config['iw'],
+        count_sum=model_config.get('count_sum', False),
+        analytic=model_config.get('analytic', True),
+        constraint=model_config.get('constraint', False),
+        iw=model_config.get('iw', True),
 
         count_coeff=float(cellsize_normalize_factor)
     )
