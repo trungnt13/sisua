@@ -4,8 +4,7 @@ SemI-SUpervised generative Autoencoder models for single cell data
 ### Requirement
 
 * Python 3.6
-* tensorflow 1.12.0
-* tensorflow-probability 0.5.0
+* pip >= 19.0
 * [odin-ai](https://github.com/imito/odin-ai)
 
 ### Quick Start
