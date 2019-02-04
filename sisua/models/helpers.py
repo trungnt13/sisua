@@ -14,12 +14,12 @@ from odin.utils import ctext
 from sisua.distributions.zero_inflated import ZeroInflated
 from sisua import is_verbose
 
-_space_char = re.compile("\s")
-_non_alphanumeric_char = re.compile("\W")
+_space_char = re.compile(r"\s")
+_non_alphanumeric_char = re.compile(r"\W")
 
 def _normalize_text(text):
   text = str(text).strip().lower()
-  text = re.sub("\s\s+", " ", text)
+  text = re.sub(r"\s\s+", " ", text)
   text = _space_char.sub(' ', text)
   text = _non_alphanumeric_char.sub(' ', text)
   return text

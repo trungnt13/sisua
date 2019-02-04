@@ -5,6 +5,21 @@ import numpy as np
 from six import string_types
 from odin.utils import ctext
 
+# ===========================================================================
+# For saving data
+# ===========================================================================
+def save_data(outpath, header, row, data):
+  """ Simple shortcut
+
+  If `feather-format` is available, save data to `.feather` file
+  otherwise `.csv`
+  """
+  try:
+    import feather
+  except ImportError as e:
+    return save_data_to_R(outpath, header, row, data)
+  return save_data_to_csv(outpath, header, row, data)
+
 def save_data_to_csv(outpath, header, row, data):
   if data is None:
     return
@@ -48,6 +63,9 @@ def save_data_to_R(outpath, header, row, data):
 
   feather.write_dataframe(df, outpath)
 
+# ===========================================================================
+# For loading data
+# ===========================================================================
 def load_npz_sorted(path):
   """ This always return a list of loaded results """
   return [i[1] for i in

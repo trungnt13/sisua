@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import sys
 import pip
 from setuptools import setup, find_packages
+
+if sys.version_info < (3, 6):
+  raise RuntimeError("Sorry, Python < 3.6 is not supported!")
 
 if float(pip.__version__.split('.')[0]) < 19.0:
   raise RuntimeError(
@@ -17,7 +21,7 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.4#egg=odin-0.1.4",
+    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.5#egg=odin-0.1.5",
     "seaborn>=0.9",
     "pandas",
 ]

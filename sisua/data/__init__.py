@@ -2,6 +2,7 @@ from __future__ import print_function, division, absolute_import
 
 import os
 import re
+import copy
 import pandas as pd
 from numbers import Number
 from six import string_types
@@ -47,8 +48,6 @@ class SingleCellDataset(object):
     data = data.astype('float32')
     if max_clip is not None:
       data = np.clip(data, a_min=0, a_max=float(max_clip))
-    # mapping: 'method_name' -> (train, test)
-    self._cache_data = {'raw': data}
     # split train, test
     rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
     ids = rand.permutation(data.shape[0])
@@ -59,10 +58,7 @@ class SingleCellDataset(object):
     train_ids = np.array(train_ids)
     test_ids = np.array(test_ids)
 
-    self._cache_data = {
-        name: (dat[train_ids], dat[test_ids])
-        for name, dat in self._cache_data.items()}
-
+    self._raw_data = (data[train_ids], data[test_ids])
     # store the indices
     self._indices = (train_ids, test_ids)
     self._n_train = len(train_ids)
@@ -89,7 +85,7 @@ class SingleCellDataset(object):
     self._md5 = tuple(md5)
 
     # ====== cell statistics ====== #
-    train_raw, test_raw = self._cache_data['raw']
+    train_raw, test_raw = self._raw_data
     self._cell_size = (np.sum(train_raw, axis=-1, keepdims=True),
                        np.sum(test_raw, axis=-1, keepdims=True))
     self._cell_max = max(np.max(c) for c in self._cell_size)
@@ -110,7 +106,7 @@ class SingleCellDataset(object):
 
   @property
   def shape(self):
-    return (None, self._cache_data['raw'][0].shape[1])
+    return (None, self._raw_data['raw'][0].shape[1])
 
   @property
   def md5(self):
@@ -208,28 +204,54 @@ class SingleCellDataset(object):
 
   # ******************** helper ******************** #
   @cache_memory
-  def _get_data_all(self, normalize_method='raw', dropout=0):
+  def _get_data_all(self, normalize_method='raw',
+                    dropout=0, distribution="uniform"):
     # no dropout
     if dropout is None or dropout <= 0 or dropout >= 1:
-      return self._cache_data[normalize_method]
+      return self._raw_data
 
-    # applying dropout
-    raw_data = self._cache_data['raw']
+    train, test = self._raw_data
     rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
-    new_data = []
-    for d in raw_data:
-      mask = (rand.rand(*d.shape) >= dropout).astype('float32')
-      d = d * mask
-      new_data.append(d)
-    return tuple(new_data)
+    # ====== applying corruption ====== #
+    # Original code from scVI, to provide a comparable result,
+    # please acknowledge the author of scVI if you are using this
+    # code for corrupting the data
+    # https://github.com/YosefLab/scVI/blob/2357dde15351450e452efa426c516c60a2d5ee96/scvi/dataset/dataset.py#L83
+    # the test data won't be corrupted
+    train = copy.deepcopy(train)
+    if distribution == "uniform":  # multiply the entry n with a Ber(0.9) random variable.
+      i, j = np.nonzero(train)
+      ix = rand.choice(range(len(i)),
+                       int(np.floor(dropout * len(i))),
+                       replace=False)
+      i, j = i[ix], j[ix]
+      corrupted = np.multiply(
+          train[i, j],
+          rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=0.9))
+    elif distribution == "binomial":  # multiply the entry n with a Bin(n, 0.9) random variable.
+      i, j = (k.ravel() for k in np.indices(self.X.shape))
+      ix = rand.choice(range(len(i)),
+                       int(np.floor(dropout * len(i))),
+                       replace=False)
+      i, j = i[ix], j[ix]
+      # only 20% expression captured
+      corrupted = rand.binomial(n=(train[i, j]).astype(np.int32), p=0.2)
+    else:
+      raise ValueError(
+          "Only support 2 corruption distribution: 'uniform' and 'binomial', "
+          "but given: '%s'" % distribution)
+
+    train[i, j] = corrupted
+    return (train, test)
 
   def __getitem__(self, key):
     return self.get_data(data_type=key, dropout=0)
 
-  def get_data(self, data_type='all', dropout=0):
+  def get_data(self, data_type='all',
+               dropout=0, distribution="uniform"):
     data_type = str(data_type).lower()
     assert data_type in ('all', 'train', 'test')
-    new_data = self._get_data_all(dropout=dropout)
+    new_data = self._get_data_all(dropout=dropout, distribution=distribution)
     # return
     if data_type == 'all':
       return np.concatenate(new_data, axis=0)
@@ -244,7 +266,7 @@ class SingleCellDataset(object):
     s += 'Max clip  : %s\n' % ctext(self.max_clip, 'yellow')
 
     s += ctext('Raw:', 'lightcyan') + ':' + '\n'
-    for name, dat in zip(["train", "test"], self._cache_data['raw']):
+    for name, dat in zip(["train", "test"], self._raw_data):
       s += "  %-5s :" % name + ctext('%-15s' % str(dat.shape), 'cyan') + describe(dat, shorten=True) + '\n'
       s += "    Sparsity: %s\n" % ctext('%.2f' % sparsity_percentage(dat.astype('int32')), 'cyan')
       s += "    #ZeroCol: %s\n" % ctext(np.sum(np.sum(dat, axis=0) == 0), 'cyan')
@@ -287,9 +309,12 @@ def get_dataset(dataset_name,
   from sisua.data.facs_corrupted import read_FACS_corrupted
   from sisua.data.fashion_mnist import (read_fashion_MNIST, read_fashion_MNIST_drop,
                                         read_MNIST_drop)
+  from sisua.data.scvi_datasets import (read_Cortex, read_Hemato, read_PBMC)
+
   data_meta = {
       'pbmc_citeseq': read_CITEseq_PBMC,
       'pbmc_10x': read_10xPBMC_PP,
+      'pbmc': read_PBMC,
       'pbmc_5000': lambda override: read_CITEseq_PBMC(override,
                                                      version_5000genes=True),
       'cbmc_citeseq': read_CITEseq_CBMC,
@@ -306,6 +331,10 @@ def get_dataset(dataset_name,
       'facs_5': lambda override: read_FACS(n_protein=5, override=override),
       'facs_2': lambda override: read_FACS(n_protein=2, override=override),
       'facs_corrupt': read_FACS_corrupted,
+
+      'cortex': read_Cortex,
+      'retina': read_Cortex,
+      'hemato': read_Hemato,
   }
   # ====== special case: get all dataset ====== #
   dataset_name = str(dataset_name).lower().strip()

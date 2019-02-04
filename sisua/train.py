@@ -23,7 +23,8 @@ from odin.utils import (unique_labels, ctext, auto_logging, batching,
 from sisua import set_verbose
 from sisua.data import (get_dataset, EXP_DIR, UNIVERSAL_RANDOM_SEED,
                         DROPOUT_TEST)
-from sisua.utils import (plot_cell_types, plot_evaluate_classifier,
+from sisua.analysis.latent_benchmarks import plot_latents
+from sisua.utils import (plot_evaluate_classifier,
                          plot_evaluate_reconstruction, plot_evaluate_regressor,
                          fast_scatter, show_image, plot_monitoring_epoch,
                          LearningCurves)
@@ -61,6 +62,7 @@ def main():
   ).add('-xdist', 'input(X) distribution', 'zinb'
   ).add('-ydist', 'label(y) distribution', 'bernoulli'
   ).add('-zdist', 'latent distribution', 'normal'
+  ).add('-cdist', 'Distribution for the corruption method: uniform or binomial', 'uniform'
   # ====== for training ====== #
   ).add('-lr', 'Set learning rate', 1e-4
   ).add('-epoch', 'number of training epoch', 120
@@ -111,10 +113,14 @@ def main():
   (ds, gene_ds, prot_ds) = get_dataset(args.ds, xclip=args.xclip, yclip=args.yclip,
                                        override=False)
   # ====== data for training and testing ====== #
-  X_train = gene_ds.get_data(data_type='train', dropout=args['ximpu'])
-  y_train = prot_ds.get_data(data_type='train', dropout=args['yimpu'])
-  X_test = gene_ds.get_data(data_type='test', dropout=args['ximpu'])
-  y_test = prot_ds.get_data(data_type='test', dropout=args['yimpu'])
+  X_train = gene_ds.get_data(data_type='train',
+    dropout=args['ximpu'], distribution=args.cdist)
+  y_train = prot_ds.get_data(data_type='train',
+    dropout=args['yimpu'], distribution=args.cdist)
+  X_test = gene_ds.get_data(data_type='test',
+    dropout=args['ximpu'], distribution=args.cdist)
+  y_test = prot_ds.get_data(data_type='test',
+    dropout=args['yimpu'], distribution=args.cdist)
   # ===========================================================================
   # model identify
   # ===========================================================================
@@ -126,10 +132,11 @@ def main():
   MODEL_NAME = str(args.model).strip().lower()
   MODEL_ID = '_'.join([
       MODEL_NAME,
-      'X%s%d%s%.2d' % (args.xnorm, int(max(args.xclip, 0)), args.xdist, args.ximpu * 100),
-      'Y%s%d%s%.2d' % (args.ynorm, int(max(args.yclip, 0)), args.ydist, args.yimpu * 100),
+      'X%s%d%s' % (args.xnorm, int(max(args.xclip, 0)), args.xdist),
+      'Y%s%d%s' % (args.ynorm, int(max(args.yclip, 0)), args.ydist),
       'T%s' % (args.tnorm),
       'Z' + str(args.zdist),
+      'I%.2d%.2d%s' % (args.ximpu, args.yimpu, args.cdist),
       'mcTrn%dTst%d' % (int(args.nsample_train), int(args.nsample_test)),
       'spvs%.3d' % (args.ps * 100),
       'net%.2d%.3d%.3d' % (args.nlayer, args.hdim, args.zdim),
@@ -173,7 +180,8 @@ def main():
             n_mcmc_samples=args['nsample_train'],
             batch_size=args['batch'], n_epoch=args['epoch'],
             learning_rate=args['lr'],
-            monitoring=False, fig_dir=MODEL_DIR)
+            monitoring=False, fig_dir=MODEL_DIR,
+            detail_logging=True)
   # ====== save the trained model ====== #
   with open(os.path.join(MODEL_DIR, 'model.pkl'), 'wb') as f:
     pickle.dump(infer, f)

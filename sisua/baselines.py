@@ -32,7 +32,8 @@ from sklearn.metrics import (r2_score, mean_squared_error,
 
 from sisua.data import read_CITEseq_PBMC, EXP_DIR
 from sisua.data.const import PBMC_markers_to_symbols, PBMC_colors
-from sisua.utils import (plot_cell_types, plot_figure, plot_evaluate_classifier,
+from sisua.analysis.latent_benchmarks import plot_latents
+from sisua.utils import (plot_figure, plot_evaluate_classifier,
                          plot_evaluate_reconstruction, plot_evaluate_regressor)
 
 # ===========================================================================
@@ -132,9 +133,9 @@ for transformer_name, transformer in [
   Z_valid = transformer.transform(X_valid)
   Z_test = transformer.transform(X_test)
   # ====== plot T-SNE cell cluster ====== #
-  plot_cell_types(X=Z_test, y=y_prot_test,
-                  labels=y_prot_names, title='[%s]Test-Prot' % transformer_name,
-                  ax=224)
+  plot_latents(X=Z_test, y=y_prot_test,
+               labels=y_prot_names, title='[%s]Test-Prot' % transformer_name,
+               ax=224)
   # ====== Training SVM and logistic regression ====== #
   # Classifier
   for name, classifier in [

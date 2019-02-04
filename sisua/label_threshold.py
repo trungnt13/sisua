@@ -64,6 +64,7 @@ class GMMThresholding(BaseEstimator, DensityMixin):
     num_classes = X.shape[1]
     for i in range(num_classes):
       x_org = X[:, i]
+      assert np.all(x_org >= 0), "Only support non-negative values"
       # ====== normalizing ====== #
       x_low, x_high, x_sum = None, None, None
       if self.input_normalization == 'raw':

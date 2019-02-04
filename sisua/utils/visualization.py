@@ -19,9 +19,9 @@ from odin.visual import (generate_random_colors, generate_random_marker,
                          plot_histogram, plot_save,
                          plot_series_statistics)
 
-from sklearn.metrics import (confusion_matrix, f1_score, coverage_error,
-                             r2_score, explained_variance_score, mean_squared_error,
-                             mean_absolute_error, label_ranking_loss)
+from sklearn.metrics import (confusion_matrix, f1_score,
+                             r2_score, explained_variance_score,
+                             mean_squared_error, mean_absolute_error)
 
 from sisua.data.const import (PBMC_markers_to_symbols, PBMC_colors, TSNE_DIM,
                               PBMC_markers)
@@ -46,7 +46,7 @@ def _clipping_quartile(x, alpha=1.5):
   x = x[x > Q1 - alpha * IQR]
   return x
 
-def _downsample_data(*X):
+def downsample_data(*X):
   y = [None] * len(X)
   _ = list(set(x.shape[0] for x in X
                if x is not None))
@@ -103,57 +103,12 @@ def fast_scatter(x, y, labels, title,
     num_classes = len(labels)
   else:
     num_classes = len(np.unique(y))
+  # int(np.ceil(num_classes / 2)) if num_classes <= 20 else num_classes // 5
   plot_scatter(x=x, color=y, marker=y,
       size=size, azim=azim, elev=elev,
       legend_enable=enable_legend,
-      legend_ncol=int(np.ceil(num_classes / 2)) if num_classes <= 20 else num_classes // 5,
+      legend_ncol=3,
       fontsize=12, ax=ax, title=title)
-
-# ===========================================================================
-# Visualization
-# ===========================================================================
-def plot_cell_types(X, y_raw, y_prob, labels, title,
-                    elev=None, azim=None, using_PCA=False,
-                    enable_argmax=True,
-                    enable_separated=True):
-  print("Evaluate: [Latent Space]", ctext(title, 'lightyellow'))
-  from matplotlib import pyplot as plt
-  # ====== Downsample if the data is huge ====== #
-  X, y_raw, y_prob = _downsample_data(X, y_raw, y_prob)
-  # ====== checking inputs ====== #
-  assert X.ndim == 2, X.shape
-  assert X.shape[0] == y_raw.shape[0]
-  assert y_prob.shape == y_raw.shape
-  num_classes = len(labels)
-  # ====== preprocessing ====== #
-  if X.shape[1] > 3:
-    if not using_PCA:
-      X = fast_tsne(X, n_components=TSNE_DIM, perplexity=30.0,
-                    learning_rate=200, n_iter=1000,
-                    random_state=52181208, n_jobs=8)
-    else:
-      X = fast_pca(X, n_components=TSNE_DIM, random_state=52181208)
-  # ====== plotting ====== #
-  if enable_argmax:
-    y_argmax = np.argmax(y_prob if y_prob is not None else y_raw, axis=-1)
-    plot_figure(nrow=12, ncol=13)
-    fast_scatter(x=X, y=y_argmax, labels=labels,
-                 size=32 if len(X) > 500 else 48,
-                 title='%s-%s' % ("PCA" if using_PCA else "t-SNE", title),
-                 enable_legend=True)
-    plt.grid(False)
-  # ====== plot each protein ====== #
-  if enable_separated:
-    ncol = 5 if num_classes <= 20 else 9
-    nrow = int(np.ceil(num_classes / ncol))
-    plot_figure(nrow=5 * nrow, ncol=20)
-    for i, lab in enumerate(labels):
-      plot_scatter_heatmap(x=X[:, 0], y=X[:, 1],
-                           val=K.log_norm(y_raw[:, i], axis=0),
-                           ax=(nrow, ncol, i + 1),
-                           colormap='bwr', size=8, alpha=0.8,
-                           fontsize=8, grid=False,
-                           title='[%s]%s' % ("PCA" if using_PCA else "t-SNE", lab))
 
 # ===========================================================================
 # Evaluating the reconstruction
@@ -188,7 +143,7 @@ def plot_evaluate_reconstruction(X, W, y_raw, y_prob,
   (X.shape == W.shape) and \
   (y_raw.shape == y_prob.shape)
 
-  X, X_row, W, y_raw, y_prob, pi = _downsample_data(X, X_row, W, y_raw, y_prob, pi)
+  X, X_row, W, y_raw, y_prob, pi = downsample_data(X, X_row, W, y_raw, y_prob, pi)
   y_argmax = np.argmax(y_prob, axis=-1)
 
   # ====== prepare count-sum ====== #
@@ -340,36 +295,46 @@ def plot_evaluate_reconstruction(X, W, y_raw, y_prob,
 # ===========================================================================
 # Streamline classifier
 # ===========================================================================
-def plot_evaluate_classifier(y_pred, y_true, labels, title):
+def plot_evaluate_classifier(y_pred, y_true, labels, title,
+                             show_plot=True):
+  """ Return a dictionary of scores
+  {
+      F1micro=f1_micro * 100,
+      F1macro=f1_macro * 100,
+      F1weight=f1_weight * 100,
+      F1_[classname]=...
+  }
+  """
   from matplotlib import pyplot as plt
   fontsize = 12
   num_classes = len(labels)
   nrow = int(np.ceil(num_classes / 5))
 
-  plot_figure(nrow=8, ncol=18)
+  if show_plot:
+    plot_figure(nrow=8, ncol=18)
+
   f1_classes = []
   for i, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):
     f1_classes.append(f1_score(true, pred))
-    plot_confusion_matrix(confusion_matrix(y_true=true, y_pred=pred),
-                          labels=[0, 1],
-                          fontsize=fontsize,
-                          ax=(nrow, 5, i + 1),
-                          title=name)
+    if show_plot:
+      plot_confusion_matrix(confusion_matrix(y_true=true, y_pred=pred),
+                            labels=[0, 1],
+                            fontsize=fontsize,
+                            ax=(nrow, 5, i + 1),
+                            title=name + '\n')
 
   f1_micro = f1_score(y_true=y_true.ravel(), y_pred=y_pred.ravel())
   f1_macro = np.mean(f1_classes)
   f1_weight = f1_score(y_true=y_true, y_pred=y_pred, average='weighted')
-  cov_err = coverage_error(y_true=y_true, y_score=y_pred)
-  rank_loss = label_ranking_loss(y_true=y_true, y_score=y_pred)
-  plt.suptitle('[%s] F1-micro:%.4f  F1-macro:%.4f  F1-weight:%.4f' %
-               (title, f1_micro * 100, f1_macro * 100, f1_weight * 100))
+
+  if show_plot:
+    plt.suptitle('[%s] F1-micro:%.4f  F1-macro:%.4f  F1-weight:%.4f' %
+                 (title, f1_micro * 100, f1_macro * 100, f1_weight * 100))
 
   results = dict(
       F1micro=f1_micro * 100,
       F1macro=f1_macro * 100,
       F1weight=f1_weight * 100,
-      coverage=cov_err,
-      ranking=rank_loss,
   )
   for name, f1 in zip(labels, f1_classes):
     results['F1_' + name] = f1 * 100

@@ -61,9 +61,9 @@ def plot_countsum_series(original, imputed, p=None,
   else:
     raise ValueError()
 
-  count_sum_observed        = np.log1p(np.sum(original, axis=reduce_axis))
-  count_sum_expected        = np.log1p(np.sum(expected, axis=reduce_axis))
-  count_sum_stdev_total     = np.log1p(np.sum(stdev_total, axis=reduce_axis))
+  count_sum_observed = np.log1p(np.sum(original, axis=reduce_axis))
+  count_sum_expected = np.log1p(np.sum(expected, axis=reduce_axis))
+  count_sum_stdev_total = np.log1p(np.sum(stdev_total, axis=reduce_axis))
   count_sum_stdev_explained = np.log1p(np.sum(stdev_explained, axis=reduce_axis))
   if p is not None:
     p_sum = np.mean(p, axis=reduce_axis)
@@ -137,76 +137,3 @@ def plot_countsum_comparison(original, reconstructed, imputed, title,
   ax.set_title(title)
 
   return ax
-
-# ===========================================================================
-# Imputation analysis
-# ===========================================================================
-def plot_imputation_series(original, imputed, title="Imputation"):
-  original = K.log_norm(original, axis=0)
-  imputed = K.log_norm(imputed, axis=0)
-  max_val = max(np.max(original),
-                np.max(imputed))
-
-  with catch_warnings_ignore(FutureWarning):
-    grid = seaborn.pairplot(data=pd.DataFrame({'Original Value': original,
-                                               'Imputed Value': imputed}),
-        height=4, aspect=1,
-        kind='reg',
-        diag_kws={'bins': 180},
-        plot_kws={'scatter_kws': dict(s=2, alpha=0.6),
-                  'line_kws': dict(color='red', alpha=0.8),
-                  'color': 'g'})
-    ids = np.linspace(0, max_val)
-    grid.axes[0, 1].set_xlim((0, max_val))
-    grid.axes[0, 1].set_ylim((0, max_val))
-    grid.axes[0, 1].plot(ids, ids, linestyle='--', linewidth=1, color='black')
-
-    grid.axes[1, 0].set_xlim((0, max_val))
-    grid.axes[1, 0].set_ylim((0, max_val))
-    grid.axes[1, 0].plot(ids, ids, linestyle='--', linewidth=1, color='black')
-
-
-def plot_imputation(original, imputed, title="Imputation"):
-  """ Original code: scVI """
-  y = imputed
-  x = original
-
-  ymax = 10
-  mask = x < ymax
-  x = x[mask]
-  y = y[mask]
-
-  mask = y < ymax
-  x = x[mask]
-  y = y[mask]
-
-  l_minimum = np.minimum(x.shape[0], y.shape[0])
-
-  x = x[:l_minimum]
-  y = y[:l_minimum]
-
-  data = np.vstack([x, y])
-  plt.figure(figsize=(5, 5))
-
-  axes = plt.gca()
-  axes.set_xlim([0, ymax])
-  axes.set_ylim([0, ymax])
-
-  nbins = 50
-
-  # Evaluate a gaussian kde on a regular grid of nbins x nbins over data extents
-  k = kde.gaussian_kde(data)
-  xi, yi = np.mgrid[0:ymax:nbins * 1j, 0:ymax:nbins * 1j]
-  zi = k(np.vstack([xi.flatten(), yi.flatten()]))
-
-  plt.title(title, fontsize=12)
-  plt.ylabel("Imputed counts")
-  plt.xlabel('Original counts')
-
-  plt.pcolormesh(yi, xi, zi.reshape(xi.shape), cmap="Reds")
-
-  a, _, _, _ = np.linalg.lstsq(y[:, np.newaxis], x, rcond=-1)
-  linspace = np.linspace(0, ymax)
-  plt.plot(linspace, a * linspace, color='black')
-
-  plt.plot(linspace, linspace, color='black', linestyle=":")

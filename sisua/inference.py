@@ -1,14 +1,18 @@
 from __future__ import print_function, division, absolute_import
 import os
 import inspect
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
+
 
 import numpy as np
 from sklearn.base import BaseEstimator
+import tensorflow as tf
 
 from odin.fuel import Dataset
+from odin.ml import fast_pca, fast_tsne
 from odin.stats import train_valid_test_split, describe
-from odin.utils import get_script_path, ctext, batching
+from odin.utils.cache_utils import cache_memory
+from odin.utils import (get_script_path, ctext, batching, one_hot, uuid)
 from odin import nnet as N, backend as K, training
 
 import sisua
@@ -87,7 +91,7 @@ class Inference(BaseEstimator):
                xnorm='raw', tnorm='raw', ynorm='prob',
                cellsize_normalize_factor=1):
     super(Inference, self).__init__()
-    self._name = model_name
+    self._name = str(model_name) + '_' + uuid(4)
     self._model = N.Lambda.search(
         name=model_name,
         path=os.path.join(os.path.dirname(inspect.getfile(sisua)), 'models'),
@@ -95,8 +99,8 @@ class Inference(BaseEstimator):
 
     assert isinstance(model_config, dict)
     self._config = dict(
-        hdim=model_config.get('hdim', 256),
-        zdim=model_config.get('zdim', 64),
+        hdim=model_config.get('hdim', 128),
+        zdim=model_config.get('zdim', 32),
         nlayer=model_config.get('nlayer', 2),
 
         ps=model_config.get('ps', 0.8),
@@ -143,6 +147,27 @@ class Inference(BaseEstimator):
     self._ynorm is not None, \
     "xnorm, tnorm and ynorm must be provided in `model_config` or"\
     " explicitly in the arguments"
+
+    self._history = {}
+
+  def set_cell_info(self, gene_dim, prot_dim=None):
+    """ This function allows making prediction without fitting
+
+    Parameters
+    ----------
+    gene_dim : int
+        number of genes in given dataset
+
+    prot_dim : {int, None}
+        number of protein in given dataset, if `None`,
+        assumed the same number as `gene_dim`
+    """
+    self._gene_dim = int(gene_dim)
+    if self._prot_dim is None and prot_dim is None:
+      self._prot_dim = self._gene_dim
+    elif prot_dim is not None:
+      self._prot_dim = int(prot_dim)
+    return self
 
   # ******************** pickling ******************** #
   def __getstate__(self):
@@ -219,9 +244,12 @@ class Inference(BaseEstimator):
     if self.input_plhs is not None and self.outputs is not None:
       return
 
-    X_plh = K.placeholder(shape=(None, self.gene_dim), dtype='float32', name='X_input')
-    T_plh = K.placeholder(shape=(None, self.gene_dim), dtype='float32', name="T_target")
-    y_plh = K.placeholder(shape=(None, self.prot_dim), dtype='float32', name='y_protein')
+    X_plh = K.placeholder(
+        shape=(None, self.gene_dim), dtype='float32', name='X_input')
+    T_plh = K.placeholder(
+        shape=(None, self.gene_dim), dtype='float32', name="T_target")
+    y_plh = K.placeholder(
+        shape=(None, self.prot_dim), dtype='float32', name='y_protein')
 
     # mask for supervised training
     mask_plh = K.placeholder(shape=(None,), dtype='float32', name='mask')
@@ -435,6 +463,7 @@ class Inference(BaseEstimator):
         save_dir=MODEL_DIR)
 
   def normalize(self, x, method, data_name):
+    x = np.atleast_2d(x)
     if method == 'raw':
       pass
     elif method == 'log':
@@ -452,6 +481,11 @@ class Inference(BaseEstimator):
     return x
 
   def _preprocess_inputs(self, X, y):
+    if X.ndim == 1:
+      X = np.expand_dims(X, axis=-1)
+    if y is not None and y.ndim == 1:
+      y = np.expand_dims(y, axis=-1)
+
     C = np.sum(X, axis=-1, keepdims=True)
     X_norm = self.normalize(X, method=self.xnorm, data_name='X')
     T_norm = self.normalize(X, method=self.tnorm, data_name='X')
@@ -478,7 +512,52 @@ class Inference(BaseEstimator):
           supervised_percent=0.8, validation_percent=0.1,
           n_mcmc_samples=1,
           batch_size=64, n_epoch=120, learning_rate=1e-4,
-          monitoring=False, fig_dir=None):
+          monitoring=False, fig_dir=None,
+          detail_logging=False):
+    """
+
+    Parameters
+    ----------
+    X : [n_samples, n_genes]
+        single-cell gene expression matrix
+
+    y : [n_samples, n_protein]
+        single-cell protein marker matrix, if not given,
+        assume to be the same as `X`, and might not be used
+        by the model
+
+    supervised_percent : float (0. to 1.)
+        percent of training data used for supervised objective
+
+    validation_percent : float (0. to 1.)
+        percent of training data used for validation at the
+        end of each epoch, if 0. then no validation is performed
+
+    n_mcmc_samples : int (> 0)
+        number of MCMC samples for training
+
+    batch_size : int (default: 64)
+        batch size for training
+
+    n_epoch : int (default: 120)
+        number of epoch for training
+
+    learning_rate : float (default: 0.0001)
+        learning rate for Adam
+
+    monitoring : bool
+        enable monitoring each epoch
+
+    fig_dir : {None, string}
+        path for saving the training summary figure,
+        if not given, then no training summary is stored
+
+    detail_logging : bool (default: False)
+        if True, print loss of the monitoring metrics
+        during training, otherwise, only so the current
+        epoch progress
+
+    """
     X, T, C, y = self._preprocess_inputs(X, y)
     n_samples = X.shape[0]
     # ====== initializing ====== #
@@ -487,6 +566,7 @@ class Inference(BaseEstimator):
     # ====== splitting train valid ====== #
     X_train, T_train, C_train, y_train = None, None, None, None
     X_valid, T_valid, C_valid, y_valid = None, None, None, None
+
     if validation_percent > 0:
       train_ids, valid_ids = train_valid_test_split(
           x=np.arange(n_samples, dtype='int32'),
@@ -505,6 +585,12 @@ class Inference(BaseEstimator):
       if y is not None:
         y_train = y[train_ids]
         y_valid = y[valid_ids]
+    else: # no validation set given
+      X_train = X
+      T_train = T
+      C_train = C
+      if y is not None:
+        y_train = y
 
     n_train = len(X_train)
     n_valid = 0 if X_valid is None else len(X_valid)
@@ -553,7 +639,7 @@ class Inference(BaseEstimator):
     optz = K.optimizers.Adam(lr=float(learning_rate),
                              clipnorm=None,
                              name=self.name)
-    updates = optz.minimize(self.outputs['loss'], verbose=True)
+    updates = optz.minimize(self.outputs['loss'], verbose=is_verbose())
     global_norm = optz.norm
     K.initialize_all_variables()
 
@@ -586,7 +672,8 @@ class Inference(BaseEstimator):
     # ====== create training loop ====== #
     trainer = training.MainLoop(batch_size=int(batch_size),
                                 seed=UNIVERSAL_RANDOM_SEED, shuffle_level=2,
-                                allow_rollback=False, verbose=2,
+                                allow_rollback=False,
+                                verbose=2 if bool(detail_logging) else 3,
                                 labels=None)
     trainer.set_checkpoint(obj=self._model)
     # ====== callbacks ====== #
@@ -614,13 +701,150 @@ class Inference(BaseEstimator):
                              name='valid')
     # NOTE: this line is important
     trainer.run()
+    # ====== store the history ====== #
+    hist = trainer.history
+    self._history = dict(hist)
     # ====== end training ====== #
     self._is_fitted = True
 
+  # ******************** for fast evaluation ******************** #
+  @property
+  def train_loss(self):
+    for name, values in self.train_history.items():
+      if self.outputs['loss'].name == name:
+        return values
+    return []
+
+  @property
+  def valid_loss(self):
+    for name, values in self.valid_history.items():
+      if self.outputs['loss'].name == name:
+        return values
+    return []
+
+  @property
+  def train_history(self):
+    """ Return the epoch results history during training """
+    hist = defaultdict(list)
+    if not self._is_fitted:
+      return hist
+    for epoch_id, epoch_results in sorted(
+        self._history['train'].items(), key=lambda x: x[0]):
+      for tensor_name, batch_results in epoch_results.items():
+        hist[tensor_name].append(np.mean(batch_results))
+    return hist
+
+  @property
+  def valid_history(self):
+    """ Return the epoch results history of validating during training """
+    if 'valid' not in self._history:
+      return {}
+
+    hist = defaultdict(list)
+    if not self._is_fitted:
+      return hist
+    for epoch_id, epoch_results in sorted(
+        self._history['valid'].items(), key=lambda x: x[0]):
+      for tensor_name, batch_results in epoch_results.items():
+        hist[tensor_name].append(np.mean(batch_results))
+    return hist
+
+  def plot_tsne(self, X, y=None,
+                labels=None, labels_name=None,
+                n_samples=1000, n_mcmc_samples=100, output_type='Z',
+                show_pca=False, ax=None, title=None, seed=5218):
+    """
+    Parameters
+    ----------
+    output_type : string
+        Z - latent space
+        W - reconstructed gene expression
+        V - denoised gene expression
+        PI - Zero-inflated rate
+    """
+    X, T, C, y = self._preprocess_inputs(X, y)
+    if labels is None:
+      labels = np.ones(shape=(X.shape[0], 1))
+    if labels.ndim == 1:
+      labels = np.expand_dims(labels, axis=-1)
+    if np.max(labels) > 1 and labels.shape[1] == 1:
+      labels = one_hot(y=labels.ravel(),
+        nb_classes=np.max(labels) + 1
+        if labels_name is None else
+        len(labels_name))
+    assert len(labels) == X.shape[0], \
+    "Number of samples mismatch between X and labels"
+
+    n_classes = labels.shape[1]
+    if labels_name is None:
+      labels_name = np.array(['#%d' % i for i in range(n_classes)])
+    # ====== downsampling ====== #
+    rand = np.random.RandomState(seed=seed)
+    if n_samples is not None:
+      ids = rand.permutation(X.shape[0])
+      ids = rand.choice(ids, size=n_samples, replace=False)
+      X = X[ids]
+      T = T[ids]
+      C = C[ids]
+      y = y[ids]
+      if labels is not None:
+        labels = labels[ids]
+    # ====== make prediction ====== #
+    f = self._initialize_predict_functions(n_mcmc_samples)
+    mask = np.ones(shape=(X.shape[0],))
+    Z = f[str(output_type).lower()](X, T, C, mask, y)
+    if isinstance(Z, (tuple, list)):
+      Z = Z[0]
+    if Z is None:
+      raise RuntimeError(
+          "Model has no support for output type: '%s'" % output_type)
+    # ====== apply pca and tsne ====== #
+    is_single_label = np.allclose(np.max(labels, axis=1), 1)
+    Z_pca = fast_pca(Z, n_components=min(512, Z.shape[1]), algo='pca',
+                     random_state=rand.randint(10e8))
+    if not bool(show_pca):
+      Z_tsne = fast_tsne(Z_pca, n_components=2,
+                         random_state=rand.randint(10e8))
+    else:
+      Z_tsne = None
+    # ====== plot ====== #
+    from odin.visual import (plot_scatter, plot_save,
+                             plot_figure, plot_scatter_heatmap)
+    if is_single_label:
+      plot_scatter(x=Z_pca[:, :2] if bool(show_pca) else Z_tsne,
+                   color=[labels_name[i] for i in np.argmax(labels, axis=-1)],
+                   size=6, ax=ax, grid=False,
+                   legend_enable=True, legend_ncol=4, fontsize=8,
+                   title=title)
+    else:
+      colormap = 'Reds' # bwr
+      ncol = 5 if n_classes <= 20 else 9
+      nrow = int(np.ceil(n_classes / ncol))
+      fig = plot_figure(nrow=4 * nrow, ncol=20)
+      for i, name in enumerate(labels_name):
+        val = K.log_norm(labels[:, i], axis=0)
+        plot_scatter_heatmap(
+            x=Z_pca[:, :2] if bool(show_pca) else Z_tsne,
+            val=val / np.sum(val),
+            ax=(nrow, ncol, i + 1),
+            colormap=colormap, size=8, alpha=0.8,
+            fontsize=8, grid=False,
+            title='[%s]%s' % ("PCA" if show_pca else "t-SNE", name))
+
+      import matplotlib as mpl
+      cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+      cmap = mpl.cm.get_cmap(name=colormap)
+      norm = mpl.colors.Normalize(vmin=0., vmax=1.)
+      cb1 = mpl.colorbar.ColorbarBase(cbar_ax, cmap=cmap,
+                                      norm=norm,
+                                      orientation='vertical')
+      cb1.set_label('Protein markers level')
+
   # ******************** scoring ******************** #
+  @cache_memory
   def score(self, X, y=None,
             n_mcmc_samples=100):
-    """Compute the per-sample average log-likelihood of the given data X.
+    """Compute the per-sample average of recorded metrics of the given data X.
 
     Parameters
     ----------
@@ -630,8 +854,7 @@ class Inference(BaseEstimator):
 
     Returns
     -------
-    log_likelihood : float
-        Log likelihood of the Gaussian mixture given X.
+    dictionary : metric_name -> values
     """
     X, T, C, y = self._preprocess_inputs(X, y)
     f = self._initialize_score_functions(n_mcmc_samples)
@@ -639,6 +862,35 @@ class Inference(BaseEstimator):
     scores = f(X, T, C, mask, y)
     return OrderedDict([(tensor.name, np.mean(val))
                        for tensor, val in zip(f.outputs, scores)])
+
+  def log_likelihood(self, X, y=None, n_mcmc_samples=100):
+    """ Compute the log-likelihood of p(x|z); i.e. the
+    reconstruction loss """
+    scores = self.score(X, y, n_mcmc_samples)
+    for name, value in scores.items():
+      if 'nllk:0' == name[-6:].lower():
+        return -value
+    for name, value in scores.items():
+      if 'nllk_x' in name.lower():
+        return -value
+    raise RuntimeError("Cannot find reconstruction log-likelihood in the output "
+                       "metrics, we have: %s" % str(list(scores.items())))
+
+  def marginal_log_likelihood(self, X, y=None, n_mcmc_samples=100):
+    """
+    Computes a biased estimator for log p(x), which is the marginal log likelihood.
+    Despite its bias, the estimator still converges to the real value
+    of log p(x) when n_samples_mc (for Monte Carlo) goes to infinity
+    (a fairly high value like 100 should be enough)
+    Due to the Monte Carlo sampling, this method is not as computationally efficient
+    as computing only the reconstruction loss
+    """
+    scores = self.score(X, y, n_mcmc_samples)
+    for name, value in scores.items():
+      if self.outputs['loss'].name == name:
+        return -value
+    raise RuntimeError("Cannot find reconstruction log-likelihood in the output "
+                       "metrics, we have: %s" % str(list(scores.items())))
 
   # ******************** predicting ******************** #
   def _make_prediction(self, pred_type, X, y=None,
@@ -648,8 +900,10 @@ class Inference(BaseEstimator):
     mask = np.ones(shape=(X.shape[0],))
     return f[str(pred_type).lower()](X, T, C, mask, y)
 
-  def predict_Z(self, X, y=None, n_mcmc_samples=100):
-    return self._make_prediction('Z', X, y, n_mcmc_samples)
+  def predict_Z(self, X, y=None):
+    """ Return mean of the latent posterior
+    (i.e. mean of Normal distribution) """
+    return self._make_prediction('Z', X, y, n_mcmc_samples=100)
 
   def predict_W(self, X, y=None, n_mcmc_samples=100):
     """ Return a tuple of
