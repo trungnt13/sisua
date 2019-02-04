@@ -6,7 +6,7 @@ channels:
   - https://conda.anaconda.org/r # r
   - defaults
 dependencies:
-  - python>=3.6
+  - python=3.6
   - pip>=19.0
 
   - pip:
