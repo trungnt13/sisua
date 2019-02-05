@@ -20,8 +20,9 @@ with open('README.md') as readme_file:
 
 author = 'University of Eastern Finland'
 
+# @0.1.6#egg=odin-0.1.6
 requirements = [
-    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.6#egg=odin-0.1.6",
+    "odin-ai @ git+https://github.com/imito/odin-ai",
     "seaborn>=0.9",
     "pandas",
 ]
