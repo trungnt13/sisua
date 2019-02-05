@@ -21,7 +21,7 @@ with open('README.md') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.5#egg=odin-0.1.5",
+    "odin-ai @ git+https://github.com/imito/odin-ai@0.1.6#egg=odin-0.1.6",
     "seaborn>=0.9",
     "pandas",
 ]
@@ -52,6 +52,6 @@ setup(
     packages=find_packages(),
     test_suite='tests',
     url='https://github.com/trungnt13/sisua',
-    version='0.1.0',
+    version='0.1.1',
     zip_safe=False,
 )
