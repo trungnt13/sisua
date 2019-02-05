@@ -260,6 +260,19 @@ class SingleCellDataset(object):
     if data_type == 'test':
       return new_data[1]
 
+  # ====== shortcut ====== #
+  @property
+  def X(self):
+    return self.get_data(data_type='all', dropout=0)
+
+  @property
+  def X_row(self):
+    return np.concatenate(self.row_name)
+
+  @property
+  def X_col(self):
+    return np.array(self.col_name)
+
   # ******************** logging ******************** #
   def __str__(self):
     s = "======== Data ========\n"
@@ -294,7 +307,27 @@ class SingleCellDataset(object):
 def get_dataset(dataset_name,
                 xclip=None, yclip=None,
                 override=False):
-  """
+  """ Supporting dataset:
+
+  'pbmc_citeseq' :
+  'pbmc_10x' :
+  'pbmc' :
+  'pbmc_5000' :
+  'cbmc_citeseq' :
+  'mnist' :
+  'mnist_org' :
+  'mnist_imp' :
+  'fmnist' :
+  'fmnist_org' :
+  'fmnist_imp' :
+  'facs_7' :
+  'facs_5' :
+  'facs_2' :
+  'facs_corrupt' :
+  'cortex' :
+  'retina' :
+  'hemato' :
+
   Return
   ------
   dataset: `odin.fuel.dataset.Dataset` contains original data

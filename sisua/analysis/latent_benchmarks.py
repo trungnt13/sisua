@@ -21,7 +21,8 @@ from odin.utils import (ctext, catch_warnings_ignore)
 from odin.visual import (plot_figure, plot_scatter_heatmap,
                          to_axis, plot_colorbar)
 
-from sisua.data.const import UNIVERSAL_RANDOM_SEED
+from sisua.label_threshold import GMMThresholding
+from sisua.data.const import UNIVERSAL_RANDOM_SEED, MARKER_GENES
 from sisua.utils.visualization import (plot_evaluate_classifier,
   downsample_data, fast_tsne, fast_scatter, fast_pca)
 
@@ -104,7 +105,7 @@ def clustering_scores(latent, labels, n_labels=None,
 # Visualization
 # ===========================================================================
 def streamline_classifier(Z_train, y_train, Z_test, y_test,
-                          labels, title,
+                          labels_name, title,
                           show_plot=True):
   """ Return a dictionary of scores
   {
@@ -116,17 +117,54 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test,
   """
   with catch_warnings_ignore(FutureWarning):
     with catch_warnings_ignore(RuntimeWarning):
-      # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
-      classifier = OneVsRestClassifier(
-          SVC(kernel='linear', random_state=UNIVERSAL_RANDOM_SEED))
-      classifier.fit(X=Z_train, y=y_train)
-      #
-      results = plot_evaluate_classifier(
-          y_pred=classifier.predict(Z_test), y_true=y_test,
-          labels=labels,
-          title=title, show_plot=bool(show_plot))
-  return OrderedDict(sorted(results.items(),
-                            key=lambda x: x[0]))
+      # ====== special case ====== #
+      if 'CD4' in labels_name and 'CD8' in labels_name:
+        ids = [i for i, name in enumerate(labels_name)
+               if name == 'CD4' or name == 'CD8']
+        assert len(ids) == 2
+        labels_name = labels_name[ids]
+        # label thresholding
+        y_train = y_train[:, ids]
+        y_test = y_test[:, ids]
+        y_min = np.min((np.min(y_train, axis=0, keepdims=True),
+                        np.min(y_test, axis=0, keepdims=True)),
+                       axis=0)
+        y_max = np.max((np.max(y_train, axis=0, keepdims=True),
+                        np.max(y_test, axis=0, keepdims=True)),
+                       axis=0)
+
+        y_train = (y_train - y_min) / (y_max - y_min)
+        y_test = (y_test - y_min) / (y_max - y_min)
+
+        ids_train = np.abs(y_train[:, 0] - y_train[:, 1]) >= 0.3
+        ids_test = np.abs(y_test[:, 0] - y_test[:, 1]) >= 0.3
+
+        Z_train, y_train = Z_train[ids_train], y_train[ids_train]
+        Z_test, y_test = Z_test[ids_test], y_test[ids_test]
+        y_train = np.argmax(y_train, axis=-1)
+        y_test = np.argmax(y_test, axis=-1)
+
+        # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
+        classifier = SVC(kernel='linear',
+                         random_state=UNIVERSAL_RANDOM_SEED)
+        classifier.fit(X=Z_train, y=y_train)
+        results = plot_evaluate_classifier(
+            y_pred=classifier.predict(Z_test), y_true=y_test,
+            labels=labels_name,
+            title=title, show_plot=bool(show_plot))
+      # ====== general case ====== #
+      else:
+        # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
+        classifier = OneVsRestClassifier(
+            SVC(kernel='linear', random_state=UNIVERSAL_RANDOM_SEED))
+        classifier.fit(X=Z_train, y=y_train)
+        #
+        results = plot_evaluate_classifier(
+            y_pred=classifier.predict(Z_test), y_true=y_test,
+            labels=labels_name,
+            title=title, show_plot=bool(show_plot))
+      # ====== return ====== #
+      return OrderedDict(sorted(results.items(), key=lambda x: x[0]))
 
 def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
                   colormap='hot', ax=None,
@@ -237,7 +275,65 @@ def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
                   ax=ax, orientation='vertical')
   return ax
 
-def plot_latents(X, y, labels_name, title=None,
+def plot_latents_multiclasses(Z, y, labels_name, title=None,
+                              elev=None, azim=None, use_PCA=False,
+                              ax=None):
+  if title is None:
+    title = ''
+  title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
+  # ====== Downsample if the data is huge ====== #
+  Z, y = downsample_data(Z, y)
+  # ====== checking inputs ====== #
+  assert Z.ndim == 2, Z.shape
+  assert Z.shape[0] == y.shape[0]
+  num_classes = len(labels_name)
+  # ====== preprocessing ====== #
+  if Z.shape[1] > 3:
+    if not use_PCA:
+      Z = fast_tsne(Z, n_components=2, perplexity=30.0,
+                    learning_rate=200, n_iter=1000,
+                    random_state=52181208, n_jobs=8)
+    else:
+      Z = fast_pca(Z, n_components=2, random_state=52181208)
+
+  # ====== select proteins ====== #
+  def logit(p):
+    p = np.copy(p)
+    p[p == 0] = np.min(p[p > 0])
+    p[p == 1] = np.max(p[p < 1])
+    return np.log(p / (1 - p))
+
+  # normalize to 0, 1
+  y_min = np.min(y, axis=0, keepdims=True)
+  y_max = np.max(y, axis=0, keepdims=True)
+  y = (y - y_min) / (y_max - y_min)
+  # select most 2 different protein
+  labels_index = {name: i for i, name in enumerate(labels_name)}
+  if 'CD4' in labels_name and 'CD8' in labels_name:
+    labels_name = np.array(('CD4', 'CD8'))
+  else:
+    y_dist = K.length_norm(y, axis=0)
+    best_distance = 0
+    best_pair = None
+    for i in range(num_classes):
+      for j in range(i + 1, num_classes):
+        d = np.sqrt(np.sum((y_dist[i] - y_dist[j])**2))
+        if d > best_distance:
+          best_distance = d
+          best_pair = (labels_name[i], labels_name[j])
+    labels_name = np.array(best_pair)
+  # polarize y level
+  y = np.hstack((y[:, labels_index[labels_name[0]]][:, np.newaxis],
+                 y[:, labels_index[labels_name[1]]][:, np.newaxis]))
+  y = logit(y[:, 1]) - logit(y[:, 0])
+  y = 2 * (y - np.min(y)) / (np.max(y) - np.min(y)) - 1
+  # ====== let plotting ====== #
+  plot_scatter_heatmap(x=Z[:, 0], y=Z[:, 1], val=y,
+      legend_enable=False, colormap='bwr', size=8, alpha=1.,
+      fontsize=8, grid=False, ax=ax, title=title)
+  return labels_name
+
+def plot_latents(Z, y, labels_name, title=None,
                  elev=None, azim=None, use_PCA=False,
                  ax=None, show_legend=True,
                  enable_argmax=True,
@@ -247,22 +343,22 @@ def plot_latents(X, y, labels_name, title=None,
     title = ''
   title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
   # ====== Downsample if the data is huge ====== #
-  X, y = downsample_data(X, y)
+  Z, y = downsample_data(Z, y)
   # ====== checking inputs ====== #
-  assert X.ndim == 2, X.shape
-  assert X.shape[0] == y.shape[0]
+  assert Z.ndim == 2, Z.shape
+  assert Z.shape[0] == y.shape[0]
   num_classes = len(labels_name)
   # ====== preprocessing ====== #
-  if X.shape[1] > 3:
+  if Z.shape[1] > 3:
     if not use_PCA:
-      X = fast_tsne(X, n_components=2, perplexity=30.0,
+      Z = fast_tsne(Z, n_components=2, perplexity=30.0,
                     learning_rate=200, n_iter=1000,
                     random_state=52181208, n_jobs=8)
     else:
-      X = fast_pca(X, n_components=2, random_state=52181208)
+      Z = fast_pca(Z, n_components=2, random_state=52181208)
   # ====== clustering metrics ====== #
   asw, ari, nmi, uca = clustering_scores(
-      latent=X, labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
+      latent=Z, labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
       n_labels=num_classes)
   title += '\nASW:%.2f ARI:%.2f NMI:%.2f UCA:%.2f' % (asw, ari, nmi, uca)
   # ====== plotting ====== #
@@ -270,8 +366,8 @@ def plot_latents(X, y, labels_name, title=None,
     y_argmax = np.argmax(y, axis=-1)
     if ax is None:
       plot_figure(nrow=12, ncol=13)
-    fast_scatter(x=X, y=y_argmax, labels=labels_name, ax=ax,
-                 size=24 if len(X) > 500 else 32,
+    fast_scatter(x=Z, y=y_argmax, labels=labels_name, ax=ax,
+                 size=24 if len(Z) > 500 else 32,
                  title=title,
                  enable_legend=bool(show_legend))
     plt.grid(False)
@@ -284,7 +380,7 @@ def plot_latents(X, y, labels_name, title=None,
     for i, lab in enumerate(labels_name):
       val = K.log_norm(y[:, i], axis=0)
       plot_scatter_heatmap(
-          x=X[:, 0], y=X[:, 1],
+          x=Z[:, 0], y=Z[:, 1],
           val=val / np.sum(val),
           ax=(nrow, ncol, i + 1),
           colormap=colormap, size=8, alpha=0.8,

@@ -92,6 +92,7 @@ def main():
   args['batchnorm'] = not args['no_batchnorm']
   args['iw'] = not args['no_iw']
   args['analytic'] = not args['no_analytic']
+
   # ====== validate the arguments ====== #
   assert (0 < args.nlayer < 100 and
           0 < args.hdim < 1000 and

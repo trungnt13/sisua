@@ -18,9 +18,6 @@ _CITEseq_CBMC_PREPROCESSED = os.path.join(
     PREPROCESSED_BASE_DIR, 'CBMC_preprocessed')
 
 _URL = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0NCTUMuemlw\n'
-_MD5 = '5f6c756e7bd938703c57fc27f83ce903c58d10fc1fb10531c76692' + \
-       'f0766c16abf41bcbeebcc25c96b692febf45bbfc360fff0f8b5d1f' + \
-       'e90d45e99c2c53af613d683e3c5d988bba71d858c5f10d06fc7c'
 _PASSWORD = 'uef-czi'
 
 def read_CITEseq_CBMC(override=False):
@@ -89,12 +86,5 @@ def read_CITEseq_CBMC(override=False):
     with open(os.path.join(preprocessed_path, 'y_col'), 'wb') as f:
       pickle.dump(y_col, f)
   # ====== read preprocessed data ====== #
-  ds = Dataset(preprocessed_path,
-               read_only=True)
-  # y_bin, and y_prob files are generated later
-  if ds.get_md5_checksum(excluded_name=['y_bin', 'y_prob']) != _MD5:
-    ds.close()
-    shutil.rmtree(preprocessed_path)
-    raise RuntimeError("Invalid MD5 checksum, removed dataset at: %s" %
-                       preprocessed_path)
+  ds = Dataset(preprocessed_path, read_only=True)
   return ds

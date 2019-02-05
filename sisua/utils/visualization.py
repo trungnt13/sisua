@@ -8,7 +8,7 @@ import tensorflow as tf
 import pandas as pd
 import seaborn as sbn
 
-from odin.utils import ctext, catch_warnings_ignore
+from odin.utils import ctext, catch_warnings_ignore, one_hot
 from odin import backend as K
 from odin.utils import async_mpi
 from odin.ml import fast_tsne, fast_pca
@@ -309,9 +309,15 @@ def plot_evaluate_classifier(y_pred, y_true, labels, title,
   fontsize = 12
   num_classes = len(labels)
   nrow = int(np.ceil(num_classes / 5))
+  ncol = int(np.ceil(num_classes / nrow))
+
+  if y_pred.ndim == 1:
+    y_pred = one_hot(y_pred, nb_classes=num_classes)
+  if y_true.ndim == 1:
+    y_true = one_hot(y_true, nb_classes=num_classes)
 
   if show_plot:
-    plot_figure(nrow=8, ncol=18)
+    plot_figure(nrow=4 * nrow + 1, ncol=4 * ncol)
 
   f1_classes = []
   for i, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):
@@ -320,7 +326,7 @@ def plot_evaluate_classifier(y_pred, y_true, labels, title,
       plot_confusion_matrix(confusion_matrix(y_true=true, y_pred=pred),
                             labels=[0, 1],
                             fontsize=fontsize,
-                            ax=(nrow, 5, i + 1),
+                            ax=(nrow, ncol, i + 1),
                             title=name + '\n')
 
   f1_micro = f1_score(y_true=y_true.ravel(), y_pred=y_pred.ravel())
@@ -328,7 +334,7 @@ def plot_evaluate_classifier(y_pred, y_true, labels, title,
   f1_weight = f1_score(y_true=y_true, y_pred=y_pred, average='weighted')
 
   if show_plot:
-    plt.suptitle('[%s] F1-micro:%.4f  F1-macro:%.4f  F1-weight:%.4f' %
+    plt.suptitle('[%s]\nF1-micro:%.2f  F1-macro:%.2f  F1-weight:%.2f' %
                  (title, f1_micro * 100, f1_macro * 100, f1_weight * 100))
 
   results = dict(

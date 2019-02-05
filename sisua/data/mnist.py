@@ -28,10 +28,6 @@ _MNITS_PREPROCESSED = select_path(
     os.path.join(PREPROCESSED_BASE_DIR, 'MNIST_preprocessed'),
 create_new=True)
 
-_MD5 = "aacd9d1c0584f88b33b1df322e0a5c85c18aa96206cf3ec99469c06f6d7a9d6" + \
-       "fb678d7133315226068384ec7a53729f538e101191a6e3d77a7a625e14692a4" + \
-       "3ea9a6d1a9d4f266f9ce4c9475ec00d83c"
-
 def read_MNIST(override=False):
   download_path = os.path.join(DOWNLOAD_DIR, 'MNIST_original')
   if not os.path.exists(download_path):
@@ -105,12 +101,5 @@ def read_MNIST(override=False):
       with open(path, 'wb') as f:
         pickle.dump(val, f)
   # ====== load the dataset ====== #
-  ds = F.Dataset(_MNITS_PREPROCESSED,
-                 read_only=True)
-  # 'y_bin' and 'y_prob' are generated later by `label_thresholding.py`
-  if ds.get_md5_checksum(excluded_name=['y_bin', 'y_prob']) != _MD5:
-    ds.close()
-    shutil.rmtree(_MNITS_PREPROCESSED)
-    raise RuntimeError("MD5 checksum mismatched, delete dataset at: %s" %
-                       _MNITS_PREPROCESSED)
+  ds = F.Dataset(_MNITS_PREPROCESSED, read_only=True)
   return ds

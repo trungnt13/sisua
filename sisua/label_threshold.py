@@ -8,6 +8,7 @@ import os
 os.environ['ODIN'] = 'gpu,float32,seed=5218'
 from collections import defaultdict
 import pickle
+import warnings
 
 import numpy as np
 from scipy import stats
@@ -23,9 +24,11 @@ from odin.utils import (unique_labels, ctext, auto_logging, batching, UnitTimer,
                         catch_warnings_ignore)
 from odin.stats import describe
 
-from sklearn.mixture import GaussianMixture
-from sklearn.neighbors import KernelDensity
-from sklearn.base import DensityMixin, BaseEstimator
+with warnings.catch_warnings():
+  warnings.filterwarnings('ignore', category=ImportWarning)
+  from sklearn.mixture import GaussianMixture
+  from sklearn.neighbors import KernelDensity
+  from sklearn.base import DensityMixin, BaseEstimator
 
 from sisua.data import get_dataset, EXP_DIR
 

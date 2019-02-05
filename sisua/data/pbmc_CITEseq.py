@@ -29,18 +29,11 @@ _URL_PROTEIN = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0dTRTEwMDg2Nl9
 _MD5_PROTEIN = '7dc5f64c2916d864568f1b739679717e'
 
 _CITEseq_PBMC_PREPROCESSED = select_path(
-    os.path.join(PREPROCESSED_BASE_DIR, 'PBMC_preprocessed'),
+    os.path.join(PREPROCESSED_BASE_DIR, 'PBMC_citeseq_preprocessed'),
     create_new=True)
 _5000_PBMC_PREPROCESSED = select_path(
-    os.path.join(PREPROCESSED_BASE_DIR, 'PBMC_5000_preprocessed'),
+    os.path.join(PREPROCESSED_BASE_DIR, 'PBMC_citeseq_5000_preprocessed'),
     create_new=True)
-
-_MD5_DS_FULL = "0fd9ff01e4cf4277cf775554bba16d91bb1eba45461115057f25474fafb6d" + \
-               "ac111a927c8199c7a5ffa768787f2b811c5d102b0890180b80fa1a1fa4fa1" + \
-               "800ca8719bc6f966cd4cbacdfdbdbd35c93ded"
-_MD5_DS_5000 = "cf5776d29e9ef52812daf148f27dafc2ee4a9c747736a583ae2d556960d3e" + \
-               "0a9f6dc3c25350c4424315bb01aea58e603d102b0890180b80fa1a1fa4fa1" + \
-               "800ca8719bc6f966cd4cbacdfdbdbd35c93ded"
 
 _PASSWORD = 'uef-czi'
 
@@ -135,13 +128,5 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
     with open(os.path.join(preprocessed_path, 'y_col'), 'wb') as f:
       pickle.dump(y_col, f)
   # ====== read preprocessed data ====== #
-  ds = Dataset(preprocessed_path,
-               read_only=True)
-  # y_bin, and y_prob files are generated later
-  if ds.get_md5_checksum(excluded_name=['y_bin', 'y_prob']) != \
-  (_MD5_DS_5000 if version_5000genes else _MD5_DS_FULL):
-    ds.close()
-    shutil.rmtree(preprocessed_path)
-    raise RuntimeError("Invalid MD5 checksum, removed dataset at: %s" %
-                       preprocessed_path)
+  ds = Dataset(preprocessed_path, read_only=True)
   return ds

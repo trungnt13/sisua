@@ -19,14 +19,6 @@ from sisua.utils.others import remove_allzeros_columns, save_data_to_dataset
 _URL = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0tJX0ZBQ1NfJWRwcm90ZWluLnpp\ncA==\n'
 _FACS_PREPROCESSED = os.path.join(
     PREPROCESSED_BASE_DIR, 'FACS%d_preprocessed')
-_MD5 = {
-    2: 'a86d28b6dedc69df17d2814d3eb2f999480b6c34d78039eb818c' +
-       '2bc75c8b05227b88c2bfad9c0c6e6018b16175d1500ae1b0ecdf' +
-       '69b713724128f20ad20b4b6e59cc9a430e91aa5a50f562bdb934c70d',
-    5: 'b61c2949785ad48ebfb3a37bbe343b3669c2c10283373371aaa5' +
-       '676a8a6915256a81dcf03cd96a68b0f6d94a7483dc19e5eb4c0c' +
-       'c2b8f0be035ebf62801f08c93c91a807f7823c611d806f02a67bf666'
-}
 
 _PASSWORD = 'uef-czi'
 
@@ -89,14 +81,7 @@ def read_FACS(n_protein, override=False):
                          y=y, y_col=y_col,
                          rowname=X_row, print_log=True)
   # ******************** read preprocessed data ******************** #
-  ds = Dataset(preprocessed_path,
-               read_only=True)
-  # y_bin, and y_prob files are generated later
-  if ds.get_md5_checksum(excluded_name=['y_bin', 'y_prob']) != _MD5[n_protein]:
-    ds.close()
-    shutil.rmtree(preprocessed_path)
-    raise RuntimeError("Invalid MD5 checksum, removed dataset at: %s" %
-                       preprocessed_path)
+  ds = Dataset(preprocessed_path, read_only=True)
   return ds
 
 # ===========================================================================
@@ -196,6 +181,5 @@ def read_full_FACS(override=False):
                          y=y, y_col=y_col,
                          rowname=X_row, print_log=True)
   # ******************** read preprocessed data ******************** #
-  ds = Dataset(preprocessed_path,
-               read_only=True)
+  ds = Dataset(preprocessed_path, read_only=True)
   return ds

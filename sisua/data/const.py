@@ -24,7 +24,7 @@ PBMC_markers = ['.', 'P', "*", '|', "X",
 # Choose 3D or 2D visualization here
 TSNE_DIM = 2
 
-MARKER_GENE = dict(
+MARKER_GENES = dict(
     ### For PBMC CITEseq
     CD3='CD3G',
     CD4='CD4',

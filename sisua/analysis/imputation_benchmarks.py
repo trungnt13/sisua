@@ -68,6 +68,31 @@ def plot_imputation_series(original, imputed, title="Imputation"):
     grid.axes[1, 0].set_ylim((0, max_val))
     grid.axes[1, 0].plot(ids, ids, linestyle='--', linewidth=1, color='black')
 
+def plot_marker_genes(Z, y, labels_name, title=None,
+                      elev=None, azim=None, use_PCA=False,
+                      ax=None, show_legend=True,):
+  from matplotlib import pyplot as plt
+  if title is None:
+    title = ''
+  title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
+  # ====== Downsample if the data is huge ====== #
+  Z, y = downsample_data(Z, y)
+  # ====== checking inputs ====== #
+  assert Z.ndim == 2, Z.shape
+  assert Z.shape[0] == y.shape[0]
+  num_classes = len(labels_name)
+  # ====== preprocessing ====== #
+  if Z.shape[1] > 3:
+    if not use_PCA:
+      Z = fast_tsne(Z, n_components=2, perplexity=30.0,
+                    learning_rate=200, n_iter=1000,
+                    random_state=52181208, n_jobs=8)
+    else:
+      Z = fast_pca(Z, n_components=2, random_state=52181208)
+  protein_list = [i for i in labels_name if i in MARKER_GENES]
+  print(protein_list)
+  exit()
+
 def plot_imputation(original, imputed, corrupted=None,
                     kde_kernel='gaussian', ax=None,
                     title="Imputation"):

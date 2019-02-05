@@ -57,13 +57,8 @@ def _preprocessing_dataset(ds, outpath):
       pickle.dump(val, f)
 
 
-def _validate_dataset(path, md5):
+def _validate_dataset(path):
   ds = F.Dataset(path, read_only=True)
-  # 'y_bin' and 'y_prob' are generated later by `label_thresholding.py`
-  if ds.get_md5_checksum(excluded_name=['y_bin', 'y_prob']) != md5:
-    ds.close()
-    shutil.rmtree(path)
-    raise RuntimeError("MD5 checksum mismatched, delete dataset at: %s" % path)
   return ds
 
 # ===========================================================================
@@ -73,10 +68,6 @@ _FMNIST_PREPROCESSED = select_path(
     os.path.join(PREPROCESSED_BASE_DIR, 'FMNIST_preprocessed'),
 create_new=True)
 
-_MD5 = "edc9e2052c2e006d08a3b240acf802a2c18aa96206cf3ec99469c06f6d7a9d6" + \
-       "fb678d7133315226068384ec7a53729f5796f1c84193b282fa3c50c1aa2076f" + \
-       "dea7038bfff66624976d3fd3db1a70ec47"
-
 def read_fashion_MNIST(override=False):
   _check_override(_FMNIST_PREPROCESSED, override)
   # ******************** load the dataset for the first time ******************** #
@@ -84,7 +75,7 @@ def read_fashion_MNIST(override=False):
     ds = F.FMNIST_original.load()
     _preprocessing_dataset(ds, outpath=_FMNIST_PREPROCESSED)
   # ====== load the dataset ====== #
-  return _validate_dataset(_FMNIST_PREPROCESSED, md5=_MD5)
+  return _validate_dataset(_FMNIST_PREPROCESSED)
 
 # ===========================================================================
 # Special version of FMNIST
@@ -94,10 +85,6 @@ _FMNIST_DROP_PREPROCESSED = select_path(
     os.path.join(PREPROCESSED_BASE_DIR, 'FMNIST_drop_preprocessed'),
 create_new=True)
 
-_MD5_drop = "c7d6f8a70304b1494b0b3ffb53289141c18aa96206cf3ec99469c06f6d7" + \
-            "a9d6fb678d7133315226068384ec7a53729f5796f1c84193b282fa3c50c" + \
-            "1aa2076fdea7038bfff66624976d3fd3db1a70ec47"
-
 def read_fashion_MNIST_drop(override=False):
   _check_override(_FMNIST_DROP_PREPROCESSED, override)
   # ******************** load the dataset for the first time ******************** #
@@ -105,7 +92,7 @@ def read_fashion_MNIST_drop(override=False):
     ds = F.FMNIST_dropout.load()
     _preprocessing_dataset(ds, outpath=_FMNIST_DROP_PREPROCESSED)
   # ====== load the dataset ====== #
-  return _validate_dataset(_FMNIST_DROP_PREPROCESSED, md5=_MD5_drop)
+  return _validate_dataset(_FMNIST_DROP_PREPROCESSED)
 
 # ===========================================================================
 # MNIST dropout
@@ -114,11 +101,6 @@ _MNIST_DROP_PREPROCESSED = select_path(
     os.path.join(PREPROCESSED_BASE_DIR, 'MNIST_drop_preprocessed'),
 create_new=True)
 
-_MD5_mnist_drop = \
-    "192e2ecdc6f56aaa7b50f94a44ed62b8c18aa96206cf3ec99469c06f6d7a9d6fb678" + \
-    "d7133315226068384ec7a53729f538e101191a6e3d77a7a625e14692a43ea9a6d1a9" + \
-    "d4f266f9ce4c9475ec00d83c"
-
 def read_MNIST_drop(override=False):
   _check_override(_MNIST_DROP_PREPROCESSED, override)
   # ******************** load the dataset for the first time ******************** #
@@ -126,4 +108,4 @@ def read_MNIST_drop(override=False):
     ds = F.MNIST_dropout.load()
     _preprocessing_dataset(ds, outpath=_MNIST_DROP_PREPROCESSED)
   # ====== load the dataset ====== #
-  return _validate_dataset(_MNIST_DROP_PREPROCESSED, md5=_MD5_mnist_drop)
+  return _validate_dataset(_MNIST_DROP_PREPROCESSED)

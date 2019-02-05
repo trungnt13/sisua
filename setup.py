@@ -25,7 +25,6 @@ requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@master",
     "seaborn>=0.9",
     "pandas",
-    "pycrypto"
 ]
 
 setup(
@@ -54,6 +53,6 @@ setup(
     packages=find_packages(),
     test_suite='tests',
     url='https://github.com/trungnt13/sisua',
-    version='0.1.1',
+    version='0.1.2',
     zip_safe=False,
 )

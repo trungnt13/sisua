@@ -28,10 +28,6 @@ URLs = {
     "CD8+/CD45RA+ naïve cytotoxic T cells": "http://cf.10xgenomics.com/samples/cell-exp/1.1.0/naive_cytotoxic/naive_cytotoxic_filtered_gene_bc_matrices.tar.gz"
 }
 
-_MD5 = "3eff2ab66708a9a9a0a5f480e8f2549bd1c5a9b89a192586fc1d9aaef0dc82ac" + \
-       "816730dfcb4308f5d9d8e2b9225304028e9397f49527e0c54a79b3a32f861fc4" + \
-       "c9b1cfddb608824910dddabd7bc93cf8"
-
 _10xPBMC_PREPROCESSED = select_path(
     os.path.join(PREPROCESSED_BASE_DIR, '10xPBMC_preprocessed'),
     create_new=True)
@@ -154,11 +150,5 @@ def read_10xPBMC_PP(override=False):
         with open(path, 'wb') as f:
           pickle.dump(data, f)
   # ====== load and return dataset ====== #
-  ds = F.Dataset(path=_10xPBMC_PREPROCESSED,
-                 read_only=True)
-  # y_bin, and y_prob files are generated later
-  if ds.get_md5_checksum(excluded_name=['y_bin', 'y_prob']) != _MD5:
-    shutil.rmtree(_10xPBMC_PREPROCESSED)
-    raise RuntimeError("MD5 mismatch deleted preprocessed dataset at: %s" %
-                       _10xPBMC_PREPROCESSED)
+  ds = F.Dataset(path=_10xPBMC_PREPROCESSED, read_only=True)
   return ds
