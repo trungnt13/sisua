@@ -1,14 +1,11 @@
 name: sisua
 channels:
-  - https://conda.anaconda.org/trung # multiprocessing-logging, pysoundfile, sidekit
   - https://conda.anaconda.org/conda-forge
-  - https://conda.anaconda.org/numba # numba
-  - https://conda.anaconda.org/r # r
   - defaults
 dependencies:
   - python=3.6
   - pip>=19.0
 
   - pip:
-    - git+https://github.com/imito/odin-ai@0.1.5#egg=odin-0.1.5
+    - git+https://github.com/imito/odin-ai@master
     - git+https://github.com/trungnt13/sisua

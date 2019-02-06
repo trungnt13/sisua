@@ -1,8 +1,8 @@
 from __future__ import print_function, division, absolute_import
 import os
 import inspect
+from six import string_types
 from collections import OrderedDict, defaultdict
-
 
 import numpy as np
 from sklearn.base import BaseEstimator
@@ -12,7 +12,8 @@ from odin.fuel import Dataset
 from odin.ml import fast_pca, fast_tsne
 from odin.stats import train_valid_test_split, describe
 from odin.utils.cache_utils import cache_memory
-from odin.utils import (get_script_path, ctext, batching, one_hot, uuid)
+from odin.utils import (get_script_path, ctext, batching, one_hot, uuid,
+                        as_list)
 from odin import nnet as N, backend as K, training
 
 import sisua
@@ -30,6 +31,10 @@ possible_outputs = ('Z',
                     # V is the cleaned count (without dropout)
                     'V', 'V_stdev_explained', 'V_stdev_total',
                     'y_', 'pi')
+
+def _normalize_tensor_name(name):
+  name = name.split(':')[0].split('/')[-1].lower()
+  return name
 
 # ===========================================================================
 # Inference class
@@ -63,92 +68,118 @@ class Inference(BaseEstimator):
   model_name : string
       name of the model defined in `sisua.models`
 
-  config : dict
-      The following attribute are allowed
-      hdim - number of hidden units for each hidden layer
-      zdim - number of latent dimension
-      nlayer - number of layers for both encoder and decoder
-      ps - percents of data used for supervised learning (from 0. to 1.)
-      ximpu - percents of X will be corrupted for imputation experiment
-      yimpu - percents of y will be corrupted for imputation experiment
-      xdist - the distribution name for X
-      ydist - the distribution name for y
-      zdist - the distribution name for Z
-      batchnorm - enable batch-normalization
-      xdrop - dropout level for input X (from 0. to 1.)
-      edrop - dropout level for encoder output (from 0. to 1.)
-      zdrop - dropout level for latent space (from 0. to 1.)
-      ddrop - dropout level for decoder output (from 0. to 1.)
-      count_sum - enable using count-sum features in latent space
-      analytic - using analytic KL-divergence
-      constraint - enable constrained distribution
-      iw - using important weight sampling to avoid under or over flowing
+  hdim : number of hidden units for each hidden layer
+
+  zdim : number of latent dimension
+
+  nlayer : number of layers for both encoder and decoder
+
+  xnorm : {'raw', 'log', 'bin', 'prob'}
+  tnorm : {'raw', 'log', 'bin', 'prob'}
+  ynorm : {'raw', 'log', 'bin', 'prob'}
+      different strategies for data normalization
+      raw - keep the raw data (i.e. count or expression level)
+      log - log-normalization
+      bin - using `sisua.label_threshold.GMMThresholding` to convert
+            data to binary format
+      prob - using `sisua.label_threshold.GMMThresholding` to convert
+             data to probability values
+
+  xdist : the distribution name for X
+  ydist : the distribution name for y
+      support distribution include:
+      'bernoulli' - Bernoulli distribution for binary data
+      'zibernoulli' - Zero-inflated Bernoulli distribution for binary data
+      'normal' - normal (or Gaussian) distribution
+      'nb' - negative binomial for raw count data
+      'zinb' - Zero-inflated negative binomial
+      'poisson' - Poisson distribution for rare count event
+      'zipoisson' - Zero-inflated Poisson
+      'beta' - Beta distribution
+
+  zdist : the distribution name for Z
+
+  batchnorm : enable batch-normalization
+
+  xdrop : dropout level for input X (from 0. to 1.)
+  edrop : dropout level for encoder output (from 0. to 1.)
+  zdrop : dropout level for latent space (from 0. to 1.)
+  ddrop : dropout level for decoder output (from 0. to 1.)
+      Dropout is enable if the value is greater than 0
+
+  count_sum : enable using count-sum features in latent space
+
+  analytic : bool (default: True)
+      using analytic KL-divergence
+
+  iw : bool (default: True)
+      using important weight sampling to avoid under- or over-flowing
+
+  constraint : bool (default: False)
+      enable constrained distribution
 
   cellsize_normalize_factor : float
+      general factor for normalizing all the cell size
+
+  extra_module_path : {string, None}
+      path to folder contain the model script that you defined
+      yourself, the .py file should has 'models_' prefix
+      (e.g. 'models_vae.py')
   """
 
-  def __init__(self, model_name, model_config={},
-               xnorm='raw', tnorm='raw', ynorm='prob',
-               cellsize_normalize_factor=1):
+  def __init__(self, model_name='vae',
+               xnorm='log', tnorm='raw', ynorm='prob',
+               xclip=0, yclip=0,
+               xdist='zinb', ydist='bernoulli', zdist='normal',
+               xdrop=0.3, edrop=0, zdrop=0, ddrop=0,
+               hdim=128, zdim=32, nlayer=2,
+               batchnorm=True, count_sum=False,
+               analytic=True, iw=True, constraint=False,
+               cellsize_normalize_factor=1, extra_module_path=None,
+               **kwargs):
     super(Inference, self).__init__()
-    self._name = str(model_name) + '_' + uuid(4)
+    # ====== store the config ====== #
+    configs = dict(locals())
+    del configs['self']
+    del configs['kwargs']
+    del configs['__class__']
+    configs.update(kwargs)
+    # ====== search for module ====== #
+    primary_path = [os.path.join(os.path.dirname(inspect.getfile(sisua)), 'models')]
+    extra_module_path = [] if extra_module_path is None else \
+    as_list(extra_module_path, t=string_types)
+    configs['extra_module_path'] = extra_module_path
+
     self._model = N.Lambda.search(
         name=model_name,
-        path=os.path.join(os.path.dirname(inspect.getfile(sisua)), 'models'),
+        path=primary_path + extra_module_path,
         prefix='models_')
 
-    assert isinstance(model_config, dict)
-    self._config = dict(
-        hdim=model_config.get('hdim', 128),
-        zdim=model_config.get('zdim', 32),
-        nlayer=model_config.get('nlayer', 2),
+    self._name = self._model.name
+    configs['model_name'] = self._name
+    # ====== basics ====== #
+    self._history = {}
+    self._config = configs
 
-        ps=model_config.get('ps', 0.8),
+    self._gmm_threshold = {}
+    self._gene_dim = None
+    self._prot_dim = None
+    self._is_fitted = False
 
-        ximpu=model_config.get('ximpu', 0),
-        yimpu=model_config.get('yimpu', 0),
+    self._ps = 0
+    self._trained_n_epoch = 0
+    self._batch_size = 0
+    self._learning_rate = 0
+    self._n_mcmc_train = 0
+    # ====== init ====== #
+    self._init_and_reset()
 
-        xdist=model_config.get('xdist', 'zinb'),
-        ydist=model_config.get('ydist', 'bernoulli'),
-        zdist=model_config.get('zdist', 'normal'),
-
-        batchnorm=model_config.get('batchnorm', True),
-
-        xdrop=model_config.get('xdrop', 0.3),
-        edrop=model_config.get('edrop', 0),
-        zdrop=model_config.get('zdrop', 0),
-        ddrop=model_config.get('ddrop', 0),
-
-        count_sum=model_config.get('count_sum', False),
-        analytic=model_config.get('analytic', True),
-        constraint=model_config.get('constraint', False),
-        iw=model_config.get('iw', True),
-
-        count_coeff=float(cellsize_normalize_factor)
-    )
-
+  def _init_and_reset(self):
     self.input_plhs = None
     self.n_mcmc_samples_plh = None
     self.outputs = None
     self.pred_functions = {}
     self.score_functions = {}
-
-    self._gmm_threshold = {}
-    self._gene_dim = model_config.get('gene_dim', None)
-    self._prot_dim = model_config.get('prot_dim', None)
-
-    self._is_fitted = False
-
-    self._xnorm = model_config.get('xnorm', xnorm)
-    self._tnorm = model_config.get('tnorm', tnorm)
-    self._ynorm = model_config.get('ynorm', ynorm)
-    assert self._xnorm is not None and\
-    self._tnorm is not None and\
-    self._ynorm is not None, \
-    "xnorm, tnorm and ynorm must be provided in `model_config` or"\
-    " explicitly in the arguments"
-
-    self._history = {}
 
   def set_cell_info(self, gene_dim, prot_dim=None):
     """ This function allows making prediction without fitting
@@ -175,24 +206,28 @@ class Inference(BaseEstimator):
     model = N.serialize(nnops=self._model, path=None,
                         save_variables=True,
                         binary_output=True)
-    return (self._name, model, self._config, self._gmm_threshold,
-            self._gene_dim, self._prot_dim,
+    return (self._name, model, self._config,
+            self._gmm_threshold, self._gene_dim, self._prot_dim,
             self._is_fitted,
-            self._xnorm, self._tnorm, self._ynorm)
+            self._ps,
+            self._trained_n_epoch,
+            self._batch_size,
+            self._learning_rate,
+            self._n_mcmc_train)
 
   def __setstate__(self, states):
-    (self._name, model, self._config, self._gmm_threshold,
-     self._gene_dim, self._prot_dim,
+    (self._name, model, self._config,
+     self._gmm_threshold, self._gene_dim, self._prot_dim,
      self._is_fitted,
-     self._xnorm, self._tnorm, self._ynorm) = states
+     self._ps,
+     self._trained_n_epoch,
+     self._batch_size,
+     self._learning_rate,
+     self._n_mcmc_train) = states
     # reload the model
     self._model = N.deserialize(model, force_restore_vars=True)
     # make sure everything initialized
-    self.input_plhs = None
-    self.n_mcmc_samples_plh = None
-    self.outputs = None
-    self.pred_functions = {}
-    self.score_functions = {}
+    self._init_and_reset()
 
   # ******************** properties ******************** #
   @property
@@ -200,16 +235,32 @@ class Inference(BaseEstimator):
     return self._name
 
   @property
+  def config(self):
+    return dict(self._config)
+
+  @property
+  def supervised_percent(self):
+    return self._ps
+
+  @property
+  def xclip(self):
+    return self._config['xclip']
+
+  @property
+  def yclip(self):
+    return self._config['yclip']
+
+  @property
   def xnorm(self):
-    return self._xnorm
+    return self._config['xnorm']
 
   @property
   def tnorm(self):
-    return self._tnorm
+    return self._config['tnorm']
 
   @property
   def ynorm(self):
-    return self._ynorm
+    return self._config['ynorm']
 
   @property
   def is_fitted(self):
@@ -244,23 +295,24 @@ class Inference(BaseEstimator):
     if self.input_plhs is not None and self.outputs is not None:
       return
 
-    X_plh = K.placeholder(
-        shape=(None, self.gene_dim), dtype='float32', name='X_input')
-    T_plh = K.placeholder(
-        shape=(None, self.gene_dim), dtype='float32', name="T_target")
-    y_plh = K.placeholder(
-        shape=(None, self.prot_dim), dtype='float32', name='y_protein')
+    with tf.variable_scope(self.name + '_placeholders'):
+      X_plh = K.placeholder(
+          shape=(None, self.gene_dim), dtype='float32', name='X_input')
+      T_plh = K.placeholder(
+          shape=(None, self.gene_dim), dtype='float32', name="T_target")
+      y_plh = K.placeholder(
+          shape=(None, self.prot_dim), dtype='float32', name='y_protein')
 
-    # mask for supervised training
-    mask_plh = K.placeholder(shape=(None,), dtype='float32', name='mask')
-    # size factor
-    C_plh = K.placeholder(shape=(None, 1), dtype='float32', name='CellSize')
+      # mask for supervised training
+      mask_plh = K.placeholder(shape=(None,), dtype='float32', name='mask')
+      # size factor
+      C_plh = K.placeholder(shape=(None, 1), dtype='float32', name='CellSize')
 
+      # number of sample for MCMC
+      self.n_mcmc_samples_plh = K.placeholder(shape=(), dtype='int32',
+                                              name='n_mcmc_samples')
     # all input in specific order
     self.input_plhs = (X_plh, T_plh, C_plh, mask_plh, y_plh)
-    # number of sample for MCMC
-    self.n_mcmc_samples_plh = K.placeholder(shape=(), dtype='int32',
-                                            name='n_mcmc_samples')
 
     if is_verbose():
       print(ctext("Input placeholders:", 'lightyellow'))
@@ -273,14 +325,14 @@ class Inference(BaseEstimator):
 
     # ====== applying the model ====== #
     kw = dict(self._config)
-    kw['xnorm'] = self._xnorm
-    kw['tnorm'] = self._tnorm
-    kw['ynorm'] = self._ynorm
+    kw['xnorm'] = self.xnorm
+    kw['tnorm'] = self.tnorm
+    kw['ynorm'] = self.ynorm
     # select objective for multitask model
-    # ce - categorical cross entropy
-    # mse - mean squared error
-    # ll - log loss
-    # sg - multiple sigmoid loss
+    # ce : categorical cross entropy
+    # mse : mean squared error
+    # ll : log loss
+    # sg : multiple sigmoid loss
     kw['rec_loss'] = 'mse'
     if self.ynorm == 'raw' or self.ynorm == 'log':
       kw['cls_loss'] = 'mse'
@@ -483,8 +535,14 @@ class Inference(BaseEstimator):
   def _preprocess_inputs(self, X, y):
     if X.ndim == 1:
       X = np.expand_dims(X, axis=-1)
-    if y is not None and y.ndim == 1:
-      y = np.expand_dims(y, axis=-1)
+    if self.xclip > 0:
+      X = np.clip(X, a_min=0, a_max=float(self.xclip))
+
+    if y is not None:
+      if y.ndim == 1:
+        y = np.expand_dims(y, axis=-1)
+      if self.yclip > 0:
+        y = np.clip(y, a_min=0, a_max=float(self.yclip))
 
     C = np.sum(X, axis=-1, keepdims=True)
     X_norm = self.normalize(X, method=self.xnorm, data_name='X')
@@ -560,6 +618,11 @@ class Inference(BaseEstimator):
     """
     X, T, C, y = self._preprocess_inputs(X, y)
     n_samples = X.shape[0]
+    self._ps = supervised_percent
+    self._trained_n_epoch += n_epoch
+    self._batch_size = batch_size
+    self._learning_rate = learning_rate
+    self._n_mcmc_train = n_mcmc_samples
     # ====== initializing ====== #
     self._initialize_placeholders_and_outputs()
 
@@ -597,8 +660,8 @@ class Inference(BaseEstimator):
 
     # ====== supervised mask ====== #
     # Generate a mask of 0, 1
-    # - 0 mean unsupervised sample,
-    # - 1 mean supervised sample
+    # : 0 mean unsupervised sample,
+    # : 1 mean supervised sample
     rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
     m_train = np.zeros(shape=n_train, dtype='float32')
     supervised_indices = rand.choice(
@@ -703,22 +766,30 @@ class Inference(BaseEstimator):
     trainer.run()
     # ====== store the history ====== #
     hist = trainer.history
-    self._history = dict(hist)
+    for task_name, task_results in hist.items():
+      self._history[task_name] = {}
+      for epoch_id, epoch_results in task_results.items():
+        self._history[task_name][epoch_id] = {}
+        for tensor_name, tensor_batch in epoch_results.items():
+          tensor_name = _normalize_tensor_name(tensor_name)
+          self._history[task_name][epoch_id][tensor_name] = tensor_batch
     # ====== end training ====== #
     self._is_fitted = True
 
   # ******************** for fast evaluation ******************** #
   @property
   def train_loss(self):
+    loss_name = _normalize_tensor_name(self.outputs['loss'].name)
     for name, values in self.train_history.items():
-      if self.outputs['loss'].name == name:
+      if loss_name == name:
         return values
     return []
 
   @property
   def valid_loss(self):
+    loss_name = _normalize_tensor_name(self.outputs['loss'].name)
     for name, values in self.valid_history.items():
-      if self.outputs['loss'].name == name:
+      if loss_name == name:
         return values
     return []
 
@@ -749,6 +820,24 @@ class Inference(BaseEstimator):
         hist[tensor_name].append(np.mean(batch_results))
     return hist
 
+  # ******************** plotting utils ******************** #
+  def plot_learning_curves(self, save_path=None):
+    assert self._is_fitted, "Model hasn't fitted!"
+    from sisua.utils.training_utils import plot_learning_curves
+    hist = self._history
+    records = defaultdict(lambda: defaultdict(list))
+
+    for task_name, task_results in hist.items():
+      for epoch_id, epoch_results in task_results.items():
+        for tensor_name, tensor_batch in epoch_results.items():
+          records[tensor_name][task_name].append(
+              (np.mean(tensor_batch), np.std(tensor_batch)))
+
+    plot_learning_curves(records)
+    if save_path is not None:
+      from odin.visual import plot_save
+      plot_save(save_path, dpi=180)
+
   def plot_tsne(self, X, y=None,
                 labels=None, labels_name=None,
                 n_samples=1000, n_mcmc_samples=100, output_type='Z',
@@ -757,10 +846,10 @@ class Inference(BaseEstimator):
     Parameters
     ----------
     output_type : string
-        Z - latent space
-        W - reconstructed gene expression
-        V - denoised gene expression
-        PI - Zero-inflated rate
+        Z : latent space
+        W : reconstructed gene expression
+        V : denoised gene expression
+        PI : Zero-inflated rate
     """
     X, T, C, y = self._preprocess_inputs(X, y)
     if labels is None:

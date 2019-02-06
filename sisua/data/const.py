@@ -1,7 +1,6 @@
 from collections import OrderedDict
 
 UNIVERSAL_RANDOM_SEED = 5218
-DROPOUT_TEST = 0.4
 
 # from protein_marker -> HUMAN_symbol
 PBMC_markers_to_symbols = OrderedDict([

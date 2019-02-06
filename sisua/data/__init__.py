@@ -9,14 +9,13 @@ from six import string_types
 
 import numpy as np
 from odin.fuel import MmapData
-from odin.maths import edit_distance
 from odin.utils import ctext, one_hot, cache_memory
 from odin.utils.crypto import md5_checksum
 from odin.stats import (train_valid_test_split, describe,
                         sparsity_percentage)
 
 from sisua.data.path import EXP_DIR
-from sisua.data.const import UNIVERSAL_RANDOM_SEED, DROPOUT_TEST
+from sisua.data.const import UNIVERSAL_RANDOM_SEED
 from sisua.utils.others import validating_dataset
 
 # ===========================================================================
@@ -26,8 +25,7 @@ class SingleCellDataset(object):
   """ SingleCellDataset """
   TRAIN_PERCENTAGE = 0.9
 
-  def __init__(self, data, rowname=None, colname=None,
-               max_clip=None):
+  def __init__(self, data, rowname=None, colname=None):
     super(SingleCellDataset, self).__init__()
     assert data.ndim == 2
     if rowname is None:
@@ -36,9 +34,6 @@ class SingleCellDataset(object):
       colname = ['Feature#%d' % i for i in range(data.shape[1])]
     # ====== meta data ====== #
     self._col = np.array(colname)
-    if max_clip is not None and max_clip <= 0:
-      max_clip = None
-    self.max_clip = max_clip
     # ====== getting the data ====== #
     row = np.array(rowname)
     md5 = [None, None]
@@ -46,8 +41,6 @@ class SingleCellDataset(object):
     if isinstance(data, MmapData):
       data = data[:]
     data = data.astype('float32')
-    if max_clip is not None:
-      data = np.clip(data, a_min=0, a_max=float(max_clip))
     # split train, test
     rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
     ids = rand.permutation(data.shape[0])
@@ -276,7 +269,6 @@ class SingleCellDataset(object):
   # ******************** logging ******************** #
   def __str__(self):
     s = "======== Data ========\n"
-    s += 'Max clip  : %s\n' % ctext(self.max_clip, 'yellow')
 
     s += ctext('Raw:', 'lightcyan') + ':' + '\n'
     for name, dat in zip(["train", "test"], self._raw_data):
@@ -304,9 +296,7 @@ class SingleCellDataset(object):
 # ===========================================================================
 # Main methods
 # ===========================================================================
-def get_dataset(dataset_name,
-                xclip=None, yclip=None,
-                override=False):
+def get_dataset(dataset_name, override=False):
   """ Supporting dataset:
 
   'pbmc_citeseq' :
@@ -379,12 +369,10 @@ def get_dataset(dataset_name,
   validating_dataset(ds)
   # ====== get particular dataset ====== #
   cell_gene = SingleCellDataset(
-      data = ds['X'], rowname = ds['X_row'], colname = ds['X_col'],
-      max_clip = xclip)
+      data=ds['X'], rowname=ds['X_row'], colname=ds['X_col'])
 
   cell_prot = SingleCellDataset(
-      data = ds['y'], rowname = ds['X_row'], colname = ds['y_col'],
-      max_clip = yclip)
+      data=ds['y'], rowname=ds['X_row'], colname=ds['y_col'])
 
   assert cell_gene.md5 == cell_prot.md5
   # ******************** return ******************** #
@@ -393,17 +381,13 @@ def get_dataset(dataset_name,
   setattr(cell_prot, 'name', dataset_name)
   return ds, cell_gene, cell_prot
 
-def get_dataframe(dataset_name,
-                  xclip=None, yclip=None,
-                  override=False):
+def get_dataframe(dataset_name, override=False):
   """ Return 2 tuples of the DataFrame instance of:
 
     * (train_gene, test_gene)
     * (train_prot, test_prot)
   """
-  ds, gene_ds, prot_ds = get_dataset(dataset_name=dataset_name,
-                                     xclip=xclip, yclip=yclip,
-                                     override=override)
+  ds, gene_ds, prot_ds = get_dataset(dataset_name=dataset_name, override=override)
   train_gene = pd.DataFrame(data=gene_ds['train'],
                             index=gene_ds.row_name[0],
                             columns=gene_ds.col_name)

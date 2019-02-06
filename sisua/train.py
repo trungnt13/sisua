@@ -1,40 +1,11 @@
 from __future__ import print_function, division, absolute_import
-import matplotlib
-matplotlib.use('Agg')
-from odin.utils import catch_warnings_error
 
-import os
-os.environ['ODIN'] = 'gpu,float32,seed=5218'
-import shutil
-import pickle
-import multiprocessing
-
-import numpy as np
-import tensorflow as tf
-
-from odin.stats import describe, sparsity_percentage
-from odin import nnet as N, backend as K, training as T, visual as V
-from odin.ml import LogisticRegression, evaluate, fast_pca
-from odin.utils import (unique_labels, ctext, auto_logging, batching,
-                        UnitTimer, ArgController, get_script_path,
-                        mpi, stdio, one_hot, Progbar, async_mpi,
-                        md5_checksum)
-
-from sisua import set_verbose
-from sisua.data import (get_dataset, EXP_DIR, UNIVERSAL_RANDOM_SEED,
-                        DROPOUT_TEST)
-from sisua.analysis.latent_benchmarks import plot_latents
-from sisua.utils import (plot_evaluate_classifier,
-                         plot_evaluate_reconstruction, plot_evaluate_regressor,
-                         fast_scatter, show_image, plot_monitoring_epoch,
-                         LearningCurves)
-from sisua.inference import Inference
-
-def main():
+def get_arguments():
+  from odin.utils import ArgController
   args = ArgController(
   ).add('-model',
         'name for model, specified in models_.py',
-        'unsupervised'
+        'vae'
   ).add('-ds',
         'name of the dataset: mnist, pbmc citeseq, pbmc 10xPP, cbmc, etc.',
         'facs_7'
@@ -44,7 +15,7 @@ def main():
         ('log', 'bin', 'raw', 'prob')
   ).add('-ximpu',
         'The percents for dropout entries to test imputation on X (gene count)',
-        0,
+        0.1,
   ).add('-tnorm',
         'normalization method for target reconstruction data',
         'raw',
@@ -68,11 +39,10 @@ def main():
   ).add('-epoch', 'number of training epoch', 120
   ).add('-batch', 'batch size for training', 32
   # ====== semi-supervised ====== #
-  ).add('-nsample-train', 'number of MCMC sample during training', 1
-  ).add('-nsample-test', 'number of MCMC sample during testing', 250
+  ).add('-nsample', 'number of MCMC sample during training', 1
   ).add('-ps', 'percentage of training data for supervised task', 0.8
-  ).add('-hdim', 'number of dimension for hidden layer', 256
-  ).add('-zdim', 'number of dimension for latent space', 64
+  ).add('-hdim', 'number of dimension for hidden layer', 128
+  ).add('-zdim', 'number of dimension for latent space', 32
   ).add('-nlayer', 'number of dense layers', 2
   # ====== dropout ====== #
   ).add('-xdrop', 'dropout level for input X', 0.3
@@ -86,42 +56,59 @@ def main():
   ).add('--monitor', 'enable monitoring every epoch', False
   ).add('--no-iw', 'turn off: important weight sampling', False
   ).add('--no-analytic', 'turn off: analytic KL for variational inference', False
-  ).add('--no-save', 'turn off saving the latent and reconstruction matrices into csv', False
   ).add('--override', 'override previous experiments', False
   ).parse()
   args['batchnorm'] = not args['no_batchnorm']
   args['iw'] = not args['no_iw']
   args['analytic'] = not args['no_analytic']
+  return args
 
+def train(model='vae', ds='facs_7',
+          xnorm='log', ximpu=0.1, tnorm='raw', ynorm='prob', yimpu=0,
+          xclip=0, yclip=0,
+          xdist='zinb', ydist='bernoulli', zdist='normal', cdist='uniform',
+          lr=1e-4, epoch=128, batch=32, nsample=1, ps=0.8,
+          hdim=128, zdim=32, nlayer=2,
+          xdrop=0.3, edrop=0, ddrop=0, zdrop=0,
+          batchnorm=True, count_sum=False, constraint=False, iw=True, analytic=True,
+          monitor=False, override=False, **kwargs):
+  import os
+  os.environ['ODIN'] = 'gpu,float32,seed=5218'
+  import shutil
+  import pickle
+
+  from odin.utils import (ctext, stdio)
+
+  from sisua import set_verbose
+  from sisua.data import (get_dataset, EXP_DIR)
+  from sisua.inference import Inference
   # ====== validate the arguments ====== #
-  assert (0 < args.nlayer < 100 and
-          0 < args.hdim < 1000 and
-          0 < args.zdim < 1000)
-  assert (0 <= args.ximpu < 1 and
-          0 <= args.yimpu < 1)
-  assert (0 <= args.xdrop < 1 and
-          0 <= args.edrop < 1 and
-          0 <= args.zdrop < 1 and
-          0 <= args.ddrop < 1)
-  assert (args.xclip >= 0 and
-          args.yclip >= 0)
-  assert 0.0 < args.ps <= 1.0, \
-      "`ps` value must be > 0 and <= 1, but given: %f" % float(args.ps)
+  assert (0 < nlayer < 100 and
+          0 < hdim < 1000 and
+          0 < zdim < 1000)
+  assert (0 <= ximpu < 1 and
+          0 <= yimpu < 1)
+  assert (0 <= xdrop < 1 and
+          0 <= edrop < 1 and
+          0 <= zdrop < 1 and
+          0 <= ddrop < 1)
+  assert (xclip >= 0 and yclip >= 0)
+  assert 0.0 < ps <= 1.0, \
+      "`ps` value must be > 0 and <= 1, but given: %f" % float(ps)
   # ===========================================================================
   # Loading data
   # ===========================================================================
   set_verbose(True)
-  (ds, gene_ds, prot_ds) = get_dataset(args.ds, xclip=args.xclip, yclip=args.yclip,
-                                       override=False)
+  (ds, gene_ds, prot_ds) = get_dataset(ds, override=False)
   # ====== data for training and testing ====== #
   X_train = gene_ds.get_data(data_type='train',
-    dropout=args['ximpu'], distribution=args.cdist)
+    dropout=ximpu, distribution=cdist)
   y_train = prot_ds.get_data(data_type='train',
-    dropout=args['yimpu'], distribution=args.cdist)
+    dropout=yimpu, distribution=cdist)
   X_test = gene_ds.get_data(data_type='test',
-    dropout=args['ximpu'], distribution=args.cdist)
+    dropout=ximpu, distribution=cdist)
   y_test = prot_ds.get_data(data_type='test',
-    dropout=args['yimpu'], distribution=args.cdist)
+    dropout=yimpu, distribution=cdist)
   # ===========================================================================
   # model identify
   # ===========================================================================
@@ -130,40 +117,34 @@ def main():
   # [2] percentage of supervised data
   # [3] latent dimension
   # [4] use mouse genes or not
-  MODEL_NAME = str(args.model).strip().lower()
+  MODEL_NAME = str(model).strip().lower()
   MODEL_ID = '_'.join([
       MODEL_NAME,
-      'X%s%d%s' % (args.xnorm, int(max(args.xclip, 0)), args.xdist),
-      'Y%s%d%s' % (args.ynorm, int(max(args.yclip, 0)), args.ydist),
-      'T%s' % (args.tnorm),
-      'Z' + str(args.zdist),
-      'I%.2d%.2d%s' % (args.ximpu, args.yimpu, args.cdist),
-      'mcTrn%dTst%d' % (int(args.nsample_train), int(args.nsample_test)),
-      'spvs%.3d' % (args.ps * 100),
-      'net%.2d%.3d%.3d' % (args.nlayer, args.hdim, args.zdim),
-      'drop%.2d%.2d%.2d%.2d' % (args.xdrop * 100,
-                                args.edrop * 100,
-                                args.zdrop * 100,
-                                args.ddrop * 100),
-      'alytcT' if bool(args.analytic) else 'alytcF',
-      'iwT' if bool(args.iw) else 'iwF',
-      'bnormT' if bool(args.batchnorm) else 'bnormF',
-      'cntsmT' if bool(args.count_sum) else 'cntsmF',
-      'cstrnT' if bool(args.constraint) else 'cstrnF',
+      'X%s%d%s' % (xnorm, int(max(xclip, 0)), xdist),
+      'Y%s%d%s' % (ynorm, int(max(yclip, 0)), ydist),
+      'T%s' % tnorm,
+      'Z' + str(zdist),
+      'spvs%.3d' % (ps * 100),
+      'net%.2d%.3d%.3d' % (nlayer, hdim, zdim),
+      'drop%.2d%.2d%.2d%.2d' % (xdrop * 100,
+                                edrop * 100,
+                                zdrop * 100,
+                                ddrop * 100),
+      'alytcT' if bool(analytic) else 'alytcF',
+      'iwT' if bool(iw) else 'iwF',
+      'bnormT' if bool(batchnorm) else 'bnormF',
+      'cntsmT' if bool(count_sum) else 'cntsmF',
+      'cstrnT' if bool(constraint) else 'cstrnF',
   ])
   BASE_DIR = os.path.join(EXP_DIR, ds.name)
   if not os.path.exists(BASE_DIR):
     os.mkdir(BASE_DIR)
 
   MODEL_DIR = os.path.join(BASE_DIR, MODEL_ID)
-  if bool(args.override) and os.path.exists(MODEL_DIR):
+  if bool(override) and os.path.exists(MODEL_DIR):
     shutil.rmtree(MODEL_DIR)
   if not os.path.exists(MODEL_DIR):
     os.mkdir(MODEL_DIR)
-
-  # ====== save the args ====== #
-  with open(os.path.join(MODEL_DIR, 'config.pkl'), 'wb') as f:
-    pickle.dump(args, f)
 
   # ====== print some log ====== #
   stdio(os.path.join(MODEL_DIR, 'init.log'))
@@ -174,13 +155,20 @@ def main():
   # ===========================================================================
   stdio(os.path.join(MODEL_DIR, 'train.log'))
   infer = Inference(model_name=MODEL_NAME,
-                    model_config=args,
-                    cellsize_normalize_factor=gene_ds.cell_median)
+                    hdim=hdim, zdim=zdim, nlayer=nlayer,
+                    xnorm=xnorm, tnorm=tnorm, ynorm=ynorm,
+                    xclip=xclip, yclip=yclip,
+                    xdist=xdist, ydist=ydist, zdist=zdist,
+                    xdrop=xdrop, edrop=edrop, zdrop=zdrop, ddrop=ddrop,
+                    batchnorm=batchnorm, count_sum=count_sum,
+                    analytic=analytic, iw=iw,
+                    cellsize_normalize_factor=gene_ds.cell_median,
+                    # store some extra arguments
+                    ximpu=ximpu, yimpu=yimpu, cdist=cdist)
   infer.fit(X=X_train, y=y_train,
-            supervised_percent=args['ps'], validation_percent=0.1,
-            n_mcmc_samples=args['nsample_train'],
-            batch_size=args['batch'], n_epoch=args['epoch'],
-            learning_rate=args['lr'],
+            supervised_percent=ps, validation_percent=0.1,
+            n_mcmc_samples=nsample,
+            batch_size=batch, n_epoch=epoch, learning_rate=lr,
             monitoring=False, fig_dir=MODEL_DIR,
             detail_logging=True)
   # ====== save the trained model ====== #
@@ -193,7 +181,7 @@ def main():
   for name, x, y in zip(("Train", "Test"),
                         (X_train, X_test),
                         (y_train, y_test)):
-    scores = infer.score(x, y, n_mcmc_samples=args['nsample_test'])
+    scores = infer.score(x, y, n_mcmc_samples=100)
     print("======== %s ========" % name)
     for k, v in scores.items():
       print("  ", '%-32s' % k.split(":")[0].split('/')[-1], v)
@@ -201,4 +189,5 @@ def main():
 # Calling the main
 # ===========================================================================
 if __name__ == '__main__':
-  main()
+  kw = get_arguments()
+  train(**kw)

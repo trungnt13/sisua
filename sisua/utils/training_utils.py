@@ -19,6 +19,54 @@ def _normalize_name(name):
   name = '_'.join(name.split("/")[-2:])
   return name
 
+def plot_learning_curves(records):
+  """
+  records : dict
+      tensor_name -> {task1_name: [(epoch0_mean, epoch0_std), (epoch1_mean, epoch1_std), ...],
+                      task2_name: [], ...}
+  """
+  n_records = len(records)
+  import matplotlib
+  from matplotlib import pyplot as plt
+
+  V.plot_figure(nrow=4 * n_records, ncol=12)
+  for tensor_idx, (tensor_name, records) in enumerate(
+      sorted(records.items())):
+    ax = V.plot_subplot(n_records, 1, tensor_idx + 1)
+    handles = []
+
+    for task_idx, (task_name, values) in enumerate(
+        sorted(records.items())):
+      mean = np.array([v[0] for v in values])
+      std = np.array([v[1] for v in values])
+      min_idx = np.argmin(mean)
+      min_val = mean[min_idx]
+      indices = np.arange(len(values), dtype='int32')
+
+      _, = ax.plot(indices, [v[0] for v in values],
+                   linestyle=linestyles[task_idx % len(linestyles)],
+                   label=task_name)
+      handles.append(_)
+      c = _.get_color()
+
+      ax.fill_between(indices, mean - std, mean + std,
+                      zorder=0, color=c, alpha=0.2, linewidth=0.0)
+      _ = matplotlib.patches.Patch(label="$\\sigma_{%s}$" % task_name,
+                                   alpha=0.2, color=c)
+      handles.append(_)
+
+      _, = ax.plot(min_idx, min_val, color=c, alpha=0.6,
+                   marker='o', markersize=10,
+                   linestyle='None', linewidth=0.0,
+                   label="$min_{%s}$" % task_name)
+      handles.append(_)
+
+    ax.set_xlabel("Epoch Count")
+    plt.grid()
+    plt.tight_layout()
+    plt.legend(handles=handles, loc='best', markerscale=1.2, fontsize=12)
+    plt.title(tensor_name)
+
 # ===========================================================================
 # Callbacks
 # ===========================================================================
@@ -42,46 +90,7 @@ class LearningCurves(Callback):
     self._saved_epoch = 0
 
   def save_epoch(self, epoch):
-    n_records = len(self._records)
-    import matplotlib
-    from matplotlib import pyplot as plt
-
-    V.plot_figure(nrow=4 * n_records, ncol=12)
-    for tensor_idx, (tensor_name, records) in enumerate(sorted(self._records.items())):
-      ax = V.plot_subplot(n_records, 1, tensor_idx + 1)
-      handles = []
-
-      for task_idx, (task_name, values) in enumerate(sorted(records.items())):
-        mean = np.array([v[0] for v in values])
-        std = np.array([v[1] for v in values])
-        min_idx = np.argmin(mean)
-        min_val = mean[min_idx]
-        indices = np.arange(len(values), dtype='int32')
-
-        _, = ax.plot(indices, [v[0] for v in values],
-                     linestyle=linestyles[task_idx % len(linestyles)],
-                     label=task_name)
-        handles.append(_)
-        c = _.get_color()
-
-        ax.fill_between(indices, mean - std, mean + std,
-                        zorder=0, color=c, alpha=0.2, linewidth=0.0)
-        _ = matplotlib.patches.Patch(label="$\\sigma_{%s}$" % task_name,
-                                     alpha=0.2, color=c)
-        handles.append(_)
-
-        _, = ax.plot(min_idx, min_val, color=c, alpha=0.6,
-                     marker='o', markersize=10,
-                     linestyle='None', linewidth=0.0,
-                     label="$min_{%s}$" % task_name)
-        handles.append(_)
-
-      ax.set_xlabel("Epoch Count")
-      plt.grid()
-      plt.tight_layout()
-      plt.legend(handles=handles, loc='best', markerscale=1.2, fontsize=12)
-      plt.title(tensor_name)
-
+    plot_learning_curves(self._records)
     V.plot_save(path=os.path.join(self._save_path, 'summary.png'),
                 log=True, dpi=180)
 

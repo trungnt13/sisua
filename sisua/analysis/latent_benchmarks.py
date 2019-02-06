@@ -100,7 +100,6 @@ def clustering_scores(latent, labels, n_labels=None,
   uca_score = unsupervised_clustering_accuracy(labels, labels_pred)[0]
   return np.array((asw_score, ari_score, nmi_score, uca_score))
 
-
 # ===========================================================================
 # Visualization
 # ===========================================================================
