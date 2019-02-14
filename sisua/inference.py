@@ -1,6 +1,7 @@
 from __future__ import print_function, division, absolute_import
 import os
 import inspect
+import warnings
 from six import string_types
 from collections import OrderedDict, defaultdict
 
@@ -24,13 +25,16 @@ from sisua.utils.others import validating_dataset
 from sisua.utils import LearningCurves, plot_monitoring_epoch
 from sisua.label_threshold import GMMThresholding
 
-possible_outputs = ('Z',
-                    'loss', 'metr',
+possible_outputs = ('Z', # latent space
+                    'loss', # a tensor for training
+                    'metr', # metrics for monitoring
                     # W is predicted corrupted count (with dropout)
                     'W', 'W_stdev_explained', 'W_stdev_total',
                     # V is the cleaned count (without dropout)
                     'V', 'V_stdev_explained', 'V_stdev_total',
-                    'y_', 'pi')
+                    'y_', # predict values of protein markers
+                    'pi' # the zero inflated rate
+                    )
 
 def _normalize_tensor_name(name):
   name = name.split(':')[0].split('/')[-1].lower()
@@ -125,9 +129,10 @@ class Inference(BaseEstimator):
       path to folder contain the model script that you defined
       yourself, the .py file should has 'models_' prefix
       (e.g. 'models_vae.py')
+
   """
 
-  def __init__(self, model_name='vae',
+  def __init__(self, model='vae',
                xnorm='log', tnorm='raw', ynorm='prob',
                xclip=0, yclip=0,
                xdist='zinb', ydist='bernoulli', zdist='normal',
@@ -140,20 +145,29 @@ class Inference(BaseEstimator):
     super(Inference, self).__init__()
     # ====== store the config ====== #
     configs = dict(locals())
+    del configs['model']
     del configs['self']
     del configs['kwargs']
     del configs['__class__']
     configs.update(kwargs)
     # ====== search for module ====== #
     primary_path = [os.path.join(os.path.dirname(inspect.getfile(sisua)), 'models')]
-    extra_module_path = [] if extra_module_path is None else \
-    as_list(extra_module_path, t=string_types)
+    extra_module_path = ([] if extra_module_path is None else
+                         as_list(extra_module_path, t=string_types))
     configs['extra_module_path'] = extra_module_path
 
-    self._model = N.Lambda.search(
-        name=model_name,
-        path=primary_path + extra_module_path,
-        prefix='models_')
+    # given the model name, searching for it
+    if isinstance(model, string_types):
+      self._model = N.Lambda.search(
+          name=model,
+          path=primary_path + extra_module_path,
+          prefix='models_')
+    # given the NNOp object directly
+    elif isinstance(model, N.NNOp):
+      self._model = model
+    # error no support
+    else:
+      raise ValueError("No support for `model` with type: %s" % str(type(model)))
 
     self._name = self._model.name
     configs['model_name'] = self._name
@@ -172,12 +186,13 @@ class Inference(BaseEstimator):
     self._learning_rate = 0
     self._n_mcmc_train = 0
     # ====== init ====== #
-    self._init_and_reset()
+    self._reset()
 
-  def _init_and_reset(self):
+  def _reset(self):
     self.input_plhs = None
     self.n_mcmc_samples_plh = None
     self.outputs = None
+    self.other_outputs = None
     self.pred_functions = {}
     self.score_functions = {}
 
@@ -206,7 +221,7 @@ class Inference(BaseEstimator):
     model = N.serialize(nnops=self._model, path=None,
                         save_variables=True,
                         binary_output=True)
-    return (self._name, model, self._config,
+    return (self._name, model, self._config, self._history,
             self._gmm_threshold, self._gene_dim, self._prot_dim,
             self._is_fitted,
             self._ps,
@@ -216,18 +231,29 @@ class Inference(BaseEstimator):
             self._n_mcmc_train)
 
   def __setstate__(self, states):
-    (self._name, model, self._config,
-     self._gmm_threshold, self._gene_dim, self._prot_dim,
-     self._is_fitted,
-     self._ps,
-     self._trained_n_epoch,
-     self._batch_size,
-     self._learning_rate,
-     self._n_mcmc_train) = states
+    if len(states) == 13:
+      (self._name, model, self._config, self._history,
+       self._gmm_threshold, self._gene_dim, self._prot_dim,
+       self._is_fitted,
+       self._ps,
+       self._trained_n_epoch,
+       self._batch_size,
+       self._learning_rate,
+       self._n_mcmc_train) = states
+    else: # damn, I forgot to pickle the history
+      (self._name, model, self._config,
+       self._gmm_threshold, self._gene_dim, self._prot_dim,
+       self._is_fitted,
+       self._ps,
+       self._trained_n_epoch,
+       self._batch_size,
+       self._learning_rate,
+       self._n_mcmc_train) = states
+      self._history = {}
     # reload the model
     self._model = N.deserialize(model, force_restore_vars=True)
     # make sure everything initialized
-    self._init_and_reset()
+    self._reset()
 
   # ******************** properties ******************** #
   @property
@@ -300,8 +326,10 @@ class Inference(BaseEstimator):
           shape=(None, self.gene_dim), dtype='float32', name='X_input')
       T_plh = K.placeholder(
           shape=(None, self.gene_dim), dtype='float32', name="T_target")
-      y_plh = K.placeholder(
-          shape=(None, self.prot_dim), dtype='float32', name='y_protein')
+
+      if self.prot_dim > 0:
+        y_plh = K.placeholder(
+            shape=(None, self.prot_dim), dtype='float32', name='y_protein')
 
       # mask for supervised training
       mask_plh = K.placeholder(shape=(None,), dtype='float32', name='mask')
@@ -312,7 +340,9 @@ class Inference(BaseEstimator):
       self.n_mcmc_samples_plh = K.placeholder(shape=(), dtype='int32',
                                               name='n_mcmc_samples')
     # all input in specific order
-    self.input_plhs = (X_plh, T_plh, C_plh, mask_plh, y_plh)
+    self.input_plhs = (X_plh, T_plh, C_plh, mask_plh)
+    if self.prot_dim > 0:
+      self.input_plhs += (y_plh,)
 
     if is_verbose():
       print(ctext("Input placeholders:", 'lightyellow'))
@@ -338,20 +368,41 @@ class Inference(BaseEstimator):
       kw['cls_loss'] = 'mse'
     else:
       kw['cls_loss'] = 'sg'
-    outputs = self._model(*(self.input_plhs + (self.n_mcmc_samples_plh, kw)))
+    # ====== set the verbose mode ====== #
+    all_nnops = N.get_all_nnops(scope=self.name)
+    for op in all_nnops:
+      if isinstance(op, N.Container):
+        op.set_debug(is_verbose())
+    # check model is supervised
+    if ('mlvae' in self.name or
+    'dlvae' in self.name or
+    'movae' in self.name or
+    'dovae' in self.name or
+    'multitask' in self.name or
+    'dualtask' in self.name) and self.prot_dim == 0:
+      raise RuntimeError("This model require supervised data but prot_dim = 0")
+    # applying to get the output
+    final_plhs = tuple(self.input_plhs)
+    if self.prot_dim == 0:
+      final_plhs += (None,)
+    outputs = self._model(*(final_plhs + (self.n_mcmc_samples_plh, kw)))
     # ====== compulsory outputs ====== #
     assert 'Z' in outputs, "Latent space must be in the outputs"
     assert 'loss' in outputs, "Loss must be given in the outputs for training"
-    assert all(i in possible_outputs for i in outputs.keys()),\
-        'Outputs must contain one of the following: %s' % ', '.join(possible_outputs)
 
-    # latent space output
+    # ====== Custom outputs ====== #
+    self.other_outputs = {}
+    for k, v in outputs.items():
+      if k not in possible_outputs:
+        self.other_outputs[k] = v
+
+    # ====== latent space output ====== #
     Z = outputs['Z']
     assert Z.get_shape().as_list()[-1] == int(self.zdim), \
         "Expect %d latent dimension but return Z with shape: %s" % \
         (int(self.zdim), Z.get_shape().as_list())
 
-    # Loss and metrics
+    # ====== Loss and metrics ====== #
     loss = outputs['loss']
     metr = outputs.get('metr', [])
     if K.is_tensor(metr, inc_distribution=False):
@@ -409,19 +460,6 @@ class Inference(BaseEstimator):
     # initialize everything
     K.initialize_all_variables()
 
-  def _initialize_score_functions(self, n_mcmc_samples):
-    self._initialize_placeholders_and_outputs()
-    if n_mcmc_samples not in self.score_functions:
-      scores = [self.outputs['loss']] + list(self.outputs['metr'])
-      scores = sorted(set(scores), key=lambda x: x.name)
-      f_score = K.function(inputs=self.input_plhs,
-                           outputs=scores,
-                           training=False,
-                           defaults={self.n_mcmc_samples_plh: int(n_mcmc_samples)},
-                           batch_size=max(2, 4000 / int(n_mcmc_samples)))
-      self.score_functions[n_mcmc_samples] = f_score
-    return self.score_functions[n_mcmc_samples]
-
   def _initialize_predict_functions(self, n_mcmc_samples):
     self._initialize_placeholders_and_outputs()
     n_mcmc_samples = int(n_mcmc_samples)
@@ -429,14 +467,15 @@ class Inference(BaseEstimator):
       return self.pred_functions[n_mcmc_samples]
 
     # ====== prediction functions ====== #
-    def create_func(out_):
+    def create_func(out_, batch_size=None):
       if isinstance(out_, (tuple, list)):
         out_ = [o for o in out_ if o is not None]
         if len(out_) == 0:
           out_ = None
       if out_ is not None:
         fn = K.function(
-            inputs=self.input_plhs,
+            # NOTE: we make sure `y_protein` is not provided during evaluation
+            inputs=self.input_plhs[:-1] if self.prot_dim > 0 else self.input_plhs,
             outputs=out_,
             training=False,
             defaults={self.n_mcmc_samples_plh: int(n_mcmc_samples)})
@@ -447,7 +486,9 @@ class Inference(BaseEstimator):
           assert len(set(x.shape[0] for x in X)) == 1
           n = X[0].shape[0]
           all_y = []
-          for start, end in batching(batch_size=32, n=n, seed=None):
+          for start, end in batching(
+              batch_size=32 if batch_size is None else batch_size,
+              n=n, seed=None):
             x = [i[start:end] for i in X]
             y = fn(*x)
             all_y.append(y)
@@ -477,43 +518,23 @@ class Inference(BaseEstimator):
         y=lambda *args, **kwargs: None if f_y is None else f_y(*args, **kwargs),
         pi=lambda *args, **kwargs: None if f_pi is None else f_pi(*args, **kwargs)
     )
+    # ====== for metrics and loss ====== #
+    scores = [self.outputs['loss']] + list(self.outputs['metr'])
+    scores = sorted(set(scores), key=lambda x: x.name)
+    scores_function = K.function(
+        inputs=self.input_plhs,
+        outputs=scores,
+        training=False,
+        defaults={self.n_mcmc_samples_plh: int(n_mcmc_samples)},
+        batch_size=max(2, 4000 / int(n_mcmc_samples)))
+    self.pred_functions[n_mcmc_samples]['scores'] = scores_function
+    # ====== for other outputs ====== #
+    for name, val in self.other_outputs.items():
+      f_val = create_func(out_=val)
+      self.pred_functions[n_mcmc_samples][name] = f_val
     return self.pred_functions[n_mcmc_samples]
 
   # ******************** helper ******************** #
-  def monitoring_epoch(task):
-    curr_epoch = task.curr_epoch
-    if curr_epoch > 5 and curr_epoch % 5 != 0:
-      return
-    # ====== prepare latent space ====== #
-    Z_test = self.f_z(*test_tuple)
-    Z_test_drop = self.f_z(*testdrop_tuple)
-    if np.any(np.isnan(Z_test)):
-      return
-    # ====== prepare the reconstruction ====== #
-    if f_w is not None:
-      # order: [W, W_stdev_total, W_stdev_explained]
-      W_test = f_w(*test_tuple)
-      W_test_drop = f_w(*testdrop_tuple)
-    else:
-      W_test = None
-      W_test_drop = None
-    # ====== zero-inflated PI ====== #
-    if f_pi is not None:
-      pi_test = f_pi(*test_tuple)
-      pi_test_drop = f_pi(*testdrop_tuple)
-    else:
-      pi_test = None
-      pi_test_drop = None
-    # ====== plotting ====== #
-    plot_monitoring_epoch(
-        X=X_test, X_drop=X_test_drop, y=y_test_prob,
-        Z=Z_test, Z_drop=Z_test_drop,
-        W_outputs=W_test, W_drop_outputs=W_test_drop,
-        pi=pi_test, pi_drop=pi_test_drop,
-        row_name=row_test, dropout_percentage=DROPOUT_TEST,
-        curr_epoch=curr_epoch, ds_name=ds_name, labels=labels,
-        save_dir=MODEL_DIR)
-
   def normalize(self, x, method, data_name):
     x = np.atleast_2d(x)
     if method == 'raw':
@@ -521,48 +542,51 @@ class Inference(BaseEstimator):
     elif method == 'log':
       x = K.log_norm(x, axis=1, scale_factor=10000)
     elif method == 'bin' or method == 'prob':
-      if data_name not in self._gmm_threshold:
-        gmm = GMMThresholding()
-        gmm.fit(x)
-        self._gmm_threshold[data_name] = gmm
-      else:
-        gmm = self._gmm_threshold[data_name]
-      x = gmm.predict(x) if method == 'bin' else gmm.predict_proba(x)
+      is_binary_classes = sorted(np.unique(x.astype('float32'))) == [0., 1.]
+      if not is_binary_classes:
+        if data_name not in self._gmm_threshold:
+          gmm = GMMThresholding()
+          gmm.fit(x)
+          self._gmm_threshold[data_name] = gmm
+        else:
+          gmm = self._gmm_threshold[data_name]
+        x = gmm.predict(x) if method == 'bin' else gmm.predict_proba(x)
+      else: # already binarized or probabilized
+        pass
     else:
       raise NotImplementedError
     return x
 
   def _preprocess_inputs(self, X, y):
+    if self._gene_dim is None:
+      self._gene_dim = X.shape[1]
+    if self._prot_dim is None:
+      self._prot_dim = 0 if y is None else y.shape[1]
+    # ====== gene expression ====== #
     if X.ndim == 1:
       X = np.expand_dims(X, axis=-1)
     if self.xclip > 0:
       X = np.clip(X, a_min=0, a_max=float(self.xclip))
 
-    if y is not None:
+    C = np.sum(X, axis=-1, keepdims=True)
+    X_norm = self.normalize(X, method=self.xnorm, data_name='X')
+    T_norm = self.normalize(X, method=self.tnorm, data_name='X')
+    assert self._gene_dim == X_norm.shape[1], "Number of genes mismatch"
+    # ====== protein ====== #
+    if self.prot_dim > 0 and y is not None:
+      assert y is not None, \
+      "Protein marker must be given for this model: %s" % self.name
+
       if y.ndim == 1:
         y = np.expand_dims(y, axis=-1)
       if self.yclip > 0:
         y = np.clip(y, a_min=0, a_max=float(self.yclip))
 
-    C = np.sum(X, axis=-1, keepdims=True)
-    X_norm = self.normalize(X, method=self.xnorm, data_name='X')
-    T_norm = self.normalize(X, method=self.tnorm, data_name='X')
-    if y is not None:
       y_norm = self.normalize(y, method=self.ynorm, data_name='y')
-    else:
-      y_norm = X_norm
-    assert X_norm.shape[0] == y_norm.shape[0]
-    # ====== check matching dimension ====== #
-    if self._gene_dim is None:
-      self._gene_dim = X_norm.shape[1]
-    else:
-      assert self._gene_dim == X_norm.shape[1], "Number of genes mismatch"
-
-    if self._prot_dim is None:
-      self._prot_dim = 0 if y_norm is None else y_norm.shape[1]
-    else:
+      assert X_norm.shape[0] == y_norm.shape[0]
       assert self._prot_dim == y_norm.shape[1], "Number of protein mismatch"
-
+    else:
+      y_norm = None
     return X_norm, T_norm, C, y_norm
 
   # ******************** fitting ******************** #
@@ -617,6 +641,8 @@ class Inference(BaseEstimator):
 
     """
     X, T, C, y = self._preprocess_inputs(X, y)
+    if y is None and self._prot_dim > 0:
+      raise RuntimeError("prot_dim > 0 but not given y!")
     n_samples = X.shape[0]
     self._ps = supervised_percent
     self._trained_n_epoch += n_epoch
@@ -625,7 +651,6 @@ class Inference(BaseEstimator):
     self._n_mcmc_train = n_mcmc_samples
     # ====== initializing ====== #
     self._initialize_placeholders_and_outputs()
-
     # ====== splitting train valid ====== #
     X_train, T_train, C_train, y_train = None, None, None, None
     X_valid, T_valid, C_valid, y_valid = None, None, None, None
@@ -754,12 +779,16 @@ class Inference(BaseEstimator):
     trainer.set_callbacks(all_callbacks)
     # ====== training task ====== #
     trainer.set_train_task(func=f_train,
-                           data=(X_train, T_train, C_train, m_train, y_train),
+                           data=(X_train, T_train, C_train, m_train, y_train)
+                           if self.prot_dim > 0 else
+                           (X_train, T_train, C_train, m_train),
                            epoch=int(n_epoch),
                            name='train')
     if X_valid is not None:
       trainer.set_valid_task(func=f_score,
-                             data=(X_valid, T_valid, C_valid, m_valid, y_valid),
+                             data=(X_valid, T_valid, C_valid, m_valid, y_valid)
+                             if self.prot_dim > 0 else
+                             (X_valid, T_valid, C_valid, m_valid),
                              freq=training.Timer(percentage=1.0),
                              name='valid')
     # NOTE: this line is important
@@ -779,18 +808,20 @@ class Inference(BaseEstimator):
   # ******************** for fast evaluation ******************** #
   @property
   def train_loss(self):
-    loss_name = _normalize_tensor_name(self.outputs['loss'].name)
-    for name, values in self.train_history.items():
-      if loss_name == name:
-        return values
+    if self.outputs is not None:
+      loss_name = _normalize_tensor_name(self.outputs['loss'].name)
+      for name, values in self.train_history.items():
+        if loss_name == name:
+          return values
     return []
 
   @property
   def valid_loss(self):
-    loss_name = _normalize_tensor_name(self.outputs['loss'].name)
-    for name, values in self.valid_history.items():
-      if loss_name == name:
-        return values
+    if self.outputs is not None:
+      loss_name = _normalize_tensor_name(self.outputs['loss'].name)
+      for name, values in self.valid_history.items():
+        if loss_name == name:
+          return values
     return []
 
   @property
@@ -929,10 +960,20 @@ class Inference(BaseEstimator):
                                       orientation='vertical')
       cb1.set_label('Protein markers level')
 
+  # ******************** predicting ******************** #
+  def _make_prediction(self, pred_type, X, y=None, n_mcmc_samples=100):
+    X, T, C, y = self._preprocess_inputs(X, y)
+    mask = np.ones(shape=(X.shape[0],))
+    f = self._initialize_predict_functions(n_mcmc_samples)
+    f = f[str(pred_type).lower()]
+    if y is None:
+      return f(X, T, C, mask)
+    else:
+      return f(X, T, C, mask, y)
+
   # ******************** scoring ******************** #
   @cache_memory
-  def score(self, X, y=None,
-            n_mcmc_samples=100):
+  def score(self, X, y=None, n_mcmc_samples=100, return_mean=True):
     """Compute the per-sample average of recorded metrics of the given data X.
 
     Parameters
@@ -945,12 +986,13 @@ class Inference(BaseEstimator):
     -------
     dictionary : metric_name -> values
     """
-    X, T, C, y = self._preprocess_inputs(X, y)
-    f = self._initialize_score_functions(n_mcmc_samples)
-    mask = np.ones(shape=(X.shape[0],))
-    scores = f(X, T, C, mask, y)
-    return OrderedDict([(tensor.name, np.mean(val))
-                       for tensor, val in zip(f.outputs, scores)])
+    scores = self._make_prediction('scores', X, y, n_mcmc_samples)
+    names = [i.name
+             for i in self._initialize_predict_functions(n_mcmc_samples)['scores'].outputs]
+    if return_mean:
+      return OrderedDict([(name, np.mean(val))
+                          for name, val in zip(names, scores)])
+    return scores
 
   def log_likelihood(self, X, y=None, n_mcmc_samples=100):
     """ Compute the log-likelihood of p(x|z); i.e. the
@@ -959,51 +1001,27 @@ class Inference(BaseEstimator):
     for name, value in scores.items():
       if 'nllk:0' == name[-6:].lower():
         return -value
-    for name, value in scores.items():
       if 'nllk_x' in name.lower():
         return -value
     raise RuntimeError("Cannot find reconstruction log-likelihood in the output "
                        "metrics, we have: %s" % str(list(scores.items())))
 
-  def marginal_log_likelihood(self, X, y=None, n_mcmc_samples=100):
-    """
-    Computes a biased estimator for log p(x), which is the marginal log likelihood.
-    Despite its bias, the estimator still converges to the real value
-    of log p(x) when n_samples_mc (for Monte Carlo) goes to infinity
-    (a fairly high value like 100 should be enough)
-    Due to the Monte Carlo sampling, this method is not as computationally efficient
-    as computing only the reconstruction loss
-    """
-    scores = self.score(X, y, n_mcmc_samples)
-    for name, value in scores.items():
-      if self.outputs['loss'].name == name:
-        return -value
-    raise RuntimeError("Cannot find reconstruction log-likelihood in the output "
-                       "metrics, we have: %s" % str(list(scores.items())))
-
   # ******************** predicting ******************** #
-  def _make_prediction(self, pred_type, X, y=None,
-                       n_mcmc_samples=100):
-    X, T, C, y = self._preprocess_inputs(X, y)
-    f = self._initialize_predict_functions(n_mcmc_samples)
-    mask = np.ones(shape=(X.shape[0],))
-    return f[str(pred_type).lower()](X, T, C, mask, y)
-
-  def predict_Z(self, X, y=None):
+  def predict_Z(self, X):
     """ Return mean of the latent posterior
     (i.e. mean of Normal distribution) """
-    return self._make_prediction('Z', X, y, n_mcmc_samples=100)
+    return self._make_prediction('Z', X, n_mcmc_samples=100)
 
-  def predict_W(self, X, y=None, n_mcmc_samples=100):
+  def predict_W(self, X, n_mcmc_samples=100):
     """ Return a tuple of
     (W_expected, W_stdev_total, W_stdev_explained)
 
     if not a variational model,
     then W_stdev_total and W_stdev_explained are None
     """
-    return self._make_prediction('W', X, y, n_mcmc_samples)
+    return self._make_prediction('W', X, n_mcmc_samples=n_mcmc_samples)
 
-  def predict_V(self, X, y=None, n_mcmc_samples=100):
+  def predict_V(self, X, n_mcmc_samples=100):
     """ Return a tuple of
     (V_expected, V_stdev_total, V_stdev_explained)
 
@@ -1012,12 +1030,22 @@ class Inference(BaseEstimator):
     if not a variational model,
     then V_stdev_total and V_stdev_explained are None
     """
-    return self._make_prediction('V', X, y, n_mcmc_samples)
+    return self._make_prediction('V', X, n_mcmc_samples=n_mcmc_samples)
 
-  def predict_PI(self, X, y=None, n_mcmc_samples=100):
+  def predict_PI(self, X, n_mcmc_samples=100):
     """ Return a matrix (n_sample, n_gene) of Zero-inflated
     rate
 
     if not a zero-inflated model, then return None
     """
-    return self._make_prediction('PI', X, y, n_mcmc_samples)
+    return self._make_prediction('PI', X, n_mcmc_samples=n_mcmc_samples)
+
+  def predict(self, output_name, X, y=None, n_mcmc_samples=100):
+    """ The output name can be:
+    'W'
+    'V'
+    'PI'
+    'y_'
+    or any custom name returned in the output dictionary
+    """
+    return self._make_prediction(output_name, X, n_mcmc_samples)

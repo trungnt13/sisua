@@ -1,7 +1,9 @@
 import os
+import re
 import math
 import pickle
 from six import string_types
+from collections import OrderedDict
 
 import numpy as np
 
@@ -26,7 +28,8 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
 
   Return
   ------
-  list of absolute path to all satisfied experiments
+  dictionary
+  corruption_config -> list of absolute path to all satisfied experiments
 
   Note
   ----
@@ -35,6 +38,7 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
 
   """
   from sisua.data import EXP_DIR, get_dataset
+  pattern_of_corruption = re.compile(r'(uniform|binomial)\d\d')
   # ====== get the exp path ====== #
   ds_name_or_path = str(ds_name_or_path)
   if os.path.isdir(ds_name_or_path):
@@ -43,39 +47,53 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
         os.path.dirname(ds_name_or_path))
   else:
     (ds, gene_ds, prot_ds) = get_dataset(ds_name_or_path)
-    exp_path = os.path.join(EXP_DIR, ds_name_or_path)
+    exp_path = EXP_DIR
   ds_name_or_path = ds.name
   assert os.path.isdir(exp_path), exp_path
+
   # ====== Extract all experiments ====== #
-  all_exp = [os.path.join(exp_path, i)
-             for i in os.listdir(exp_path)]
+  found_path = []
+  for name in os.listdir(EXP_DIR):
+    if pattern_of_corruption.match(os.path.basename(name)):
+      found_path.append(os.path.join(EXP_DIR, name))
+  found_path = [os.path.join(path, ds_name_or_path)
+                for path in found_path
+                if os.path.exists(os.path.join(path, ds_name_or_path))]
+  found_path = sorted(found_path)
+  assert len(found_path) > 0
+
+  all_exp = OrderedDict([
+      (path.split("/")[-2], [os.path.join(path, name) for name in os.listdir(path)])
+      for path in found_path])
   # ====== start filtering ====== #
+  filtered_path = []
   incl_keywords = [i for i in str(incl_keywords).split(',') if len(i) > 0]
   excl_keywords = [i for i in str(excl_keywords).split(',') if len(i) > 0]
-
-  all_exp = [i for i in all_exp
+  for name, paths in all_exp.items():
+    paths = [i for i in paths
              if all(j in os.path.basename(i).split('_')
                     for j in incl_keywords)]
-
-  all_exp = [i for i in all_exp
+    paths = [i for i in paths
              if all(j not in os.path.basename(i).split('_')
                     for j in excl_keywords)]
-
-  # ====== check if experiments finished ====== #
-  all_exp = [i for i in all_exp
-             if os.path.exists(os.path.join(i, 'config.pkl')) and
-             os.path.exists(os.path.join(i, 'model.pkl'))]
-  all_exp = sorted(all_exp,
+    # check if experiments finished
+    paths = [i for i in paths
+             if os.path.exists(os.path.join(i, 'model.pkl'))]
+    paths = sorted(paths,
                    key=lambda x: os.path.basename(x))
+    filtered_path.append((name, paths))
+  filtered_path = OrderedDict(filtered_path)
   # ====== logging ====== #
   if bool(print_log):
     print(ctext("Found following experiments:", 'lightyellow'))
-    for i in all_exp:
-      print('*', os.path.basename(i))
+    for name, paths in filtered_path.items():
+      print("*", ctext(name, 'yellow'))
+      for i in paths:
+        print('  ', os.path.basename(i))
 
   if return_dataset:
-    return all_exp, ds_name_or_path, gene_ds, prot_ds
-  return all_exp
+    return filtered_path, ds_name_or_path, gene_ds, prot_ds
+  return filtered_path
 
 def anything2image(x):
   if x.ndim == 1:

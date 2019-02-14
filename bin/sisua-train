@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 from sisua import train
+from sisua import set_verbose
 
 if __name__ == "__main__":
-  train.main()
+  kw = train.get_arguments()
+  set_verbose(True)
+  train.train(**kw)

@@ -17,7 +17,7 @@ from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 
 from odin import backend as K
-from odin.utils import (ctext, catch_warnings_ignore)
+from odin.utils import (ctext, catch_warnings_ignore, one_hot)
 from odin.visual import (plot_figure, plot_scatter_heatmap,
                          to_axis, plot_colorbar)
 
@@ -62,7 +62,7 @@ def unsupervised_clustering_accuracy(y, y_pred):
   return sum([reward_matrix[i, j] for i, j in ind]) * 1.0 / y_pred.size, ind
 
 
-def clustering_scores(latent, labels, n_labels=None,
+def clustering_scores(latent, labels, n_labels,
                       prediction_algorithm='both'):
   """ Clustering Scores:
 
@@ -77,6 +77,13 @@ def clustering_scores(latent, labels, n_labels=None,
   ----------
   prediction_algorithm : {'knn', 'gmm', 'both'}
   """
+  # simple normalization to 0-1, then pick the argmax
+  if labels.ndim == 2:
+    min_val = np.min(labels, axis=0, keepdims=True)
+    max_val = np.max(labels, axis=0, keepdims=True)
+    labels = (labels - min_val) / (max_val - min_val)
+    labels = np.argmax(labels, axis=-1)
+
   if prediction_algorithm == 'knn':
     km = KMeans(n_labels, n_init=200, random_state=5218)
     labels_pred = km.fit_predict(latent)
@@ -89,7 +96,7 @@ def clustering_scores(latent, labels, n_labels=None,
                                prediction_algorithm='knn')
     score2 = clustering_scores(latent, labels, n_labels=n_labels,
                                prediction_algorithm='gmm')
-    return (score1 + score2) / 2
+    return {k: (v + score2[k]) / 2 for k, v in score1.items()}
   else:
     raise ValueError(
         "Not support for prediction_algorithm: '%s'" % prediction_algorithm)
@@ -98,14 +105,14 @@ def clustering_scores(latent, labels, n_labels=None,
   ari_score = adjusted_rand_score(labels, labels_pred)
   nmi_score = normalized_mutual_info_score(labels, labels_pred)
   uca_score = unsupervised_clustering_accuracy(labels, labels_pred)[0]
-  return np.array((asw_score, ari_score, nmi_score, uca_score))
+  return dict(ASW=asw_score, ARI=ari_score, NMI=nmi_score, UCA=uca_score)
 
 # ===========================================================================
 # Visualization
 # ===========================================================================
-def streamline_classifier(Z_train, y_train, Z_test, y_test,
-                          labels_name, title,
-                          show_plot=True):
+def streamline_classifier(Z_train, y_train, Z_test, y_test, labels_name,
+                          train_results=False,
+                          title='', show_plot=True):
   """ Return a dictionary of scores
   {
       F1micro=f1_micro * 100,
@@ -114,9 +121,19 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test,
       F1_[classname]=...
   }
   """
+  results_train = {}
+  results_test = {}
+
   with catch_warnings_ignore(FutureWarning):
     with catch_warnings_ignore(RuntimeWarning):
-      # ====== special case ====== #
+      n_classes = len(labels_name)
+      # ====== preprocessing ====== #
+      if y_train.ndim == 1 or y_train.shape[1] == 1:
+        y_train = one_hot(y_train.ravel(), nb_classes=n_classes)
+      if y_test.ndim == 1 or y_test.shape[1] == 1:
+        y_test = one_hot(y_test.ravel(), nb_classes=n_classes)
+      is_binary_classes = sorted(np.unique(y_train.astype('float32'))) == [0., 1.]
+      # ====== special case for cbmc and pbmc ====== #
       if 'CD4' in labels_name and 'CD8' in labels_name:
         ids = [i for i, name in enumerate(labels_name)
                if name == 'CD4' or name == 'CD8']
@@ -147,23 +164,35 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test,
         classifier = SVC(kernel='linear',
                          random_state=UNIVERSAL_RANDOM_SEED)
         classifier.fit(X=Z_train, y=y_train)
-        results = plot_evaluate_classifier(
-            y_pred=classifier.predict(Z_test), y_true=y_test,
-            labels=labels_name,
-            title=title, show_plot=bool(show_plot))
-      # ====== general case ====== #
+      # ====== binary classes ====== #
       else:
+        if not is_binary_classes:
+          gmm = GMMThresholding()
+          gmm.fit(np.concatenate((y_train, y_test), axis=0))
+          y_train = gmm.predict(y_train)
+          y_test = gmm.predict(y_test)
         # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
         classifier = OneVsRestClassifier(
-            SVC(kernel='linear', random_state=UNIVERSAL_RANDOM_SEED))
+            SVC(kernel='linear', random_state=UNIVERSAL_RANDOM_SEED),
+            n_jobs=n_classes)
         classifier.fit(X=Z_train, y=y_train)
-        #
-        results = plot_evaluate_classifier(
+      # ====== return ====== #
+      from sklearn.exceptions import UndefinedMetricWarning
+      with catch_warnings_ignore(UndefinedMetricWarning):
+        if train_results:
+          results_train = plot_evaluate_classifier(
+              y_pred=classifier.predict(Z_train), y_true=y_train,
+              labels=labels_name,
+              title='[train]' + title, show_plot=bool(show_plot))
+        results_test = plot_evaluate_classifier(
             y_pred=classifier.predict(Z_test), y_true=y_test,
             labels=labels_name,
             title=title, show_plot=bool(show_plot))
-      # ====== return ====== #
-      return OrderedDict(sorted(results.items(), key=lambda x: x[0]))
+
+      if train_results:
+        return OrderedDict(sorted(results_train.items(), key=lambda x: x[0])),\
+        OrderedDict(sorted(results_test.items(), key=lambda x: x[0]))
+      return OrderedDict(sorted(results_test.items(), key=lambda x: x[0]))
 
 def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
                   colormap='hot', ax=None,
@@ -356,10 +385,12 @@ def plot_latents(Z, y, labels_name, title=None,
     else:
       Z = fast_pca(Z, n_components=2, random_state=52181208)
   # ====== clustering metrics ====== #
-  asw, ari, nmi, uca = clustering_scores(
+  scores = clustering_scores(
       latent=Z, labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
       n_labels=num_classes)
-  title += '\nASW:%.2f ARI:%.2f NMI:%.2f UCA:%.2f' % (asw, ari, nmi, uca)
+  title += '\n'
+  for k, v in sorted(scores.items(), key=lambda x: x[0]):
+    title += '%s:%.2f ' % (k, v)
   # ====== plotting ====== #
   if enable_argmax:
     y_argmax = np.argmax(y, axis=-1)

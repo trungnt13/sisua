@@ -4,7 +4,7 @@ from os.path import expanduser
 from odin.utils import select_path
 
 if 'SISUA_DATA' in os.environ:
-  DATA_DIR = os.environ['DATA_DIR']
+  DATA_DIR = os.environ['SISUA_DATA']
   if not os.path.exists(DATA_DIR):
     os.mkdir(DATA_DIR)
   elif os.path.isfile(DATA_DIR):

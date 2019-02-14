@@ -16,9 +16,9 @@ def save_data(outpath, header, row, data):
   """
   try:
     import feather
-  except ImportError as e:
     return save_data_to_R(outpath, header, row, data)
-  return save_data_to_csv(outpath, header, row, data)
+  except ImportError as e:
+    return save_data_to_csv(outpath, header, row, data)
 
 def save_data_to_csv(outpath, header, row, data):
   if data is None:

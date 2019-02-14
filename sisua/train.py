@@ -15,7 +15,7 @@ def get_arguments():
         ('log', 'bin', 'raw', 'prob')
   ).add('-ximpu',
         'The percents for dropout entries to test imputation on X (gene count)',
-        0.1,
+        0.25,
   ).add('-tnorm',
         'normalization method for target reconstruction data',
         'raw',
@@ -79,7 +79,6 @@ def train(model='vae', ds='facs_7',
 
   from odin.utils import (ctext, stdio)
 
-  from sisua import set_verbose
   from sisua.data import (get_dataset, EXP_DIR)
   from sisua.inference import Inference
   # ====== validate the arguments ====== #
@@ -98,7 +97,7 @@ def train(model='vae', ds='facs_7',
   # ===========================================================================
   # Loading data
   # ===========================================================================
-  set_verbose(True)
+  DS_NAME = str(ds)
   (ds, gene_ds, prot_ds) = get_dataset(ds, override=False)
   # ====== data for training and testing ====== #
   X_train = gene_ds.get_data(data_type='train',
@@ -117,6 +116,10 @@ def train(model='vae', ds='facs_7',
   # [2] percentage of supervised data
   # [3] latent dimension
   # [4] use mouse genes or not
+  CORRUPTION_DIR = os.path.join(EXP_DIR, cdist + '%.2d' % (ximpu * 100))
+  if not os.path.exists(CORRUPTION_DIR):
+    os.mkdir(CORRUPTION_DIR)
+
   MODEL_NAME = str(model).strip().lower()
   MODEL_ID = '_'.join([
       MODEL_NAME,
@@ -136,7 +139,7 @@ def train(model='vae', ds='facs_7',
       'cntsmT' if bool(count_sum) else 'cntsmF',
       'cstrnT' if bool(constraint) else 'cstrnF',
   ])
-  BASE_DIR = os.path.join(EXP_DIR, ds.name)
+  BASE_DIR = os.path.join(CORRUPTION_DIR, ds.name)
   if not os.path.exists(BASE_DIR):
     os.mkdir(BASE_DIR)
 
@@ -154,7 +157,7 @@ def train(model='vae', ds='facs_7',
   # Training the network
   # ===========================================================================
   stdio(os.path.join(MODEL_DIR, 'train.log'))
-  infer = Inference(model_name=MODEL_NAME,
+  infer = Inference(model=MODEL_NAME,
                     hdim=hdim, zdim=zdim, nlayer=nlayer,
                     xnorm=xnorm, tnorm=tnorm, ynorm=ynorm,
                     xclip=xclip, yclip=yclip,
@@ -164,7 +167,7 @@ def train(model='vae', ds='facs_7',
                     analytic=analytic, iw=iw,
                     cellsize_normalize_factor=gene_ds.cell_median,
                     # store some extra arguments
-                    ximpu=ximpu, yimpu=yimpu, cdist=cdist)
+                    ximpu=ximpu, yimpu=yimpu, cdist=cdist, dataset=DS_NAME)
   infer.fit(X=X_train, y=y_train,
             supervised_percent=ps, validation_percent=0.1,
             n_mcmc_samples=nsample,
@@ -190,4 +193,6 @@ def train(model='vae', ds='facs_7',
 # ===========================================================================
 if __name__ == '__main__':
   kw = get_arguments()
+  from sisua import set_verbose
+  set_verbose(True)
   train(**kw)

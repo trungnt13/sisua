@@ -19,6 +19,53 @@ from sisua.data.const import UNIVERSAL_RANDOM_SEED
 from sisua.utils.others import validating_dataset
 
 # ===========================================================================
+# Helper
+# ===========================================================================
+def apply_artificial_corruption(x, dropout, distribution):
+  distribution = str(distribution).lower()
+  dropout = float(dropout)
+  assert 0 <= dropout < 1, \
+  "dropout value must be >= 0 and < 1, given: %f" % dropout
+  rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
+
+  if dropout == 0:
+    return x
+  # ====== applying corruption ====== #
+  # Original code from scVI, to provide a comparable result,
+  # please acknowledge the author of scVI if you are using this
+  # code for corrupting the data
+  # https://github.com/YosefLab/scVI/blob/2357dde15351450e452efa426c516c60a2d5ee96/scvi/dataset/dataset.py#L83
+  # the test data won't be corrupted
+  corrupted_x = copy.deepcopy(x)
+
+  # multiply the entry n with a Ber(0.9) random variable.
+  if distribution == "uniform":
+    i, j = np.nonzero(x)
+    ix = rand.choice(range(len(i)),
+                     size=int(np.floor(dropout * len(i))),
+                     replace=False)
+    i, j = i[ix], j[ix]
+    corrupted = np.multiply(
+        x[i, j],
+        rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=0.9))
+  # multiply the entry n with a Bin(n, 0.9) random variable.
+  elif distribution == "binomial":
+    i, j = (k.ravel() for k in np.indices(x.shape))
+    ix = rand.choice(range(len(i)),
+                     size=int(np.floor(dropout * len(i))),
+                     replace=False)
+    i, j = i[ix], j[ix]
+    # only 20% expression captured
+    corrupted = rand.binomial(n=(x[i, j]).astype(np.int32), p=0.2)
+  else:
+    raise ValueError(
+        "Only support 2 corruption distribution: 'uniform' and 'binomial', "
+        "but given: '%s'" % distribution)
+
+  corrupted_x[i, j] = corrupted
+  return corrupted_x
+
+# ===========================================================================
 # The dataset object
 # ===========================================================================
 class SingleCellDataset(object):
@@ -96,6 +143,11 @@ class SingleCellDataset(object):
     self._feat_std = np.std(x)
     self._feat_max = np.max(x)
     self._feat_min = np.min(x)
+
+  @property
+  def is_binary(self):
+    X = self.get_data(data_type='all', dropout=0)
+    return sorted(np.unique(X.astype('float32'))) == [0., 1.]
 
   @property
   def shape(self):
@@ -197,51 +249,19 @@ class SingleCellDataset(object):
 
   # ******************** helper ******************** #
   @cache_memory
-  def _get_data_all(self, normalize_method='raw',
-                    dropout=0, distribution="uniform"):
+  def _get_data_all(self, dropout=0, distribution="uniform"):
     # no dropout
     if dropout is None or dropout <= 0 or dropout >= 1:
       return self._raw_data
-
     train, test = self._raw_data
-    rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
-    # ====== applying corruption ====== #
-    # Original code from scVI, to provide a comparable result,
-    # please acknowledge the author of scVI if you are using this
-    # code for corrupting the data
-    # https://github.com/YosefLab/scVI/blob/2357dde15351450e452efa426c516c60a2d5ee96/scvi/dataset/dataset.py#L83
-    # the test data won't be corrupted
-    train = copy.deepcopy(train)
-    if distribution == "uniform":  # multiply the entry n with a Ber(0.9) random variable.
-      i, j = np.nonzero(train)
-      ix = rand.choice(range(len(i)),
-                       int(np.floor(dropout * len(i))),
-                       replace=False)
-      i, j = i[ix], j[ix]
-      corrupted = np.multiply(
-          train[i, j],
-          rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=0.9))
-    elif distribution == "binomial":  # multiply the entry n with a Bin(n, 0.9) random variable.
-      i, j = (k.ravel() for k in np.indices(self.X.shape))
-      ix = rand.choice(range(len(i)),
-                       int(np.floor(dropout * len(i))),
-                       replace=False)
-      i, j = i[ix], j[ix]
-      # only 20% expression captured
-      corrupted = rand.binomial(n=(train[i, j]).astype(np.int32), p=0.2)
-    else:
-      raise ValueError(
-          "Only support 2 corruption distribution: 'uniform' and 'binomial', "
-          "but given: '%s'" % distribution)
-
-    train[i, j] = corrupted
-    return (train, test)
+    return (
+        apply_artificial_corruption(train, dropout=dropout, distribution=distribution),
+        apply_artificial_corruption(test, dropout=dropout, distribution=distribution))
 
   def __getitem__(self, key):
     return self.get_data(data_type=key, dropout=0)
 
-  def get_data(self, data_type='all',
-               dropout=0, distribution="uniform"):
+  def get_data(self, data_type='all', dropout=0, distribution="uniform"):
     data_type = str(data_type).lower()
     assert data_type in ('all', 'train', 'test')
     new_data = self._get_data_all(dropout=dropout, distribution=distribution)
@@ -257,6 +277,14 @@ class SingleCellDataset(object):
   @property
   def X(self):
     return self.get_data(data_type='all', dropout=0)
+
+  @property
+  def X_train(self):
+    return self.get_data(data_type='train', dropout=0)
+
+  @property
+  def X_test(self):
+    return self.get_data(data_type='test', dropout=0)
 
   @property
   def X_row(self):
@@ -296,6 +324,7 @@ class SingleCellDataset(object):
 # ===========================================================================
 # Main methods
 # ===========================================================================
+@cache_memory
 def get_dataset(dataset_name, override=False):
   """ Supporting dataset:
 

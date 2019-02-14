@@ -1,3 +1,5 @@
+from sisua.data.path import EXP_DIR, DATA_DIR, DOWNLOAD_DIR
+
 _VERBOSE = False
 
 def set_verbose(is_verbose_on):
