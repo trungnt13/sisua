@@ -1,13 +1,17 @@
 # SISUA
 
+SemI - SUpervised generative Autoencoder models for single cell data
+
 <img src = "https://drive.google.com/uc?export=view&id=1PvvG61_Rgbv_rqT6sCeb1XB6CtdiCMXX"
   width = "584" height = "359" >
 
-Trung Ngo Trong, Roger Kramer, Juha Mehtonen, Gerardo González, Ville Hautamäki, Merja Heinäniemi
-**"SISUA: SemI-SUpervised Generative Autoencoder for Single Cell Data"** Submitted, 2019.
-[pdf](https://doi.org/10.1101/631382)
+#### References
 
-## Install
+Trung Ngo Trong, Roger Kramer, Juha Mehtonen, Gerardo González, Ville Hautamäki, Merja Heinäniemi
+**"SISUA: Semi-Supervised Generative Autoencoder for Single Cell Data" ** Submitted, 2019. [pdf](https://doi.org/10.1101/631382)
+
+---
+### Install
 
 Install stable version of _SISUA_ using pip:
 
@@ -21,43 +25,30 @@ For developers, we create a conda environment for SISUA contribution [sisua_env]
 
 > conda env create -f=sisua_env.yml
 
-## Getting started
+### Getting started
 
-a. The basics:
-.. * `data loading`
-.. * `the models`
-.. * [`basic usage and work flow`](https://github.com/trungnt13/sisua/blob/master/tutorials/basics.py)
-b. Analyzing:
-.. * `Biological plausible latent space`
-.. * `Imputation of gene expression`
-.. * `Prediction of protein marker`
-c. Advanced topics:
-.. * `linear decoder for gene interpretation`
-.. * `reproducing results from the SISUA paper`
-
-## SISUA toolkits
+### SISUA toolkits
 
 We provide a comprehensive list of toolkits for _fast & efficient_ single cell analysis.
 These toolkits enable users getting started even without reading the API or dealing
 with python code. Most important arguments for each toolkit are list in the following table,
 for more information call `-h` option.
 
-* [`sisua-train`](https://github.com/trungnt13/sisua/blob/master/docs/sisua_train.md): training single-cell modeling algorithms. We support a wide coverage of
+* `sisua-train`: training single-cell modeling algorithms. We support a wide coverage of
 all state-of-the-art single-cell modeling algorithms `-model [scvi|dca|vae|movae|...]`, and
 more thant **30** different dataset for reproducibility and comparison among different methods
 `-ds [cortex|pbmcscvi|pbmcscvae|pbmc8k_ly|pbmcecc_ly|...]` (more information about each dataset
-can be found at [metadata](https://github.com/trungnt13/sisua/blob/master/docs/datasets.md)).
-Training multiple models in parallel also supported, for example,
+can be found at [metadata]()). Training multiple models in parallel also supported, for example,
 `-ds cortex -model scvi,dca,vae,movae -nprocess 2` will run concurrently two configurations at once
 and significantly speed up the process.
-* [`sisua-analyze`](https://github.com/trungnt13/sisua/blob/master/docs/sisua_analyze.md): quick and easy way to evaluate, compare and biologically interpret trained model,
+* `sisua-analyze`: quick and easy way to evaluate, compare and biologically interpret trained model,
 you need to specify the name of the dataset as `first positional argument`,
 then the name of all the models for the comparison `-model scvi,dca,vae`
 * `sisua-data`: _coming soon_
 * `sisua-embed`: _coming soon_
 
 
-## Configuration
+### Configuration
 
 By default, the data will be saved at your home folder
 at `~/bio_data`, and the experiments' outputs will be stored

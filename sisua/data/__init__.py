@@ -27,9 +27,10 @@ def get_dataset_meta():
   from sisua.data.data_loader.mnist import read_MNIST
   from sisua.data.data_loader.facs_gene_protein import read_FACS, read_full_FACS
   from sisua.data.data_loader.facs_corrupted import read_FACS_corrupted
-  from sisua.data.data_loader.fashion_mnist import (read_fashion_MNIST, read_fashion_MNIST_drop,
-                                        read_MNIST_drop)
-  from sisua.data.data_loader.scvi_datasets import (read_Cortex, read_Hemato, read_PBMC)
+  from sisua.data.data_loader.fashion_mnist import (
+      read_fashion_MNIST, read_fashion_MNIST_drop, read_MNIST_drop)
+  from sisua.data.data_loader.scvi_datasets import (
+      read_Cortex, read_Hemato, read_PBMC, read_Retina)
   from sisua.data.data_loader.pbmc8k import read_PBMC8k
   from sisua.data.data_loader.pbmcecc import read_PBMCeec
   from sisua.data.experimental_data.pbmc_8k_ecc_ly import read_PBMC_ecc_to_8k
@@ -84,7 +85,7 @@ def get_dataset_meta():
 
       # ====== other fun ====== #
       'cortex': read_Cortex,
-      'retina': read_Cortex,
+      'retina': lambda *args, **kwargs: NotImplementedError,
       'hemato': read_Hemato,
   }
   return data_meta

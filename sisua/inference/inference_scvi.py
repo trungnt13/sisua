@@ -88,7 +88,7 @@ class InferenceSCVI(Inference):
     except ImportError as e:
       raise RuntimeError(
           "scVI package at https://github.com/YosefLab/scVI is required")
-    if model not in ('vae', 'kvae', 'scvi'):
+    if model not in ('vae', 'scvi'):
       raise RuntimeError("InferenceSCVI only support 'vae' model")
     if xdist not in ('zinb', 'nb'):
       raise ValueError("Only support 'zinb' and 'nb' for `xdist`")

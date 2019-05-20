@@ -9,7 +9,7 @@ def get_arguments():
   args = ArgController(
   ).add('-model',
         'name for model, specified in models_.py; with the exception is "scvi" and "dca"',
-        'kmovae'
+        'movae'
   ).add('-ds',
         'name of the dataset: mnist, pbmc citeseq, pbmc 10xPP, cbmc, etc.',
         'pbmc8k_ly'
@@ -95,7 +95,7 @@ def get_arguments():
     preprocessed[k] = v
   return preprocessed, n_process
 
-def train(model='kvae', ds='pbmc_ly', dispersion='gene-cell',
+def train(model='vae', ds='pbmc_ly', dispersion='gene-cell',
           xnorm='log', ximpu=0.25, tnorm='raw',
           ynorm='prob',
           xclip=0, yclip=0,
@@ -147,7 +147,7 @@ def train(model='kvae', ds='pbmc_ly', dispersion='gene-cell',
   # ===========================================================================
   infer = Inference(
       gene_dim=X_train.shape[1],
-      prot_dim=None if model in ('vae', 'kvae', 'scvi', 'dca')
+      prot_dim=None if model in ('vae', 'scvi', 'dca')
       else y_train.shape[1],
       model=model, dispersion=dispersion,
       xnorm=xnorm, tnorm=tnorm, ynorm=ynorm,
@@ -224,7 +224,7 @@ def main():
       tmp = dict(kw)
       tmp.update(args)
       # special processing for unsupervised models
-      if tmp['model'] in ('dca', 'scvi', 'vae', 'kvae'):
+      if tmp['model'] in ('dca', 'scvi', 'vae'):
         tmp['ynorm'] = 'prob'
         tmp['yclip'] = 0
         tmp['ydist'] = 'bernoulli'

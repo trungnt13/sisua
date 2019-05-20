@@ -15,7 +15,7 @@ from sisua.data.path import EXP_DIR
 def get_arguments():
   args = ArgController(
   ).add('ds', 'dataset for evaluation'
-  ).add('-models', 'name of all model for evaluation, e.g. kvae,kmovae,dca,scvi', 'kvae'
+  ).add('-model', 'name of all model for evaluation, e.g. vae,movae,dca,scvi', 'vae'
   ).add('-ynorm', 'specific normalization mode for protein', ''
   ).add('-yweight', 'specific weight for protein, e.g. 1,10,100', ''
   ).add('-incl', 'list of all keywords for inclusion', ''
@@ -96,7 +96,7 @@ def analyze(dataset_name, models, incl, excl,
       return False
 
     # only continue with semi-supervised model
-    if not ('scvi' in keywords or 'dca' in keywords or 'kvae' in keywords):
+    if not ('scvi' in keywords or 'dca' in keywords or 'vae' in keywords):
       if len(ynorm) > 0:
         if keywords[3] != ynorm:
           return False

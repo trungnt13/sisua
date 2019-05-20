@@ -15,7 +15,7 @@ from sisua.models.helpers import (parse_latent_distribution,
 # Main models
 # ===========================================================================
 @N.Lambda
-def vae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
+def oldvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   """ M1 model:
   Generative: z -> x
   Inference : X -> z
@@ -60,7 +60,7 @@ def vae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
 # Semi-supervised VAE
 # ===========================================================================
 @N.Lambda
-def movae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
+def oldmovae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   # ====== create network ====== #
   f_encoder, f_decoder = create_network(
       hdim=configs['hdim'], batchnorm=configs['batchnorm'],
@@ -105,7 +105,7 @@ def movae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   return outputs
 
 @N.Lambda
-def dovae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
+def olddovae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   # ====== create network ====== #
   f_encoder_X, f_decoder_X = create_network(
       hdim=configs['hdim'], batchnorm=configs['batchnorm'],
@@ -168,7 +168,7 @@ def dovae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
 # Semi-supervised latent VAE
 # ===========================================================================
 @N.Lambda
-def mlvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
+def oldmlvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   """ Multi-latent VAE """
   # ====== create network ====== #
   f_encoder_X, f_decoder_X = create_network(
@@ -238,7 +238,7 @@ def mlvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   return outputs
 
 @N.Lambda
-def dlvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
+def olddlvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   """ Parallel latents VAE """
   # ====== create network ====== #
   f_encoder_X, f_decoder_X = create_network(
@@ -306,79 +306,6 @@ def dlvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
   outputs['W'] = W_expected
   outputs['W_stddev'] = W_stddev_total
   outputs['y'] = tf.reduce_mean(pY_given_Z.mean(), axis=0)
-  extract_pi(outputs, dist=pX_given_Z)
-  extract_clean_count(outputs, dist=pX_given_Z)
-  return outputs
-
-# ===========================================================================
-# Supervised model
-# ===========================================================================
-@N.Lambda
-def ssvae(X, T, L, L_mean, L_var, mask, y, nsample, nepoch, configs):
-  """ Parallel latents VAE """
-  # ====== create network ====== #
-  f_encoder_X, f_decoder_X = create_network(
-      hdim=configs['hdim'], batchnorm=configs['batchnorm'],
-      n_layers=configs['nlayer'],
-      xdrop=configs['xdrop'], edrop=configs['edrop'],
-      zdrop=configs['zdrop'], ddrop=configs['ddrop'],
-      name="Dual_latent_VAE_X")
-  f_encoder_Y, f_decoder_Y = create_network(
-      hdim=configs['hdim'], batchnorm=configs['batchnorm'],
-      n_layers=configs['nlayer'],
-      xdrop=configs['xdrop'], edrop=configs['edrop'],
-      zdrop=configs['zdrop'], ddrop=configs['ddrop'],
-      name="Dual_latent_VAE_Y")
-  # ====== posterior ====== #
-  E_X = f_encoder_X(X)
-  E_Y = f_encoder_Y(y)
-
-  (Z_X, qZ_given_X, Z_given_X_samples, KL_X) = \
-  parse_latent_distribution(
-      E=E_X,
-      zdim=configs['zdim'] // 2, dist_name=configs['zdist'], name='Z1_Xlatent',
-      n_samples=nsample,
-      analytic=configs['analytic'])
-
-  (Z_Y, qZ_given_Y, Z_given_Y_samples, KL_Y) = \
-  parse_latent_distribution(
-      E=E_Y,
-      zdim=configs['zdim'] // 2, dist_name=configs['zdist'], name='Z2_Ylatent',
-      n_samples=nsample,
-      analytic=configs['analytic'])
-
-  # ====== reconstruction and distortion ====== #
-  Z_given_XY_samples = tf.concat((Z_given_X_samples, Z_given_Y_samples),
-                                 axis=-1)
-  D_X = f_decoder_X(Z_given_XY_samples)
-  D_Y = f_decoder_Y(Z_given_Y_samples)
-  # for X -> W
-  pX_given_Z, W_expected, W_stddev_explained, W_stddev_total, NLLK_X = \
-  parse_output_distribution(
-      X=T, D=D_X,
-      dist_name=configs['xdist'], name='pX_given_Z')
-  # for y -> t
-  pY_given_Z, T_expected, T_stddev_explained, T_stddev_total, NLLK_Y = \
-  parse_output_distribution(
-      X=y, D=D_Y,
-      dist_name=configs['ydist'], name='pY_given_Z')
-  # final negative log likelihood
-  NLLK = NLLK_X + get_masked_supervision(NLLK_Y, mask, nsample, configs['y_weight'])
-  # ====== elbo ====== #
-  loss = tf.reduce_mean(
-      tf.reduce_logsumexp(NLLK + KL_X + KL_Y, axis=0))
-  outputs = {'loss': loss,
-             'metr': [tf.reduce_mean(NLLK_X, name="NLLK_X"),
-                      tf.reduce_mean(NLLK_Y, name="NLLK_Y"),
-                      tf.reduce_mean(KL_X, name="KLqp_X"),
-                      tf.reduce_mean(KL_Y, name="KLqp_Y")]}
-  # ====== latent mode ====== #
-  outputs['Z'] = tf.concat((qZ_given_X.mean(), qZ_given_Y.mean()),
-                           axis=-1)
-  # ====== output mode ====== #
-  outputs['W'] = W_expected
-  outputs['W_stddev_total'] = W_stddev_total
-  outputs['W_stddev_explained'] = W_stddev_explained
   extract_pi(outputs, dist=pX_given_Z)
   extract_clean_count(outputs, dist=pX_given_Z)
   return outputs

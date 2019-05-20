@@ -224,7 +224,7 @@ class BioModel(object):
 # ===========================================================================
 # Main model
 # ===========================================================================
-class kvae(BioModel):
+class vae(BioModel):
 
   def _init(self, X, T,
             L, L_mean, L_var,
@@ -277,7 +277,7 @@ class kvae(BioModel):
 # ===========================================================================
 # Semi-supervised Multi-output
 # ===========================================================================
-class kmovae(BioModel):
+class movae(BioModel):
 
   def _init(self, X, T,
             L, L_mean, L_var,
@@ -340,7 +340,7 @@ class kmovae(BioModel):
                              tf.reduce_mean(LLK_Y, name='LLK_Y'),
                              tf.reduce_mean(KLqp, name='KLqp')])
 
-class kdovae(BioModel):
+class dovae(BioModel):
 
   def _init(self, X, T,
             L, L_mean, L_var,
@@ -424,7 +424,7 @@ class kdovae(BioModel):
 # ===========================================================================
 # Multi-latent
 # ===========================================================================
-class kmlvae(BioModel):
+class mlvae(BioModel):
 
   def _init(self, X, T,
             L, L_mean, L_var,

@@ -94,7 +94,7 @@ class InferenceDCA(Inference):
     except ImportError as e:
       raise RuntimeError("pip install dca")
     # ====== validate the arguments ====== #
-    if model not in ('vae', 'kvae', 'dca'):
+    if model not in ('vae', 'dca'):
       raise RuntimeError("InferenceSCVI only support 'vae' model")
     if xdist not in ('zinb', 'nb'):
       raise ValueError("Only support 'zinb' and 'nb' for `xdist`")
