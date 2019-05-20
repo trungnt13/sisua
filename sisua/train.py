@@ -9,10 +9,10 @@ def get_arguments():
   args = ArgController(
   ).add('-model',
         'name for model, specified in models_.py; with the exception is "scvi" and "dca"',
-        'vae'
+        'kmovae'
   ).add('-ds',
         'name of the dataset: mnist, pbmc citeseq, pbmc 10xPP, cbmc, etc.',
-        'pbmc_ly'
+        'pbmc8k_ly'
   ).add('-dispersion',
         'dispersion type: per "gene" or per "gene-cell"',
         'gene-cell',
