@@ -23,8 +23,6 @@ from sklearn.metrics import (confusion_matrix, f1_score,
                              r2_score, explained_variance_score,
                              mean_squared_error, mean_absolute_error)
 
-from sisua.data.const import (PBMC_markers_to_symbols, PBMC_colors, TSNE_DIM,
-                              PBMC_markers)
 from sisua.utils.others import anything2image
 
 # ===========================================================================
@@ -50,7 +48,7 @@ def downsample_data(*X):
   y = [None] * len(X)
   _ = list(set(x.shape[0] for x in X
                if x is not None))
-  assert len(_) == 1
+  assert len(_) == 1, "Inconsistent shape[0] for X and y"
   num_samples = _[0]
   _RAND = np.random.RandomState(seed=52181208)
   # ====== Downsample if the data is huge ====== #
@@ -89,7 +87,8 @@ def show_image(x, is_probability=False):
 
 def fast_scatter(x, y, labels, title,
                  azim=None, elev=None, ax=None,
-                 enable_legend=False, size=18):
+                 enable_legend=False,
+                 size=18, fontsize=12):
   y = np.squeeze(y)
   if y.ndim == 1:
     pass
@@ -108,7 +107,48 @@ def fast_scatter(x, y, labels, title,
       size=size, azim=azim, elev=elev,
       legend_enable=enable_legend,
       legend_ncol=3,
-      fontsize=12, ax=ax, title=title)
+      fontsize=fontsize, ax=ax, title=title)
+
+# ===========================================================================
+# IO
+# ===========================================================================
+def save_figures(figures, path, dpi=None,
+                 separate_files=True, clear_figures=True):
+  if os.path.isfile(path) or '.pdf' == path[-4:].lower():
+    separate_files = False
+    assert '.pdf' == path[-4:].lower(), \
+    "If a file is given, it must be PDF file"
+  # ====== saving PDF file ====== #
+  if not separate_files:
+    if dpi is None:
+      dpi = 48
+
+    if '.pdf' not in path:
+      path = path + '.pdf'
+    from matplotlib.backends.backend_pdf import PdfPages
+    pp = PdfPages(path)
+    for key, fig in figures.items():
+      fig.savefig(pp, dpi=dpi, format='pdf', bbox_inches="tight")
+    pp.close()
+  # ====== saving PNG file ====== #
+  else:
+    if dpi is None:
+      dpi = 160
+
+    if not os.path.exists(path):
+      os.mkdir(path)
+    assert os.path.isdir(path), "'%s' must be path to a folder" % path
+    kwargs = dict(dpi=dpi, bbox_inches="tight")
+    for key, fig in figures.items():
+      out_path = os.path.join(path, key + '.png')
+      try:
+        fig.savefig(out_path, **kwargs)
+      except Exception as e:
+        print("Error:", ctext(out_path, 'red'))
+        print(" ", e)
+  # ====== clear figures ====== #
+  if clear_figures:
+    figures.clear()
 
 # ===========================================================================
 # Evaluating the reconstruction
@@ -296,7 +336,7 @@ def plot_evaluate_reconstruction(X, W, y_raw, y_prob,
 # Streamline classifier
 # ===========================================================================
 def plot_evaluate_classifier(y_pred, y_true, labels, title,
-                             show_plot=True):
+                             show_plot=True, return_figure=False):
   """ Return a dictionary of scores
   {
       F1micro=f1_micro * 100,
@@ -317,7 +357,7 @@ def plot_evaluate_classifier(y_pred, y_true, labels, title,
     y_true = one_hot(y_true, nb_classes=num_classes)
 
   if show_plot:
-    plot_figure(nrow=4 * nrow + 1, ncol=4 * ncol)
+    fig = plot_figure(nrow=4 * nrow + 2, ncol=4 * ncol)
 
   f1_classes = []
   for i, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):
@@ -334,8 +374,9 @@ def plot_evaluate_classifier(y_pred, y_true, labels, title,
   f1_weight = f1_score(y_true=y_true, y_pred=y_pred, average='weighted')
 
   if show_plot:
-    plt.suptitle('[%s]\nF1-micro:%.2f  F1-macro:%.2f  F1-weight:%.2f' %
+    plt.suptitle('%s\nF1-micro:%.2f  F1-macro:%.2f  F1-weight:%.2f' %
                  (title, f1_micro * 100, f1_macro * 100, f1_weight * 100))
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
 
   results = dict(
       F1micro=f1_micro * 100,
@@ -344,6 +385,9 @@ def plot_evaluate_classifier(y_pred, y_true, labels, title,
   )
   for name, f1 in zip(labels, f1_classes):
     results['F1_' + name] = f1 * 100
+
+  if show_plot and return_figure:
+    return results, fig
   return results
 
 def plot_evaluate_regressor(y_pred, y_true, labels, title):

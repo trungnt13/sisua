@@ -3,21 +3,23 @@ import re
 import math
 import pickle
 from six import string_types
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 import numpy as np
 
-from odin.utils import ctext
+from odin.utils import ctext, as_tuple
 from odin.fuel import MmapData, Dataset
 from odin.stats import sparsity_percentage
 
-def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
-                              return_dataset=False, print_log=False):
+def filtering_experiment_path(ds_name, incl_keywords, excl_keywords,
+                              fn_filter=None,
+                              return_dataset=False, print_log=False,
+                              exp_path=''):
   """
 
   Parameters
   ----------
-  ds_name_or_path : string
+  ds_name : string
       direct path to experiments folder or name of the dataset
 
   incl_keywords : string
@@ -25,6 +27,9 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
 
   excl_keywords : string
       list of keywords for excluding the experiments (connect by ',')
+
+  exp_path : string
+      optional, if not given, use SISUA_EXP
 
   Return
   ------
@@ -38,62 +43,72 @@ def filtering_experiment_path(ds_name_or_path, incl_keywords, excl_keywords,
 
   """
   from sisua.data import EXP_DIR, get_dataset
-  pattern_of_corruption = re.compile(r'(uniform|binomial)\d\d')
-  # ====== get the exp path ====== #
-  ds_name_or_path = str(ds_name_or_path)
-  if os.path.isdir(ds_name_or_path):
-    exp_path = ds_name_or_path
-    (ds, gene_ds, prot_ds) = get_dataset(
-        os.path.dirname(ds_name_or_path))
-  else:
-    (ds, gene_ds, prot_ds) = get_dataset(ds_name_or_path)
+  ds_name = str(ds_name)
+  if exp_path is None:
+    exp_path = ''
+  exp_path = str(exp_path)
+  if len(exp_path) == 0:
     exp_path = EXP_DIR
-  ds_name_or_path = ds.name
   assert os.path.isdir(exp_path), exp_path
-
+  # ====== check the keywords ====== #
+  if incl_keywords is None:
+    incl_keywords = []
+  if excl_keywords is None:
+    excl_keywords = []
+  if fn_filter is None:
+    fn_filter = lambda keywords: True
+  # ====== get the exp path ====== #
+  if ds_name is None or return_dataset:
+    (ds, gene_ds, prot_ds) = get_dataset(ds_name)
+    ds_name = ds.name
+  exp_path = os.path.join(exp_path, ds_name)
+  assert os.path.exists(exp_path), "Experiment path '%s' must exists" % exp_path
   # ====== Extract all experiments ====== #
-  found_path = []
-  for name in os.listdir(EXP_DIR):
-    if pattern_of_corruption.match(os.path.basename(name)):
-      found_path.append(os.path.join(EXP_DIR, name))
-  found_path = [os.path.join(path, ds_name_or_path)
-                for path in found_path
-                if os.path.exists(os.path.join(path, ds_name_or_path))]
-  found_path = sorted(found_path)
-  assert len(found_path) > 0
-
-  all_exp = OrderedDict([
-      (path.split("/")[-2], [os.path.join(path, name) for name in os.listdir(path)])
-      for path in found_path])
-  # ====== start filtering ====== #
-  filtered_path = []
-  incl_keywords = [i for i in str(incl_keywords).split(',') if len(i) > 0]
-  excl_keywords = [i for i in str(excl_keywords).split(',') if len(i) > 0]
-  for name, paths in all_exp.items():
-    paths = [i for i in paths
-             if all(j in os.path.basename(i).split('_')
-                    for j in incl_keywords)]
-    paths = [i for i in paths
-             if all(j not in os.path.basename(i).split('_')
-                    for j in excl_keywords)]
+  all_exp = []
+  for name in os.listdir(exp_path):
+    path = os.path.join(exp_path, name)
     # check if experiments finished
-    paths = [i for i in paths
-             if os.path.exists(os.path.join(i, 'model.pkl'))]
-    paths = sorted(paths,
-                   key=lambda x: os.path.basename(x))
-    filtered_path.append((name, paths))
-  filtered_path = OrderedDict(filtered_path)
+    if os.path.exists(os.path.join(path, 'model.pkl')):
+      all_exp.append(path)
+  all_exp = sorted(all_exp)
+  # ====== start filtering ====== #
+  if isinstance(incl_keywords, string_types):
+    incl_keywords = [i for i in str(incl_keywords).split(',') if len(i) > 0]
+  elif isinstance(incl_keywords, (tuple, list)):
+    incl_keywords = as_tuple(incl_keywords, t=str)
+  else:
+    raise ValueError("No support for incl_keywords type: %s" % str(type(incl_keywords)))
+
+  if isinstance(excl_keywords, string_types):
+    excl_keywords = [i for i in str(excl_keywords).split(',') if len(i) > 0]
+  elif isinstance(excl_keywords, (tuple, list)):
+    excl_keywords = as_tuple(excl_keywords, t=str)
+  else:
+    raise ValueError("No support for excl_keywords type: %s" % str(type(excl_keywords)))
+
+  all_exp = [i for i in all_exp
+             if all(any(j in keyword
+                        for keyword in os.path.basename(i).split('_'))
+                    for j in incl_keywords)]
+  all_exp = [i for i in all_exp
+             if all(all(j not in keyword
+                        for keyword in os.path.basename(i).split('_'))
+                    for j in excl_keywords)]
+
+  # filter function
+  all_exp = [i for i in all_exp
+             if fn_filter(os.path.basename(i).split('_'))]
   # ====== logging ====== #
   if bool(print_log):
     print(ctext("Found following experiments:", 'lightyellow'))
-    for name, paths in filtered_path.items():
+    for name, paths in all_exp.items():
       print("*", ctext(name, 'yellow'))
       for i in paths:
         print('  ', os.path.basename(i))
 
   if return_dataset:
-    return filtered_path, ds_name_or_path, gene_ds, prot_ds
-  return filtered_path
+    return all_exp, ds, gene_ds, prot_ds
+  return all_exp
 
 def anything2image(x):
   if x.ndim == 1:
@@ -155,75 +170,3 @@ def thresholding_by_sparsity_matching(T, W, *applying_data):
         data = apply_threshold(data, threshold=best_threshold)
       new_data.append(data)
   return best_threshold, tuple(new_data)
-
-# ===========================================================================
-# For data preprocessing
-# ===========================================================================
-def remove_allzeros_columns(matrix, colname, print_log=True):
-  assert matrix.ndim == 2
-  orig_shape = matrix.shape
-  nonzero_col = np.sum(matrix, axis=0) != 0
-  matrix = matrix[:, nonzero_col]
-  colname = colname[nonzero_col]
-  if print_log:
-    print("Filtering %d all-zero columns from data: %s -> %s ..." %
-      (len(nonzero_col) - np.sum(nonzero_col),
-       str(orig_shape),
-       str(matrix.shape)))
-  return matrix, colname
-
-def _check_data(X, X_col, y, y_col, rowname):
-  assert X.min() >= 0, "Only support non-negative value for X"
-  assert y.min() >= 0, "Only support non-negative value for y"
-
-  assert X.ndim == 2 and y.ndim == 2, "Only support matrix for `X` and `y`"
-  assert X.shape[0] == y.shape[0], \
-  "Number of sample mismatch `X=%s` and `y=%s`" % (X.shape, y.shape)
-
-  assert X_col.ndim == 1 and len(X_col) == X.shape[1]
-  assert y_col.ndim == 1 and len(y_col) == y.shape[1]
-
-  assert rowname.ndim == 1 and len(rowname) == X.shape[0] == y.shape[0]
-
-def validating_dataset(path):
-  if isinstance(path, Dataset):
-    ds = path
-  elif isinstance(path, string_types):
-    ds = Dataset(path, read_only=True)
-  assert 'X' in ds, \
-  '`X` (n_samples, n_genes) must be stored at path: %s' % ds.path
-  assert 'X_col' in ds, \
-  '`X_col` (n_genes,) must be stored at path: %s' % ds.path
-  assert 'X_row' in ds, \
-  '`X_row` (n_samples,) must be stored at path: %s' % ds.path
-
-  assert 'y' in ds, \
-  '`y` (n_samples, n_protein) must be stored at path: %s' % ds.path
-  assert 'y_col' in ds, \
-  '`y_col` (n_protein,) must be stored at path: %s' % ds.path
-  X, X_col, y, y_col, rowname = \
-  ds['X'], ds['X_col'], ds['y'], ds['y_col'], ds['X_row']
-  _check_data(X, X_col, y, y_col, rowname)
-
-def save_data_to_dataset(path, X, X_col, y, y_col,
-                         rowname, print_log=True):
-  _check_data(X, X_col, y, y_col, rowname)
-  # save data
-  if print_log:
-    print("Saving data to %s ..." % ctext(path, 'cyan'))
-  out = MmapData(os.path.join(path, 'X'),
-                 dtype='float32', shape=(0, X.shape[1]),
-                 read_only=False)
-  out.append(X)
-  out.flush()
-  out.close()
-  with open(os.path.join(path, 'y'), 'wb') as f:
-    pickle.dump(y, f)
-  # save the meta info
-  with open(os.path.join(path, 'X_col'), 'wb') as f:
-    pickle.dump(X_col, f)
-  with open(os.path.join(path, 'y_col'), 'wb') as f:
-    pickle.dump(y_col, f)
-  # row name for both X and y
-  with open(os.path.join(path, 'X_row'), 'wb') as f:
-    pickle.dump(rowname, f)

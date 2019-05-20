@@ -16,314 +16,79 @@ from odin.stats import (train_valid_test_split, describe,
 
 from sisua.data.path import EXP_DIR
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
-from sisua.utils.others import validating_dataset
+from sisua.data.utils import validating_dataset
+from sisua.data.single_cell_dataset import (
+    apply_artificial_corruption, get_library_size, SingleCellDataset)
 
-# ===========================================================================
-# Helper
-# ===========================================================================
-def apply_artificial_corruption(x, dropout, distribution):
-  distribution = str(distribution).lower()
-  dropout = float(dropout)
-  assert 0 <= dropout < 1, \
-  "dropout value must be >= 0 and < 1, given: %f" % dropout
-  rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
+def get_dataset_meta():
+  from sisua.data.data_loader.pbmc_CITEseq import read_CITEseq_PBMC
+  from sisua.data.data_loader.pbmc10x_pp import read_10xPBMC_PP
+  from sisua.data.data_loader.cbmc_CITEseq import read_CITEseq_CBMC
+  from sisua.data.data_loader.mnist import read_MNIST
+  from sisua.data.data_loader.facs_gene_protein import read_FACS, read_full_FACS
+  from sisua.data.data_loader.facs_corrupted import read_FACS_corrupted
+  from sisua.data.data_loader.fashion_mnist import (read_fashion_MNIST, read_fashion_MNIST_drop,
+                                        read_MNIST_drop)
+  from sisua.data.data_loader.scvi_datasets import (read_Cortex, read_Hemato, read_PBMC)
+  from sisua.data.data_loader.pbmc8k import read_PBMC8k
+  from sisua.data.data_loader.pbmcecc import read_PBMCeec
+  from sisua.data.experimental_data.pbmc_8k_ecc_ly import read_PBMC_ecc_to_8k
 
-  if dropout == 0:
-    return x
-  # ====== applying corruption ====== #
-  # Original code from scVI, to provide a comparable result,
-  # please acknowledge the author of scVI if you are using this
-  # code for corrupting the data
-  # https://github.com/YosefLab/scVI/blob/2357dde15351450e452efa426c516c60a2d5ee96/scvi/dataset/dataset.py#L83
-  # the test data won't be corrupted
-  corrupted_x = copy.deepcopy(x)
+  data_meta = {
+      # ====== PBMC 10x ====== #
+      'pbmcscvae': read_10xPBMC_PP,
+      'pbmcscvi': read_PBMC,
 
-  # multiply the entry n with a Ber(0.9) random variable.
-  if distribution == "uniform":
-    i, j = np.nonzero(x)
-    ix = rand.choice(range(len(i)),
-                     size=int(np.floor(dropout * len(i))),
-                     replace=False)
-    i, j = i[ix], j[ix]
-    corrupted = np.multiply(
-        x[i, j],
-        rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=0.9))
-  # multiply the entry n with a Bin(n, 0.9) random variable.
-  elif distribution == "binomial":
-    i, j = (k.ravel() for k in np.indices(x.shape))
-    ix = rand.choice(range(len(i)),
-                     size=int(np.floor(dropout * len(i))),
-                     replace=False)
-    i, j = i[ix], j[ix]
-    # only 20% expression captured
-    corrupted = rand.binomial(n=(x[i, j]).astype(np.int32), p=0.2)
-  else:
-    raise ValueError(
-        "Only support 2 corruption distribution: 'uniform' and 'binomial', "
-        "but given: '%s'" % distribution)
+      # ====== pbmc 8k ====== #
+      'pbmc8k_lyfull': lambda override: read_PBMC8k(subset='ly', override=override, filtered_genes=False),
+      'pbmc8k_myfull': lambda override: read_PBMC8k(subset='my', override=override, filtered_genes=False),
+      'pbmc8k_ly': lambda override: read_PBMC8k(subset='ly', override=override, filtered_genes=True),
+      'pbmc8k_my': lambda override: read_PBMC8k(subset='my', override=override, filtered_genes=True),
+      'pbmc8k': lambda override: read_PBMC8k(subset='full', override=override, filtered_genes=True),
+      'pbmc8k_full': lambda override: read_PBMC8k(subset='full', override=override, filtered_genes=False),
 
-  corrupted_x[i, j] = corrupted
-  return corrupted_x
+      # ====== PBMC ECC ====== #
+      'pbmcecc_lyfull': lambda override: read_PBMCeec(subset='ly', override=override, filtered_genes=False),
+      'pbmcecc_myfull': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=False),
+      'pbmcecc_ly': lambda override: read_PBMCeec(subset='ly', override=override, filtered_genes=True),
+      'pbmcecc_my': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=True),
+      'pbmcecc': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=True),
+      'pbmcecc_full': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=False),
 
-# ===========================================================================
-# The dataset object
-# ===========================================================================
-class SingleCellDataset(object):
-  """ SingleCellDataset """
-  TRAIN_PERCENTAGE = 0.9
+      # ====== cross PBMC ====== #
+      'cross8k_lyfull': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=False, override=override, filtered_genes=False),
+      'cross8k_ly': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=False, override=override, filtered_genes=True),
 
-  def __init__(self, data, rowname=None, colname=None):
-    super(SingleCellDataset, self).__init__()
-    assert data.ndim == 2
-    if rowname is None:
-      rowname = ['Sample#%d' % i for i in range(data.shape[0])]
-    if colname is None:
-      colname = ['Feature#%d' % i for i in range(data.shape[1])]
-    # ====== meta data ====== #
-    self._col = np.array(colname)
-    # ====== getting the data ====== #
-    row = np.array(rowname)
-    md5 = [None, None]
-    # prepare the data
-    if isinstance(data, MmapData):
-      data = data[:]
-    data = data.astype('float32')
-    # split train, test
-    rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
-    ids = rand.permutation(data.shape[0])
-    train_ids, test_ids = train_valid_test_split(
-        x=ids,
-        train=SingleCellDataset.TRAIN_PERCENTAGE,
-        inc_test=False, seed=rand.randint(10e8))
-    train_ids = np.array(train_ids)
-    test_ids = np.array(test_ids)
+      'crossecc_lyfull': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=True, override=override, filtered_genes=False),
+      'crossecc_ly': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=True, override=override, filtered_genes=True),
 
-    self._raw_data = (data[train_ids], data[test_ids])
-    # store the indices
-    self._indices = (train_ids, test_ids)
-    self._n_train = len(train_ids)
-    self._n_test = len(test_ids)
+      # ====== CITEseq ====== #
+      'pbmc_citeseq': read_CITEseq_PBMC,
+      'cbmc_citeseq': read_CITEseq_CBMC,
+      'pbmc5000': lambda override: read_CITEseq_PBMC(override, version_5000genes=True),
 
-    # store the row
-    train_row = row[train_ids]
-    test_row = row[test_ids]
-    self._row = (train_row, test_row)
+      # ====== MNIST ====== #
+      'mnist': read_MNIST,
+      'mnist_org': read_MNIST,
+      'mnist_imp': read_MNIST_drop,
 
-    # check md5 checksum
-    md5_row = ''.join([md5_checksum(i) for i in
-                       [train_row, test_row]])
-    md5_indices = ''.join([md5_checksum(i) for i in
-                           [train_ids, test_ids]])
-    if md5[0] is None:
-      md5[0] = md5_row
-    else:
-      assert md5[0] == md5_row
-    if md5[1] is None:
-      md5[1] = md5_indices
-    else:
-      assert md5[1] == md5_indices
-    self._md5 = tuple(md5)
+      'fmnist': read_fashion_MNIST,
+      'fmnist_org': read_fashion_MNIST,
+      'fmnist_imp': read_fashion_MNIST_drop,
 
-    # ====== cell statistics ====== #
-    train_raw, test_raw = self._raw_data
-    self._cell_size = (np.sum(train_raw, axis=-1, keepdims=True),
-                       np.sum(test_raw, axis=-1, keepdims=True))
-    self._cell_max = max(np.max(c) for c in self._cell_size)
-    self._cell_min = min(np.min(c) for c in self._cell_size)
-    c = np.concatenate(self._cell_size, axis=0)
-    self._cell_mean = np.mean(c)
-    self._cell_std = np.std(c)
-    self._cell_median = np.median(c)
-    # ====== feature statistics ====== #
-    x = np.sum(train_raw, axis=0, keepdims=True) + \
-        np.sum(test_raw, axis=0, keepdims=True)
-    self._feat_size = (np.repeat(x, repeats=self.n_train, axis=0),
-                       np.repeat(x, repeats=self.n_test, axis=0))
-    self._feat_mean = np.mean(x)
-    self._feat_std = np.std(x)
-    self._feat_max = np.max(x)
-    self._feat_min = np.min(x)
+      # ====== FACS ====== #
+      'facs_7': lambda override: read_full_FACS(override=override),
+      'facs_5': lambda override: read_FACS(n_protein=5, override=override),
+      'facs_2': lambda override: read_FACS(n_protein=2, override=override),
+      'facs_corrupt': read_FACS_corrupted,
 
-  @property
-  def is_binary(self):
-    X = self.get_data(data_type='all', dropout=0)
-    return sorted(np.unique(X.astype('float32'))) == [0., 1.]
+      # ====== other fun ====== #
+      'cortex': read_Cortex,
+      'retina': read_Cortex,
+      'hemato': read_Hemato,
+  }
+  return data_meta
 
-  @property
-  def shape(self):
-    return (None, self._raw_data['raw'][0].shape[1])
-
-  @property
-  def md5(self):
-    """ Return unique tuple of 3 MD5 checksums:
-     * the row
-     * the indices used to split dataset
-    X and y should have the same row and indices checksum
-    """
-    return self._md5
-
-  @property
-  def n_train(self):
-    return self._n_train
-
-  @property
-  def n_test(self):
-    return self._n_test
-
-  @property
-  def col_name(self):
-    return self._col
-
-  @property
-  def row_name(self):
-    return self._row
-
-  @property
-  def indices(self):
-    """ The array indices used for train, test splitting
-
-    Return
-    ------
-    tuple : (train_indices, test_indices)
-    """
-    return self._indices
-
-  # ******************** cell statistics ******************** #
-  @property
-  def cell_size(self):
-    """ Tuple of three matrices:
-    * train: (n_train, 1)
-    * test : (n_test , 1)
-    """
-    return self._cell_size
-
-  @property
-  def cell_mean(self):
-    return self._cell_mean
-
-  @property
-  def cell_std(self):
-    return self._cell_std
-
-  @property
-  def cell_max(self):
-    return self._cell_max
-
-  @property
-  def cell_median(self):
-    return self._cell_median
-
-  @property
-  def cell_min(self):
-    return self._cell_min
-
-  # ******************** feature statistics ******************** #
-  @property
-  def feat_size(self):
-    """ Tuple of three matrices (the gene count is
-    repeated along 0 axis):
-    * train: (n_train, feat_dim)
-    * test : (n_test , feat_dim)
-    """
-    return self._feat_size
-
-  @property
-  def feat_dim(self):
-    return self.shape[1]
-
-  @property
-  def feat_mean(self):
-    return self._feat_mean
-
-  @property
-  def feat_std(self):
-    return self._feat_std
-
-  @property
-  def feat_max(self):
-    return self._feat_max
-
-  @property
-  def feat_min(self):
-    return self._feat_min
-
-  # ******************** helper ******************** #
-  @cache_memory
-  def _get_data_all(self, dropout=0, distribution="uniform"):
-    # no dropout
-    if dropout is None or dropout <= 0 or dropout >= 1:
-      return self._raw_data
-    train, test = self._raw_data
-    return (
-        apply_artificial_corruption(train, dropout=dropout, distribution=distribution),
-        apply_artificial_corruption(test, dropout=dropout, distribution=distribution))
-
-  def __getitem__(self, key):
-    return self.get_data(data_type=key, dropout=0)
-
-  def get_data(self, data_type='all', dropout=0, distribution="uniform"):
-    data_type = str(data_type).lower()
-    assert data_type in ('all', 'train', 'test')
-    new_data = self._get_data_all(dropout=dropout, distribution=distribution)
-    # return
-    if data_type == 'all':
-      return np.concatenate(new_data, axis=0)
-    if data_type == 'train':
-      return new_data[0]
-    if data_type == 'test':
-      return new_data[1]
-
-  # ====== shortcut ====== #
-  @property
-  def X(self):
-    return self.get_data(data_type='all', dropout=0)
-
-  @property
-  def X_train(self):
-    return self.get_data(data_type='train', dropout=0)
-
-  @property
-  def X_test(self):
-    return self.get_data(data_type='test', dropout=0)
-
-  @property
-  def X_row(self):
-    return np.concatenate(self.row_name)
-
-  @property
-  def X_col(self):
-    return np.array(self.col_name)
-
-  # ******************** logging ******************** #
-  def __str__(self):
-    s = "======== Data ========\n"
-
-    s += ctext('Raw:', 'lightcyan') + ':' + '\n'
-    for name, dat in zip(["train", "test"], self._raw_data):
-      s += "  %-5s :" % name + ctext('%-15s' % str(dat.shape), 'cyan') + describe(dat, shorten=True) + '\n'
-      s += "    Sparsity: %s\n" % ctext('%.2f' % sparsity_percentage(dat.astype('int32')), 'cyan')
-      s += "    #ZeroCol: %s\n" % ctext(np.sum(np.sum(dat, axis=0) == 0), 'cyan')
-      s += "    #ZeroRow: %s\n" % ctext(np.sum(np.sum(dat, axis=1) == 0), 'cyan')
-
-    s += ctext('SizeFactor:', 'lightcyan') + ':' + '\n'
-    s += '  mean:%f std:%f max:%f min:%f\n' % \
-    (self.cell_mean, self.cell_std, self.cell_max, self.cell_min)
-    train, test = self.cell_size
-    s += "  train :" + ctext('%-15s' % str(train.shape), 'cyan') + describe(train, shorten=True) + '\n'
-    s += "  test  :" + ctext('%-15s' % str(test.shape), 'cyan') + describe(test, shorten=True) + '\n'
-
-    s += ctext('Feat:', 'lightcyan') + ':' + '\n'
-    s += '  mean:%f std:%f max:%f min:%f\n' % \
-    (self.feat_mean, self.feat_std, self.feat_max, self.feat_min)
-    train, test = self.feat_size
-    s += "  train :" + ctext('%-15s' % str(train.shape), 'cyan') + describe(train, shorten=True) + '\n'
-    s += "  test  :" + ctext('%-15s' % str(test.shape), 'cyan') + describe(test, shorten=True)
-
-    return s
-
-# ===========================================================================
-# Main methods
-# ===========================================================================
 @cache_memory
 def get_dataset(dataset_name, override=False):
   """ Supporting dataset:
@@ -332,6 +97,15 @@ def get_dataset(dataset_name, override=False):
   'pbmc_10x' :
   'pbmc' :
   'pbmc_5000' :
+
+  'pbmc8k' :
+  'pbmc8k_full' :
+
+  'pbmc_lyfull' :
+  'pbmc_myfull' :
+  'pbmc_ly' :
+  'pbmc_my' :
+
   'cbmc_citeseq' :
   'mnist' :
   'mnist_org' :
@@ -353,41 +127,7 @@ def get_dataset(dataset_name, override=False):
   cell_gene: instance of `sisua.data.SingleCellDataset` for cell-gene matrix
   cell_protein: instance of `sisua.data.SingleCellDataset` for cell-protein matrix
   """
-  from sisua.data.pbmc_CITEseq import read_CITEseq_PBMC
-  from sisua.data.pbmc10x_pp import read_10xPBMC_PP
-  from sisua.data.cbmc_CITEseq import read_CITEseq_CBMC
-  from sisua.data.mnist import read_MNIST
-  from sisua.data.facs_gene_protein import read_FACS, read_full_FACS
-  from sisua.data.facs_corrupted import read_FACS_corrupted
-  from sisua.data.fashion_mnist import (read_fashion_MNIST, read_fashion_MNIST_drop,
-                                        read_MNIST_drop)
-  from sisua.data.scvi_datasets import (read_Cortex, read_Hemato, read_PBMC)
-
-  data_meta = {
-      'pbmc_citeseq': read_CITEseq_PBMC,
-      'pbmc_10x': read_10xPBMC_PP,
-      'pbmc': read_PBMC,
-      'pbmc_5000': lambda override: read_CITEseq_PBMC(override,
-                                                     version_5000genes=True),
-      'cbmc_citeseq': read_CITEseq_CBMC,
-
-      'mnist': read_MNIST,
-      'mnist_org': read_MNIST,
-      'mnist_imp': read_MNIST_drop,
-
-      'fmnist': read_fashion_MNIST,
-      'fmnist_org': read_fashion_MNIST,
-      'fmnist_imp': read_fashion_MNIST_drop,
-
-      'facs_7': lambda override: read_full_FACS(override=override),
-      'facs_5': lambda override: read_FACS(n_protein=5, override=override),
-      'facs_2': lambda override: read_FACS(n_protein=2, override=override),
-      'facs_corrupt': read_FACS_corrupted,
-
-      'cortex': read_Cortex,
-      'retina': read_Cortex,
-      'hemato': read_Hemato,
-  }
+  data_meta = get_dataset_meta()
   # ====== special case: get all dataset ====== #
   dataset_name = str(dataset_name).lower().strip()
   if dataset_name not in data_meta:
@@ -410,6 +150,31 @@ def get_dataset(dataset_name, override=False):
   setattr(cell_prot, 'name', dataset_name)
   return ds, cell_gene, cell_prot
 
+def get_scvi_dataset(dataset_name):
+  """ Convert any SISUA dataset to relevant format for scVI models """
+  from scvi.dataset import GeneExpressionDataset
+  ds, gene, prot = get_dataset(dataset_name, override=False)
+  X = np.concatenate((gene.X_train, gene.X_test), axis=0)
+  labels = np.concatenate((prot.X_train, prot.X_test), axis=0)
+  means, vars = get_library_size(X)
+  is_multi_classes_labels = np.all(np.sum(labels, axis=1) != 1.)
+  scvi = GeneExpressionDataset(
+      X=X,
+      local_means=means,
+      local_vars=vars,
+      batch_indices=np.zeros(shape=(X.shape[0], 1)),
+      labels=None,
+      gene_names=gene.X_col,
+      cell_types=None)
+  if not is_multi_classes_labels:
+    scvi.labels = labels
+    scvi.cell_types = prot.X_col
+  else:
+    scvi.labels = labels
+    scvi.adt_expression = labels
+    scvi.protein_markers = prot.X_col
+  return scvi
+
 def get_dataframe(dataset_name, override=False):
   """ Return 2 tuples of the DataFrame instance of:
 
@@ -431,3 +196,58 @@ def get_dataframe(dataset_name, override=False):
                            index=prot_ds.row_name[1],
                            columns=prot_ds.col_name)
   return (train_gene, test_gene), (train_prot, test_prot)
+
+# ===========================================================================
+# Some shortcut
+# ===========================================================================
+def Cortex():
+  return get_dataset('cortex')[0]
+
+def PBMCscVI():
+  """ The PBMC dataset used in scVI paper """
+  return get_dataset('pbmcscvi')[0]
+
+def PBMCscVAE():
+  """ The PBMC dataset used in scVAE paper """
+  return get_dataset('pbmcscvae')[0]
+
+# ====== PBMC 8k ====== #
+def PBMC8k_lymphoid(filtered_genes=True):
+  """ lymphoid subset of PBMC 8k"""
+  return get_dataset(
+      'pbmc8k_ly' if filtered_genes else 'pbmc8k_lyfull')[0]
+
+def PBMC8k_myeloid(filtered_genes=True):
+  """ myeloid subset of PBMC 8k"""
+  return get_dataset(
+      'pbmc8k_my' if filtered_genes else 'pbmc8k_myfull')[0]
+
+def PBMC8k(filtered_genes=True):
+  """ PBMC 8k"""
+  return get_dataset(
+      'pbmc8k' if filtered_genes else 'pbmc8k_full')[0]
+
+# ====== PBMC ecc ====== #
+def PBMCecc_lymphoid(filtered_genes=True):
+  """ lymphoid subset of PBMC ecc"""
+  return get_dataset(
+      'pbmcecc_ly' if filtered_genes else 'pbmcecc_lyfull')[0]
+
+def PBMCecc_myeloid(filtered_genes=True):
+  """ myeloid subset of PBMC ecc"""
+  return get_dataset(
+      'pbmcecc_my' if filtered_genes else 'pbmcecc_myfull')[0]
+
+def PBMCecc(filtered_genes=True):
+  """ PBMC ecc"""
+  return get_dataset(
+      'pbmcecc' if filtered_genes else 'pbmcecc_full')[0]
+
+# ====== cross dataset ====== #
+def CROSS8k_lymphoid(filtered_genes=True):
+  return get_dataset(
+      'cross8k_ly' if filtered_genes else 'cross8k_lyfull')[0]
+
+def CROSSecc_lymphoid(filtered_genes=True):
+  return get_dataset(
+      'crossecc_ly' if filtered_genes else 'crossecc_lyfull')[0]

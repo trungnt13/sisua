@@ -31,6 +31,7 @@ with warnings.catch_warnings():
   from sklearn.base import DensityMixin, BaseEstimator
 
 from sisua.data import get_dataset, EXP_DIR
+from sisua.data.utils import standardize_protein_name
 
 # ===========================================================================
 # LabelThresholding class
@@ -271,7 +272,8 @@ def gmm_thresholding(prot, method, threshold, prot_names,
                      num=800)
     _Y = []
     for m, p in zip(means_, precision_):
-      _ = mlab.normpdf(_X, m, np.sqrt(1 / p))
+      with catch_warnings_ignore(Warning):
+        _ = mlab.normpdf(_X, m, np.sqrt(1 / p))
       _Y.append(_)
     _min = np.min(_Y)
     _max = np.max(_Y)
@@ -471,7 +473,7 @@ if __name__ == '__main__':
   print("Start label thresholding for:", ctext(ds_name, 'lightyellow'))
   path = ds.path
   # ====== protein.count ====== #
-  y_prot_names = ds['y_col']
+  y_prot_names = np.array([standardize_protein_name(i) for i in ds['y_col']])
   y_prot = ds['y']
   print("Protein labels:", ctext(y_prot_names, 'cyan'))
   print("Protein matrix:", ctext(y_prot.shape, 'cyan'))

@@ -25,6 +25,7 @@ requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@master",
     "seaborn>=0.9",
     "pandas",
+    "openpyxl"
 ]
 
 setup(

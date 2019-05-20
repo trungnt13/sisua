@@ -22,7 +22,9 @@ from odin.visual import (plot_figure, plot_scatter_heatmap,
                          to_axis, plot_colorbar)
 
 from sisua.label_threshold import GMMThresholding
-from sisua.data.const import UNIVERSAL_RANDOM_SEED, MARKER_GENES
+from sisua.data.utils import standardize_protein_name
+from sisua.data.const import (
+    UNIVERSAL_RANDOM_SEED, MARKER_GENES, PROTEIN_PAIR_COMPARISON)
 from sisua.utils.visualization import (plot_evaluate_classifier,
   downsample_data, fast_tsne, fast_scatter, fast_pca)
 
@@ -75,6 +77,7 @@ def clustering_scores(latent, labels, n_labels,
 
   Parameters
   ----------
+  labels : categorical labels (i.e. single classes or one-hot encoded)
   prediction_algorithm : {'knn', 'gmm', 'both'}
   """
   # simple normalization to 0-1, then pick the argmax
@@ -101,18 +104,20 @@ def clustering_scores(latent, labels, n_labels,
     raise ValueError(
         "Not support for prediction_algorithm: '%s'" % prediction_algorithm)
   #
-  asw_score = silhouette_score(latent, labels)
-  ari_score = adjusted_rand_score(labels, labels_pred)
-  nmi_score = normalized_mutual_info_score(labels, labels_pred)
-  uca_score = unsupervised_clustering_accuracy(labels, labels_pred)[0]
+  with catch_warnings_ignore(FutureWarning):
+    asw_score = silhouette_score(latent, labels)
+    ari_score = adjusted_rand_score(labels, labels_pred)
+    nmi_score = normalized_mutual_info_score(labels, labels_pred)
+    uca_score = unsupervised_clustering_accuracy(labels, labels_pred)[0]
   return dict(ASW=asw_score, ARI=ari_score, NMI=nmi_score, UCA=uca_score)
 
 # ===========================================================================
 # Visualization
 # ===========================================================================
 def streamline_classifier(Z_train, y_train, Z_test, y_test, labels_name,
-                          train_results=False,
-                          title='', show_plot=True):
+                          train_results=False, mode='ovr',
+                          title='', show_plot=True,
+                          return_figure=False):
   """ Return a dictionary of scores
   {
       F1micro=f1_micro * 100,
@@ -121,8 +126,16 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test, labels_name,
       F1_[classname]=...
   }
   """
+  mode = mode.strip().lower()
+  assert mode in ('ovr', 'ovo'), \
+  "Only support ovr - one vs rest, ovo - one vs one; mode for streamline classifier"
+
+  labels_name = [standardize_protein_name(i)
+                 for i in labels_name]
+
   results_train = {}
   results_test = {}
+  labels_name = np.array(labels_name)
 
   with catch_warnings_ignore(FutureWarning):
     with catch_warnings_ignore(RuntimeWarning):
@@ -133,48 +146,24 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test, labels_name,
       if y_test.ndim == 1 or y_test.shape[1] == 1:
         y_test = one_hot(y_test.ravel(), nb_classes=n_classes)
       is_binary_classes = sorted(np.unique(y_train.astype('float32'))) == [0., 1.]
-      # ====== special case for cbmc and pbmc ====== #
-      if 'CD4' in labels_name and 'CD8' in labels_name:
-        ids = [i for i, name in enumerate(labels_name)
-               if name == 'CD4' or name == 'CD8']
-        assert len(ids) == 2
-        labels_name = labels_name[ids]
-        # label thresholding
-        y_train = y_train[:, ids]
-        y_test = y_test[:, ids]
-        y_min = np.min((np.min(y_train, axis=0, keepdims=True),
-                        np.min(y_test, axis=0, keepdims=True)),
-                       axis=0)
-        y_max = np.max((np.max(y_train, axis=0, keepdims=True),
-                        np.max(y_test, axis=0, keepdims=True)),
-                       axis=0)
-
-        y_train = (y_train - y_min) / (y_max - y_min)
-        y_test = (y_test - y_min) / (y_max - y_min)
-
-        ids_train = np.abs(y_train[:, 0] - y_train[:, 1]) >= 0.3
-        ids_test = np.abs(y_test[:, 0] - y_test[:, 1]) >= 0.3
-
-        Z_train, y_train = Z_train[ids_train], y_train[ids_train]
-        Z_test, y_test = Z_test[ids_test], y_test[ids_test]
-        y_train = np.argmax(y_train, axis=-1)
-        y_test = np.argmax(y_test, axis=-1)
-
-        # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
-        classifier = SVC(kernel='linear',
-                         random_state=UNIVERSAL_RANDOM_SEED)
-        classifier.fit(X=Z_train, y=y_train)
-      # ====== binary classes ====== #
-      else:
-        if not is_binary_classes:
-          gmm = GMMThresholding()
-          gmm.fit(np.concatenate((y_train, y_test), axis=0))
-          y_train = gmm.predict(y_train)
-          y_test = gmm.predict(y_test)
-        # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
+      # ====== not binary classes ====== #
+      if not is_binary_classes:
+        gmm = GMMThresholding()
+        gmm.fit(np.concatenate((y_train, y_test), axis=0))
+        y_train = gmm.predict(y_train)
+        y_test = gmm.predict(y_test)
+      # kernel : 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'
+      if mode == 'ovr':
         classifier = OneVsRestClassifier(
             SVC(kernel='linear', random_state=UNIVERSAL_RANDOM_SEED),
             n_jobs=n_classes)
+        classifier.fit(X=Z_train, y=y_train)
+      else:
+        raise NotImplementedError
+        classifier = SVC(
+            kernel='linear',
+            decision_function_shape='ovo',
+            random_state=UNIVERSAL_RANDOM_SEED)
         classifier.fit(X=Z_train, y=y_train)
       # ====== return ====== #
       from sklearn.exceptions import UndefinedMetricWarning
@@ -182,17 +171,30 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test, labels_name,
         if train_results:
           results_train = plot_evaluate_classifier(
               y_pred=classifier.predict(Z_train), y_true=y_train,
-              labels=labels_name,
-              title='[train]' + title, show_plot=bool(show_plot))
+              labels=labels_name, title='[train]' + title,
+              show_plot=show_plot, return_figure=True)
         results_test = plot_evaluate_classifier(
             y_pred=classifier.predict(Z_test), y_true=y_test,
-            labels=labels_name,
-            title=title, show_plot=bool(show_plot))
+            labels=labels_name, title='[test]' + title,
+            show_plot=show_plot, return_figure=True)
 
+      if show_plot:
+        if train_results:
+          results_train, fig_train = results_train[0], results_train[1]
+        results_test, fig_test = results_test[0], results_test[1]
+
+      results_test = OrderedDict(
+          sorted(results_test.items(), key=lambda x: x[0]))
       if train_results:
-        return OrderedDict(sorted(results_train.items(), key=lambda x: x[0])),\
-        OrderedDict(sorted(results_test.items(), key=lambda x: x[0]))
-      return OrderedDict(sorted(results_test.items(), key=lambda x: x[0]))
+        results_train = OrderedDict(
+            sorted(results_train.items(), key=lambda x: x[0]))
+        results = (results_train, results_test)
+      else:
+        results = results_test
+
+      if show_plot and return_figure:
+        return results, (fig_train, fig_test) if train_results else fig_test
+      return results
 
 def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
                   colormap='hot', ax=None,
@@ -305,7 +307,13 @@ def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
 
 def plot_latents_multiclasses(Z, y, labels_name, title=None,
                               elev=None, azim=None, use_PCA=False,
-                              ax=None):
+                              show_colorbar=False):
+  """ Label `y` is multi-classes
+  i.e. each samples could belong to multiple classes at once
+  """
+  from sisua.data.utils import standardize_protein_name
+  labels_name = [standardize_protein_name(i) for i in labels_name]
+
   if title is None:
     title = ''
   title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
@@ -314,7 +322,6 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
   # ====== checking inputs ====== #
   assert Z.ndim == 2, Z.shape
   assert Z.shape[0] == y.shape[0]
-  num_classes = len(labels_name)
   # ====== preprocessing ====== #
   if Z.shape[1] > 3:
     if not use_PCA:
@@ -335,41 +342,54 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
   y_min = np.min(y, axis=0, keepdims=True)
   y_max = np.max(y, axis=0, keepdims=True)
   y = (y - y_min) / (y_max - y_min)
+
   # select most 2 different protein
   labels_index = {name: i for i, name in enumerate(labels_name)}
-  if 'CD4' in labels_name and 'CD8' in labels_name:
-    labels_name = np.array(('CD4', 'CD8'))
-  else:
-    y_dist = K.length_norm(y, axis=0)
-    best_distance = 0
-    best_pair = None
-    for i in range(num_classes):
-      for j in range(i + 1, num_classes):
-        d = np.sqrt(np.sum((y_dist[i] - y_dist[j])**2))
-        if d > best_distance:
-          best_distance = d
-          best_pair = (labels_name[i], labels_name[j])
-    labels_name = np.array(best_pair)
-  # polarize y level
-  y = np.hstack((y[:, labels_index[labels_name[0]]][:, np.newaxis],
-                 y[:, labels_index[labels_name[1]]][:, np.newaxis]))
-  y = logit(y[:, 1]) - logit(y[:, 0])
-  y = 2 * (y - np.min(y)) / (np.max(y) - np.min(y)) - 1
-  # ====== let plotting ====== #
-  plot_scatter_heatmap(x=Z[:, 0], y=Z[:, 1], val=y,
-      legend_enable=False, colormap='bwr', size=8, alpha=1.,
-      fontsize=8, grid=False, ax=ax, title=title)
-  return labels_name
+  pairs = []
+  for i, j in PROTEIN_PAIR_COMPARISON:
+    if i in labels_index and j in labels_index:
+      pairs.append((i, j))
+  n_pairs = len(pairs)
 
-def plot_latents(Z, y, labels_name, title=None,
+  if n_pairs == 0:
+    return labels_name
+
+  # we could handle 5 pairs in 1 row, no problem
+  ncol = min(5, n_pairs)
+  nrow = int(np.ceil(n_pairs / ncol))
+  plt.figure(figsize=(ncol * 4, nrow * 4))
+
+  for idx, labels_name in enumerate(pairs):
+    ax = plt.subplot(nrow, ncol, idx + 1)
+    # polarize y level
+    val = np.hstack((y[:, labels_index[labels_name[0]]][:, np.newaxis],
+                     y[:, labels_index[labels_name[1]]][:, np.newaxis]))
+    # red mean closer to 1, i.e. protein labels_name[1]
+    # blue mean closer to -1, i.e. protein labels_name[0]
+    val = logit(val[:, 1]) - logit(val[:, 0])
+    # normalize again to [-1, 1]
+    val = 2 * (val - np.min(val)) / (np.max(val) - np.min(val)) - 1
+    # ====== let plotting ====== #
+    plot_scatter_heatmap(x=Z[:, 0], y=Z[:, 1], val=val,
+        legend_enable=False, colormap='bwr', size=8, alpha=1.,
+        fontsize=8, grid=False, ax=ax,
+        colorbar=True, colorbar_horizontal=True,
+        colorbar_ticks=[labels_name[0], 'Others', labels_name[1]],
+        title='%s' % ('/'.join(labels_name)))
+  plt.suptitle(title)
+  return ax
+
+def plot_latents_binary(Z, y, labels_name, title=None,
                  elev=None, azim=None, use_PCA=False,
                  ax=None, show_legend=True,
+                 size=12, fontsize=12,
                  enable_argmax=True,
-                 enable_separated=True):
+                 enable_separated=False):
   from matplotlib import pyplot as plt
   if title is None:
     title = ''
   title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
+  ax = to_axis(ax)
   # ====== Downsample if the data is huge ====== #
   Z, y = downsample_data(Z, y)
   # ====== checking inputs ====== #
@@ -394,13 +414,10 @@ def plot_latents(Z, y, labels_name, title=None,
   # ====== plotting ====== #
   if enable_argmax:
     y_argmax = np.argmax(y, axis=-1)
-    if ax is None:
-      plot_figure(nrow=12, ncol=13)
     fast_scatter(x=Z, y=y_argmax, labels=labels_name, ax=ax,
-                 size=24 if len(Z) > 500 else 32,
-                 title=title,
+                 size=size, title=title, fontsize=fontsize,
                  enable_legend=bool(show_legend))
-    plt.grid(False)
+    ax.grid(False)
   # ====== plot each protein ====== #
   if enable_separated:
     colormap = 'Reds' # bwr
@@ -410,14 +427,15 @@ def plot_latents(Z, y, labels_name, title=None,
     for i, lab in enumerate(labels_name):
       val = K.log_norm(y[:, i], axis=0)
       plot_scatter_heatmap(
-          x=Z[:, 0], y=Z[:, 1],
-          val=val / np.sum(val),
+          x=Z[:, 0], y=Z[:, 1], val=val / np.sum(val),
           ax=(nrow, ncol, i + 1),
-          colormap=colormap, size=8, alpha=0.8,
+          colormap=colormap, size=size, alpha=0.8,
           fontsize=8, grid=False,
           title=lab)
+
+    plt.grid(False)
     # big title
-    plt.suptitle(title)
+    plt.suptitle(title, fontsize=fontsize)
     # show the colorbar
     import matplotlib as mpl
     cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])

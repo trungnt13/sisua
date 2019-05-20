@@ -14,7 +14,7 @@ from odin.fuel import MmapData, Dataset
 from odin.utils import get_file, crypto, ctext
 
 from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
-from sisua.utils.others import remove_allzeros_columns, save_data_to_dataset
+from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 _URL = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0tJX0ZBQ1NfJWRwcm90ZWluLnpp\ncA==\n'
 _FACS_PREPROCESSED = os.path.join(
@@ -76,7 +76,7 @@ def read_FACS(n_protein, override=False):
     X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
                                        print_log=True)
 
-    save_data_to_dataset(path=preprocessed_path,
+    save_to_dataset(path=preprocessed_path,
                          X=X, X_col=X_col,
                          y=y, y_col=y_col,
                          rowname=X_row, print_log=True)
@@ -176,7 +176,7 @@ def read_full_FACS(override=False):
     # ====== filter zero columns ====== #
     X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
                                        print_log=True)
-    save_data_to_dataset(path=preprocessed_path,
+    save_to_dataset(path=preprocessed_path,
                          X=X, X_col=X_col,
                          y=y, y_col=y_col,
                          rowname=X_row, print_log=True)

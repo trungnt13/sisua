@@ -18,17 +18,17 @@ from sisua.models.helpers import parse_loss_function, create_network
 # Hard
 # ===========================================================================
 @N.Lambda
-def multitask(X, T, C, mask, y, nsample, kwargs):
+def multitask(X, T, C, mask, y, nsample, configs):
   # ====== prepare ====== #
   outputs = {}
   # ====== network ====== #
   f_encoder, f_decoder = create_network(
-      kwargs['hdim'], batchnorm=kwargs['batchnorm'],
-      n_layers=kwargs['nlayer'],
-      xdrop=kwargs['xdrop'], zdrop=kwargs['zdrop'],
-      edrop=kwargs['edrop'], ddrop=kwargs['ddrop'],
+      configs['hdim'], batchnorm=configs['batchnorm'],
+      n_layers=configs['nlayer'],
+      xdrop=configs['xdrop'], zdrop=configs['zdrop'],
+      edrop=configs['edrop'], ddrop=configs['ddrop'],
       name='multitask')
-  f_latent = N.Dense(num_units=kwargs['zdim'], b_init=None,
+  f_latent = N.Dense(num_units=configs['zdim'], b_init=None,
                      activation=K.linear, name="Bottleneck")
   # ====== output network ====== #
   f_x = N.Dense(num_units=X.shape.as_list()[-1], activation=K.linear,
@@ -41,10 +41,10 @@ def multitask(X, T, C, mask, y, nsample, kwargs):
   D = f_decoder(Z)
   # ====== reconstruction ====== #
   W, loss_rec = parse_loss_function(true=T, logit=f_x(D), mask=None,
-                                    loss_name=kwargs['rec_loss'])
+                                    loss_name=configs['rec_loss'])
   # ====== classification ====== #
   y_, loss_cls = parse_loss_function(true=y, logit=f_y(D), mask=mask,
-                                     loss_name=kwargs['cls_loss'])
+                                     loss_name=configs['cls_loss'])
   # ====== final output ====== #
   loss = loss_rec + loss_cls
   outputs.update({'W': W, 'Z': Z, 'y_': y,
@@ -54,23 +54,23 @@ def multitask(X, T, C, mask, y, nsample, kwargs):
   return outputs
 
 @N.Lambda
-def dualtask(X, T, C, mask, y, nsample, kwargs):
+def dualtask(X, T, C, mask, y, nsample, configs):
   # ====== prepare ====== #
   outputs = {}
   # ====== network ====== #
   f_X_encoder, f_X_decoder = create_network(
-      kwargs['hdim'], batchnorm=kwargs['batchnorm'],
-      n_layers=kwargs['nlayer'],
-      xdrop=kwargs['xdrop'], zdrop=kwargs['zdrop'],
-      edrop=kwargs['edrop'], ddrop=kwargs['ddrop'],
+      configs['hdim'], batchnorm=configs['batchnorm'],
+      n_layers=configs['nlayer'],
+      xdrop=configs['xdrop'], zdrop=configs['zdrop'],
+      edrop=configs['edrop'], ddrop=configs['ddrop'],
       name='multitask_X')
 
   f_Y_encoder, f_Y_decoder = create_network(
-      kwargs['hdim'], batchnorm=kwargs['batchnorm'],
-      xdrop=kwargs['xdrop'], zdrop=kwargs['zdrop'], edrop=kwargs['edrop'],
+      configs['hdim'], batchnorm=configs['batchnorm'],
+      xdrop=configs['xdrop'], zdrop=configs['zdrop'], edrop=configs['edrop'],
       name='multitask_Y')
 
-  f_latent = N.Dense(num_units=kwargs['zdim'], b_init=None,
+  f_latent = N.Dense(num_units=configs['zdim'], b_init=None,
                      activation=K.linear, name="Bottleneck")
   # ====== output network ====== #
   f_X = N.Dense(num_units=X.shape.as_list()[-1], activation=K.linear,
@@ -82,13 +82,13 @@ def dualtask(X, T, C, mask, y, nsample, kwargs):
   Z_X = f_latent(E_X)
   D_X = f_X_decoder(Z_X)
   W, loss_rec = parse_loss_function(true=T, logit=f_X(D_X), mask=None,
-                                    loss_name=kwargs['rec_loss'])
+                                    loss_name=configs['rec_loss'])
   # ====== classification ====== #
   E_Y = f_Y_encoder(y)
   Z_Y = f_latent(E_Y)
   D_Y = f_Y_decoder(Z_Y)
   y_, loss_cls = parse_loss_function(true=y, logit=f_Y(D_Y), mask=mask,
-                                     loss_name=kwargs['cls_loss'])
+                                     loss_name=configs['cls_loss'])
   # ====== final output ====== #
   loss = loss_rec + loss_cls
   outputs.update({'W': W, 'Z': Z_X, 'y_': y,

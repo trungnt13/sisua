@@ -27,18 +27,25 @@ def _normalize_text(text):
 # ===========================================================================
 # Others
 # ===========================================================================
-def get_count_sum(X, nsample, kwargs):
-  """ Return: [n_sample, n_batch, 1] """
-  count_sum = tf.reduce_sum(X, axis=1, keepdims=True)
-  if 'count_coeff' in kwargs:
-    count_coeff = tf.convert_to_tensor(kwargs['count_coeff'],
-                                     dtype=X.dtype)
-  else:
-    count_coeff = tf.reduce_max(count_sum)
-  C = count_sum / count_coeff
-  C = tf.tile(tf.expand_dims(C, axis=0),
-              multiples=[nsample, 1, 1])
-  return C
+def get_kl_weight(nepoch, weight, warmup):
+  """
+  nepoch   : use for calculating warm-up weight
+  weight   : a fixed scalar
+  warmup  : number of warm-up epoch
+  """
+  with tf.name_scope("kl_weight"):
+    warmup = tf.convert_to_tensor(warmup, 'float32')
+    weight = tf.convert_to_tensor(weight, 'float32')
+    nepoch = tf.convert_to_tensor(nepoch, 'float32')
+    warm_up_weight = tf.minimum(tf.maximum(nepoch, 1.) / warmup, 1.)
+    return warm_up_weight * weight
+
+def get_masked_supervision(y_loss, mask, nsample, y_weight):
+  # apply masking for supervised loss
+  mask = tf.tile(tf.expand_dims(mask, axis=0),
+                 multiples=[nsample, 1])
+  y_loss = tf.multiply(y_loss, mask)
+  return y_weight * y_loss
 
 def extract_pi(outputs, dist):
   if 'pi' in dist.distribution.parameters:
@@ -53,19 +60,18 @@ def extract_clean_count(outputs, dist):
     mean = dist.mean()
     V_expected = tf.identity(tf.reduce_mean(dist.mean(), axis=0),
                              name="V_expected")
-    V_stdev_total = tf.identity(
+    V_stddev_total = tf.identity(
         tf.sqrt(
             tf.reduce_mean(dist.variance(), axis=0)
       ),
-    name="V_stdev_total")
-    V_stdev_explained = tf.identity(
+    name="V_stddev_total")
+    V_stddev_explained = tf.identity(
         tf.sqrt(
             tf.reduce_mean(tf.square(mean - tf.expand_dims(V_expected, axis=0)),
                          axis=0)),
-    name="V_stdev_explained")
+    name="V_stddev_explained")
     outputs['V'] = V_expected
-    outputs['V_stdev_total'] = V_stdev_total
-    outputs['V_stdev_explained'] = V_stdev_explained
+    outputs['V_stddev'] = V_stddev_total
 
 # ===========================================================================
 # Network
@@ -173,8 +179,8 @@ _epsilon = 1e-6
 def clip_support(x, x_min, x_max):
   return tf.clip_by_value(x, x_min + _epsilon, x_max - _epsilon)
 
-def parse_variable_distribution(X, D, dist_name, name):
-  """ Return: out, expected, stdev_explained, stdev_total, NLLK
+def parse_output_distribution(X, D, dist_name, name):
+  """ Return: out, expected, stddev_explained, stddev_total, NLLK
 
   D : tensor
     output from decoder (not included the output layer)
@@ -202,27 +208,30 @@ def parse_variable_distribution(X, D, dist_name, name):
   with tf.variable_scope(name):
     # ====== Bernoulli ====== #
     if dist_name == 'zibernoulli':
-      f = N.Dense(num_units=out_dim, activation=K.linear, name="Logit")
+      f = N.Dense(num_units=out_dim, activation=K.linear,
+                  name="Logit" + name)
       bern = tfd.Bernoulli(logits=f(D))
 
-      f_pi = N.Dense(num_units=out_dim, activation=tf.nn.sigmoid, name="Pi")
+      f_pi = N.Dense(num_units=out_dim, activation=tf.nn.sigmoid,
+                     name="Pi" + name)
       pi = clip_support(f_pi(D), x_min=0, x_max=1)
 
       out = ZeroInflated(dist=bern, pi=pi)
 
     # ====== Bernoulli ====== #
     elif dist_name == 'bernoulli':
-      f = N.Dense(num_units=out_dim, activation=K.linear, name="Logit")
+      f = N.Dense(num_units=out_dim, activation=K.linear,
+                  name="Logit" + name)
       out = tfd.Bernoulli(logits=f(D))
 
     # ====== Normal ====== #
     elif dist_name == 'normal':
       f_loc = N.Dense(num_units=out_dim, activation=K.linear,
-                      name="Location")
+                      name="Location" + name)
       loc = f_loc(D)
 
       f_log_sigma = N.Dense(num_units=out_dim, activation=K.linear,
-                            name="LogSigma")
+                            name="LogSigma" + name)
       log_sigma = clip_support(f_log_sigma(D), x_min=-3, x_max=3)
 
       out = tfd.Normal(loc=loc, scale=tf.exp(log_sigma))
@@ -230,28 +239,28 @@ def parse_variable_distribution(X, D, dist_name, name):
     # ====== Poisson ====== #
     elif dist_name in ('poisson',):
       f_log_rate = N.Dense(num_units=out_dim, activation=K.linear,
-                           name="LogRate")
+                           name="LogRate" + name)
       out = tfd.Poisson(log_rate=f_log_rate(D), name=name)
 
     # ====== Zero-inflated Poisson ====== #
     elif dist_name in ('zipoisson',):
       f_log_rate = N.Dense(num_units=out_dim, activation=K.linear,
-                           name="LogRate")
+                           name="LogRate" + name)
       pois = tfd.Poisson(log_rate=f_log_rate(D))
 
       f_pi = N.Dense(num_units=out_dim, activation=tf.nn.sigmoid,
-                     name="Pi")
+                     name="Pi" + name)
       pi = clip_support(f_pi(D), x_min=0, x_max=1)
 
       out = ZeroInflated(dist=pois, pi=pi)
     # ====== Negative Binomial ====== #
     elif dist_name in ('nb',):
       f_log_count = N.Dense(num_units=out_dim, activation=K.linear,
-                            name="TotalCount")
+                            name="TotalCount" + name)
       log_count = clip_support(f_log_count(D), x_min=-10, x_max=10)
 
       f_logits = N.Dense(num_units=out_dim, activation=K.linear,
-                         name="Logits")
+                         name="Logits" + name)
 
       out = tfd.NegativeBinomial(
           total_count=tf.exp(log_count),
@@ -259,29 +268,29 @@ def parse_variable_distribution(X, D, dist_name, name):
     # ====== Zero-inflated Negative Binomial ====== #
     elif dist_name in ('zinb',):
       f_log_count = N.Dense(num_units=out_dim, activation=K.linear,
-                            name="TotalCount")
+                            name="TotalCount" + name)
       log_count = clip_support(f_log_count(D), x_min=-10, x_max=10)
 
       f_logits = N.Dense(num_units=out_dim, activation=K.linear,
-                         name="Logits")
+                         name="Logits" + name)
 
       nb = tfd.NegativeBinomial(
           total_count=tf.exp(log_count),
           logits=f_logits(D))
 
       f_pi = N.Dense(num_units=out_dim, activation=tf.nn.sigmoid,
-                     name="Pi")
+                     name="Pi" + name)
       pi = clip_support(f_pi(D), x_min=0, x_max=1)
 
       out = ZeroInflated(dist=nb, pi=pi)
     # ====== beta distribution ====== #
     elif dist_name in ('beta',):
       f_log_alpha = N.Dense(num_units=out_dim, activation=tf.identity,
-                            name="LogAlpha")
+                            name="LogAlpha" + name)
       log_alpha = clip_support(f_log_alpha(D), x_min=-3, x_max=3)
 
       f_log_beta = N.Dense(num_units=out_dim, activation=tf.identity,
-                           name="LogBeta")
+                           name="LogBeta" + name)
       log_beta = clip_support(f_log_beta(D), x_min=-3, x_max=3)
 
       out = tfd.Beta(concentration1=tf.exp(log_alpha),
@@ -300,10 +309,11 @@ def parse_variable_distribution(X, D, dist_name, name):
   X_tile = tf.tile(tf.expand_dims(X, axis=0),
                    multiples=[tf.shape(D)[0], 1, 1])
   # negative log likelihood. (n_samples, n_batch)
+  # if ndim == 3, sum the NLLK among all features
   NLLK = -out.log_prob(X_tile)
   if NLLK.shape.ndims == 3:
     NLLK = tf.reduce_sum(NLLK, axis=-1)
-  # ******************** get the expectation, and stdev ******************** #
+  # ******************** get the expectation, and stddev ******************** #
   # [n_sample, n_batch, feat_dim]
   mean = out.mean()
   # [n_batch, feat_dim]
@@ -311,17 +321,17 @@ def parse_variable_distribution(X, D, dist_name, name):
       tf.reduce_mean(mean, axis=0),
   name="%s_expected" % name)
   # MCMC variance [n_batch, feat_dim] (/ tf.cast(nsample, 'float32') ?)
-  stdev_explained = tf.identity(
+  stddev_explained = tf.identity(
       tf.sqrt(
           tf.reduce_mean(tf.square(mean - tf.expand_dims(expected, axis=0)),
                          axis=0)),
-  name="%s_stdev_explained" % name)
+  name="%s_stddev_explained" % name)
   # analytical variance
-  stdev_total = tf.identity(
+  stddev_total = tf.identity(
       tf.sqrt(
           tf.reduce_mean(out.variance(), axis=0)
     ),
-  name="%s_stdev_total" % name)
+  name="%s_stddev_total" % name)
   # ******************** print the dist ******************** #
   if is_verbose():
     print("  dist        :", ctext(out, 'cyan'))
@@ -331,9 +341,9 @@ def parse_variable_distribution(X, D, dist_name, name):
       print("      %-8s:" % name, ctext(p, 'magenta'))
     print("  NLLK        :", ctext(NLLK, 'cyan'))
     print("  Expected    :", ctext(expected, 'cyan'))
-    print("  StdExplained:", ctext(stdev_explained, 'cyan'))
-    print("  StdTotal    :", ctext(stdev_total, 'cyan'))
-  return out, expected, stdev_explained, stdev_total, NLLK
+    print("  StdExplained:", ctext(stddev_explained, 'cyan'))
+    print("  StdTotal    :", ctext(stddev_total, 'cyan'))
+  return out, expected, stddev_explained, stddev_total, NLLK
 
 # ===========================================================================
 # Latent distribution
@@ -344,7 +354,7 @@ _latent_dist = [
     'normal'
 ]
 def parse_latent_distribution(E, zdim, dist_name, name,
-                              n_samples, analytic, constraint):
+                              n_samples, analytic):
   """
   Parameters
   ----------
@@ -395,8 +405,10 @@ def parse_latent_distribution(E, zdim, dist_name, name,
       pZ = tfd.Normal(loc=tf.zeros(shape=(1,)), scale=tf.ones(shape=(1,)),
                       name='pZ')
       # posterior
-      f_loc = N.Dense(num_units=zdim, activation=K.linear, name='Loc')
-      f_log_scale = N.Dense(num_units=zdim, activation=K.linear, name='Scale')
+      f_loc = N.Dense(num_units=zdim, activation=K.linear,
+                      name='Loc' + name)
+      f_log_scale = N.Dense(num_units=zdim, activation=K.linear,
+                            name='Scale' + name)
       for i, e in enumerate(E):
         loc = f_loc(e)
         log_scale = clip_support(f_log_scale(e), x_min=-3, x_max=3)
@@ -410,8 +422,10 @@ def parse_latent_distribution(E, zdim, dist_name, name,
           loc =tf.zeros(shape=(zdim,)), scale_identity_multiplier=1.0,
           name='pZ')
       # posterior
-      f_loc = N.Dense(num_units=zdim, activation=K.linear, name='Loc')
-      f_scale = N.Dense(num_units=zdim, activation=K.linear, name='Scale')
+      f_loc = N.Dense(num_units=zdim, activation=K.linear,
+                      name='Loc' + name)
+      f_scale = N.Dense(num_units=zdim, activation=K.linear,
+                        name='Scale' + name)
       for i, e in enumerate(E):
         loc = f_loc(e)
         scale = f_scale(e)
@@ -436,8 +450,11 @@ def parse_latent_distribution(E, zdim, dist_name, name,
     # [n_samples, n_batch] or [n_samples, n_batch, zdim]
     for q, zsamples in zip(qZ_given_, Z_samples_given_):
       kl = (q.log_prob(zsamples) - pZ.log_prob(zsamples))
-      if kl.shape.ndims > 2:
+      # if 3-D, return KL-divergence among all features dimension
+      if kl.shape.ndims == 3:
         kl = tf.reduce_sum(kl, axis=-1, keepdims=False)
+      elif kl.shape.ndims > 3:
+        raise RuntimeError("KL > 3-D, not possible!")
       KL_.append(kl)
   # ******************** print the dist ******************** #
   if is_verbose():

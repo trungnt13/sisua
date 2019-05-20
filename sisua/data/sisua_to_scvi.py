@@ -6,7 +6,6 @@ import numpy as np
 from scvi.dataset import GeneExpressionDataset
 from sisua.data import get_dataset
 
-
 class FacsDataset(GeneExpressionDataset):
 
   def __init__(self, n_proteins=7):

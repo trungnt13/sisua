@@ -15,7 +15,7 @@ from odin.visual import (print_dist, merge_text_graph, plot_confusion_matrix,
                          generate_random_colors)
 from odin.utils import (unique_labels, ctext, auto_logging, batching, UnitTimer,
                         ArgController, get_script_path, mpi)
-from odin.config import get_rng
+from odin.autoconfig import get_rng
 from odin.stats import train_valid_test_split
 
 from sklearn.decomposition import PCA
@@ -133,7 +133,7 @@ for transformer_name, transformer in [
   Z_valid = transformer.transform(X_valid)
   Z_test = transformer.transform(X_test)
   # ====== plot T-SNE cell cluster ====== #
-  plot_latents(X=Z_test, y=y_prot_test,
+  plot_latents_binary(X=Z_test, y=y_prot_test,
                labels=y_prot_names, title='[%s]Test-Prot' % transformer_name,
                ax=224)
   # ====== Training SVM and logistic regression ====== #
