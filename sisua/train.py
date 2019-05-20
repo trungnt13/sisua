@@ -199,7 +199,7 @@ def train(model='kvae', ds='pbmc_ly', dispersion='gene-cell',
 # ===========================================================================
 # Calling the main
 # ===========================================================================
-if __name__ == '__main__':
+def main():
   kw, n_process = get_arguments()
   from sisua import set_verbose
   set_verbose(True)
@@ -249,3 +249,6 @@ if __name__ == '__main__':
       [p.join() for p in processes]
   else:
     train(**kw)
+
+if __name__ == '__main__':
+  main()

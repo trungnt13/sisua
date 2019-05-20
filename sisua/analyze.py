@@ -150,6 +150,9 @@ def analyze(dataset_name, models, incl, excl,
 # ===========================================================================
 # Main
 # ===========================================================================if __name__ == '__main__':
-if __name__ == '__main__':
+def main():
   args = get_arguments()
   analyze(*args)
+
+if __name__ == '__main__':
+  main()
