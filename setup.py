@@ -4,6 +4,11 @@ import sys
 import pip
 from setuptools import setup, find_packages
 
+if float(pip.__version__.split('.')[0]) < 19.0:
+  raise RuntimeError(
+      "'sisua' package require pip version >= 19.0, your pip version is %s, "
+      "run `pip install pip --upgrade` to upgrade!" % str(pip.__version__))
+
 # ===========================================================================
 # Main
 # ===========================================================================
@@ -17,6 +22,8 @@ requirements = [
     "odin-ai @ git+https://github.com/imito/odin-ai@master",
     "seaborn>=0.9",
     "pandas",
+    "dca==0.2.2",
+    'scvi==0.2.4'
 ]
 
 setup(
@@ -34,7 +41,7 @@ setup(
         'Topic :: Scientific/Engineering :: Bio-Informatics',
     ],
     description="SemI-SUpervised generative Autoencoder for single cell data",
-    scripts=['bin/sisua-train', 'bin/sisua-data'],
+    scripts=['bin/sisua-train', 'bin/sisua-analyze'],
     setup_requires=['pip>=19.0'],
     install_requires=requirements,
     license="MIT license",
