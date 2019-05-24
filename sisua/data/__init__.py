@@ -26,7 +26,6 @@ def get_dataset_meta():
   from sisua.data.data_loader.cbmc_CITEseq import read_CITEseq_CBMC
   from sisua.data.data_loader.mnist import read_MNIST
   from sisua.data.data_loader.facs_gene_protein import read_FACS, read_full_FACS
-  from sisua.data.data_loader.facs_corrupted import read_FACS_corrupted
   from sisua.data.data_loader.fashion_mnist import (
       read_fashion_MNIST, read_fashion_MNIST_drop, read_MNIST_drop)
   from sisua.data.data_loader.scvi_datasets import (
@@ -81,11 +80,10 @@ def get_dataset_meta():
       'facs_7': lambda override: read_full_FACS(override=override),
       'facs_5': lambda override: read_FACS(n_protein=5, override=override),
       'facs_2': lambda override: read_FACS(n_protein=2, override=override),
-      'facs_corrupt': read_FACS_corrupted,
 
       # ====== other fun ====== #
       'cortex': read_Cortex,
-      'retina': lambda *args, **kwargs: NotImplementedError,
+      'retina': read_Retina,
       'hemato': read_Hemato,
   }
   return data_meta
