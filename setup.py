@@ -15,7 +15,7 @@ if float(pip.__version__.split('.')[0]) < 19.0:
 # ===========================================================================
 # Main
 # ===========================================================================
-with open('README.md') as readme_file:
+with open('README.rst') as readme_file:
   readme = readme_file.read()
 
 author = 'University of Eastern Finland'
