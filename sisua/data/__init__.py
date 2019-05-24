@@ -90,35 +90,7 @@ def get_dataset_meta():
 
 @cache_memory
 def get_dataset(dataset_name, override=False):
-  """ Supporting dataset:
-
-  'pbmc_citeseq' :
-  'pbmc_10x' :
-  'pbmc' :
-  'pbmc_5000' :
-
-  'pbmc8k' :
-  'pbmc8k_full' :
-
-  'pbmc_lyfull' :
-  'pbmc_myfull' :
-  'pbmc_ly' :
-  'pbmc_my' :
-
-  'cbmc_citeseq' :
-  'mnist' :
-  'mnist_org' :
-  'mnist_imp' :
-  'fmnist' :
-  'fmnist_org' :
-  'fmnist_imp' :
-  'facs_7' :
-  'facs_5' :
-  'facs_2' :
-  'facs_corrupt' :
-  'cortex' :
-  'retina' :
-  'hemato' :
+  """ Check `get_dataset_meta` for more information
 
   Return
   ------

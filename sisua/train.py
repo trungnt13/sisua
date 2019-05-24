@@ -95,7 +95,7 @@ def get_arguments():
     preprocessed[k] = v
   return preprocessed, n_process
 
-def train(model='vae', ds='pbmc_ly', dispersion='gene-cell',
+def train(model='vae', ds='pbmc8k_ly', dispersion='gene-cell',
           xnorm='log', ximpu=0.25, tnorm='raw',
           ynorm='prob',
           xclip=0, yclip=0,

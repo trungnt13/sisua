@@ -23,7 +23,7 @@ Reference:
 Installation
 ************
 
-You only need ``Python 3.6``, the stable version of _SISUA_ installed via pip:
+You only need ``Python 3.6``, the stable version of SISUA installed via pip:
 
   ``pip install sisua``
 
@@ -93,7 +93,7 @@ Some important arguments:
 -ds
             name of dataset declared in data__.
 
-            Description of all predefined datasets is in `SISUA`(docs__)
+            Description of all predefined datasets is in docs__.
 
             Some good datasets for practicing:
 
