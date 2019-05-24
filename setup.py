@@ -22,7 +22,7 @@ author = 'University of Eastern Finland'
 
 # @0.1.6#egg=odin-0.1.6
 requirements = [
-    "odin-ai @ git+https://github.com/imito/odin-ai@master",
+    "odin-ai @ git+https://github.com/imito/odin-ai@0.2.0#egg=odin-0.2.0",
     "seaborn>=0.9",
     "pandas",
     "dca==0.2.2",
