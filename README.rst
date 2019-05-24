@@ -4,8 +4,8 @@ SISUA
 |SISUA_design|
 
 .. |SISUA_design| image:: https://drive.google.com/uc?export=view&id=1PvvG61_Rgbv_rqT6sCeb1XB6CtdiCMXX
-  :width: 584
-  :height: 359
+  :width: 405
+  :height: 249
 
 
 Semi-supervised Single-cell modeling:
@@ -49,9 +49,10 @@ b. Single-cell analysis:
     * `Imputation of genes expression`
     * `Prediction of protein markers`
 c. Advanced technical topics:
-    * `Probabilistic embedding`
+    * `Probabilistic embedding` (*coming soon*)
     * `Hierarchical modeling` (*coming soon*)
     * `Causal analysis` (*coming soon*)
+    * `Cross datasets analysis` (*coming soon*)
 d. Benchmarks:
     * `Scalability test`
     * `Fine-tuning networks`
