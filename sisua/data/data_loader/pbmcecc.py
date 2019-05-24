@@ -11,7 +11,7 @@ from odin.utils import get_file
 from odin.fuel import Dataset
 
 from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
-from sisua.data.utils import save_to_dataset
+from sisua.data.utils import save_to_dataset, remove_allzeros_columns
 
 _URL_LYMPHOID = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWNlY2NfbHkubnB6\n'
 _URL_MYELOID = None
@@ -62,6 +62,8 @@ def read_PBMCeec(subset, override=False, filtered_genes=False):
       cell_types = None
 
     # ====== save everything ====== #
+    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
+                                       print_log=True)
     assert X.shape == (len(X_row), len(X_col))
     assert len(X) == len(y)
     assert y.shape[1] == len(y_col)

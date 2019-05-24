@@ -13,6 +13,7 @@ from odin.fuel import MmapData, Dataset
 from odin.utils import get_file, crypto, ctext, batching
 
 from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
+from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 _CITEseq_CBMC_PREPROCESSED = os.path.join(
     PREPROCESSED_BASE_DIR, 'CBMC_preprocessed')
@@ -56,6 +57,7 @@ def read_CITEseq_CBMC(override=False):
     # ====== post-processing ====== #
     X = data_dict['X'].astype('float32')
     X_row, X_col = data_dict['X_row'], data_dict['X_col']
+    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col)
     assert len(X_row) == X.shape[0] and len(X_col) == X.shape[1]
 
     y = data_dict['y'].astype('float32')
@@ -68,23 +70,10 @@ def read_CITEseq_CBMC(override=False):
     # save data
     print("Saving data to %s ..." %
       ctext(preprocessed_path, 'cyan'))
-    out = MmapData(os.path.join(preprocessed_path, 'X'),
-                   dtype='float32', shape=(0, X.shape[1]),
-                   read_only=False)
-    for start, end in batching(batch_size=1024, n=X.shape[0]):
-      x = X[start:end]
-      out.append(x)
-    out.flush()
-    out.close()
-    with open(os.path.join(preprocessed_path, 'y'), 'wb') as f:
-      pickle.dump(y, f)
-    # save the meta info
-    with open(os.path.join(preprocessed_path, 'X_row'), 'wb') as f:
-      pickle.dump(X_row, f)
-    with open(os.path.join(preprocessed_path, 'X_col'), 'wb') as f:
-      pickle.dump(X_col, f)
-    with open(os.path.join(preprocessed_path, 'y_col'), 'wb') as f:
-      pickle.dump(y_col, f)
+
+    save_to_dataset(preprocessed_path,
+                    X, X_col, y, y_col,
+                    rowname=X_row)
   # ====== read preprocessed data ====== #
   ds = Dataset(preprocessed_path, read_only=True)
   return ds

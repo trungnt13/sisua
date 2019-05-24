@@ -67,9 +67,17 @@ def standardize_protein_name(name):
 # Utilities
 # ===========================================================================
 def remove_allzeros_columns(matrix, colname, print_log=True):
+  """ Remove all zero columns from both the matrix and column name vector
+
+  Return
+  ------
+  matrix : [n_samples, n_genes]
+  column_name : [n_genes]
+  """
   assert matrix.ndim == 2
   orig_shape = matrix.shape
-  nonzero_col = np.sum(matrix, axis=0) != 0
+  # at least > 1 for train, test splitting
+  nonzero_col = np.sum(matrix, axis=0) > 1
   matrix = matrix[:, nonzero_col]
   colname = colname[nonzero_col]
   if print_log:

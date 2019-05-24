@@ -176,7 +176,7 @@ class Inference(BaseEstimator):
                xdrop=0.3, edrop=0, zdrop=0, ddrop=0,
                hdim=128, zdim=32, nlayer=2,
                batchnorm=True, analytic=True,
-               kl_weight=1., warmup=400, y_weight=1.,
+               kl_weight=1., warmup=400, y_weight=10.,
                extra_module_path=None,
                **kwargs):
     super(Inference, self).__init__()
@@ -819,7 +819,7 @@ class Inference(BaseEstimator):
                       outputs=self._outputs['train']['w'])
       optz = Adam(lr=learning_rate)
 
-      if detail_logging:
+      if is_verbose():
         print(ctext("Trainable variables:", 'lightyellow'))
         for v in sorted(model.trainable_variables, key=lambda x: x.name):
           print(" ", v.name, v.shape)
@@ -1323,3 +1323,53 @@ class Inference(BaseEstimator):
   @property
   def training_log(self):
     return self._training_log
+
+# ===========================================================================
+# Shortcut
+# ===========================================================================
+class InferenceSCVAE(Inference):
+  def __init__(self, gene_dim, dispersion='gene-cell',
+               xnorm='log', tnorm='raw', ynorm='prob',
+               xclip=0, yclip=0,
+               xdist='zinb', ydist='bernoulli', zdist='normal',
+               xdrop=0.3, edrop=0, zdrop=0, ddrop=0,
+               hdim=128, zdim=32, nlayer=2,
+               batchnorm=True, analytic=True,
+               kl_weight=1., warmup=400, y_weight=10.,
+               extra_module_path=None,
+               **kwargs):
+    super(InferenceSCVAE, self).__init__(gene_dim=gene_dim, prot_dim=None,
+               model='vae', dispersion=dispersion,
+               xnorm=xnorm, tnorm=tnorm, ynorm=ynorm,
+               xclip=xclip, yclip=yclip,
+               xdist=xdist, ydist=ydist, zdist=zdist,
+               xdrop=xdrop, edrop=edrop, zdrop=zdrop, ddrop=ddrop,
+               hdim=hdim, zdim=zdim, nlayer=nlayer,
+               batchnorm=batchnorm, analytic=analytic,
+               kl_weight=kl_weight, warmup=warmup, y_weight=y_weight,
+               extra_module_path=extra_module_path,
+               **kwargs)
+
+class InferenceSISUA(Inference):
+  def __init__(self, gene_dim, prot_dim,
+               dispersion='gene-cell',
+               xnorm='log', tnorm='raw', ynorm='prob',
+               xclip=0, yclip=0,
+               xdist='zinb', ydist='bernoulli', zdist='normal',
+               xdrop=0.3, edrop=0, zdrop=0, ddrop=0,
+               hdim=128, zdim=32, nlayer=2,
+               batchnorm=True, analytic=True,
+               kl_weight=1., warmup=400, y_weight=10.,
+               extra_module_path=None,
+               **kwargs):
+    super(InferenceSISUA, self).__init__(gene_dim=gene_dim, prot_dim=prot_dim,
+               model='movae', dispersion=dispersion,
+               xnorm=xnorm, tnorm=tnorm, ynorm=ynorm,
+               xclip=xclip, yclip=yclip,
+               xdist=xdist, ydist=ydist, zdist=zdist,
+               xdrop=xdrop, edrop=edrop, zdrop=zdrop, ddrop=ddrop,
+               hdim=hdim, zdim=zdim, nlayer=nlayer,
+               batchnorm=batchnorm, analytic=analytic,
+               kl_weight=kl_weight, warmup=warmup, y_weight=y_weight,
+               extra_module_path=extra_module_path,
+               **kwargs)

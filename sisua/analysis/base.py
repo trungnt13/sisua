@@ -166,12 +166,13 @@ class Posterior(object):
     "Number of gene expression between trained inference and " + \
     "given dataset mismatch"
 
-    self._X_train = X_train
-    self._X_train_org = X_train_org
-    self._X_test = X_test
-    self._X_test_org = X_test_org
-    self._y_train = y_train
-    self._y_test = y_test
+    # everything must be numpy array not memmap
+    self._X_train = np.asarray(X_train)
+    self._X_train_org = np.asarray(X_train_org)
+    self._X_test = np.asarray(X_test)
+    self._X_test_org = np.asarray(X_test_org)
+    self._y_train = np.asarray(y_train)
+    self._y_test = np.asarray(y_test)
 
     self._gene_name = gene_name
     self._prot_name = [standardize_protein_name(i)
@@ -195,6 +196,22 @@ class Posterior(object):
   def save_plots(self, path, dpi=None, separate_files=True):
     save_figures(self.figures, path, dpi, separate_files,
                 clear_figures=True)
+    return self
+
+  def save_scores(self, path):
+    assert '.html' in path.lower(), "Only save scores to html file"
+    text = ''
+    for name, (train, test) in (('scores', self.scores),
+                                ('pearson', self.scores_pearson),
+                                ('spearman', self.scores_spearman),
+                                ('classifier', self.scores_classifier),
+                                ('cluster', self.scores_clustering),
+                                ('imputation', self.scores_imputation),):
+      text += '<h4>Score type: "%s"<h4>' % name
+      df = pd.DataFrame(data=[train, test], index=['train', 'test'])
+      text += df.to_html(float_format='%.3f') + '\n'
+    with open(path, 'w') as f:
+      f.write(text)
     return self
 
   # ******************** Latent space analysis ******************** #

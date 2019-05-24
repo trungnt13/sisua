@@ -89,6 +89,10 @@ class GMMThresholding(BaseEstimator, DensityMixin):
       order = np.argsort(means_)
       self._model.append((x_low, x_high, x_sum, order, gmm))
 
+  def fit_transform(self, X):
+    self.fit(X)
+    return self.predict_proba(X)
+
   def _predict(self, X, threshold):
     assert X.shape[1] == len(self._model), "Number classes mis-match"
     y = []

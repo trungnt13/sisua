@@ -106,6 +106,11 @@ class SingleCellDataset(object):
       rowname = ['Sample#%d' % i for i in range(data.shape[0])]
     if colname is None:
       colname = ['Feature#%d' % i for i in range(data.shape[1])]
+    # ====== check zero and one columns ====== #
+    s = data.sum(0)
+    assert np.all(s > 1), \
+    "All columns sum must be greater than 1 " + \
+    "(i.e. non-zero and > 1 for train, test splitting)"
     # ====== meta data ====== #
     self._col = np.array(colname)
     # ====== getting the data ====== #
@@ -118,13 +123,14 @@ class SingleCellDataset(object):
     # split train, test
     rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
     ids = rand.permutation(data.shape[0])
+    # try splitting again until get all non-zeros columns
+    # in both training an testing set
     train_ids, test_ids = train_valid_test_split(
         x=ids,
         train=SingleCellDataset.TRAIN_PERCENTAGE,
         inc_test=False, seed=rand.randint(10e8))
     train_ids = np.array(train_ids)
     test_ids = np.array(test_ids)
-
     self._raw_data = (data[train_ids], data[test_ids])
     # store the indices
     self._indices = (train_ids, test_ids)
@@ -336,6 +342,28 @@ class SingleCellDataset(object):
   @property
   def X_col(self):
     return np.array(self.col_name)
+
+  # ====== statistics ====== #
+  @property
+  def sparsity(self):
+    return sparsity_percentage(self.get_data(data_type='all'))
+
+  @property
+  def sparsity_train(self):
+    return sparsity_percentage(self.get_data(data_type='train'))
+
+  @property
+  def sparsity_test(self):
+    return sparsity_percentage(self.get_data(data_type='test'))
+
+  @property
+  def n_cells_per_gene(self):
+    """ Important statistics to evaluate the quality of genes
+    Return a number of non-zeros cell for each gene
+    """
+    X = self.get_data(data_type='all')
+    X = X != 0.
+    return np.sum(X, axis=0)
 
   # ******************** plotting helper ******************** #
   def plot_percentile_histogram(self, n_hist, title=None, outlier=0.001):

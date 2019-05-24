@@ -12,7 +12,7 @@ from odin.utils import ctext, get_file, batching, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
 
 from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
-from sisua.data.utils import save_to_dataset
+from sisua.data.utils import save_to_dataset, remove_allzeros_columns
 
 # ===========================================================================
 # Constants
@@ -94,6 +94,8 @@ def read_PBMC8k(subset, override=False, filtered_genes=False):
       cell_types = None
 
     # ====== save everything ====== #
+    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
+                                       print_log=True)
     assert X.shape == (len(X_row), len(X_col))
     assert len(X) == len(y)
     assert y.shape[1] == len(y_col)

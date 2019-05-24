@@ -93,9 +93,7 @@ sisua_model = InferenceDCA(gene_dim=n_genes,
                xnorm='log',
                xdist='zinb', ydist='bernoulli', zdist='normal',
                xdrop=dropout_rate,
-               hdim=n_hidden, zdim=n_latent, nlayer=1,
-               batchnorm=True, analytic=True,
-               kl_weight=1., warmup=400, y_weight=1.)
+               hdim=n_hidden, zdim=n_latent, nlayer=1)
 sisua_model.fit(X_train, validation_percent=0.1, n_mcmc_samples=1,
           corruption_rate=0.,
           batch_size=batch_size, n_epoch=n_epoch,

@@ -50,7 +50,7 @@ dsecc['y_col'] = np.array(dsecc['y_col'])[ids]
 # ===========================================================================
 # Load inferences
 # ===========================================================================
-model_name = 'kmovae_genecell_Xlog0zinb_Yprob0bernoulli_Traw_Znormal_080spvs1e+02_net02128032_drop30000000_1kl400_alytcT_bnormT_binomial25'
+model_name = 'movae_genecell_Xlog0zinb_Yprob0bernoulli_Traw_Znormal_080spvs1e+02_net02128032_drop30000000_1kl400_alytcT_bnormT_binomial25'
 with open(os.path.join('/home/trung/bio_log/crossecc_ly', model_name, 'model.pkl'), 'rb') as f:
   infer_pbmcecc = pickle.load(f)
 with open(os.path.join('/home/trung/bio_log/cross8k_ly', model_name, 'model.pkl'), 'rb') as f:

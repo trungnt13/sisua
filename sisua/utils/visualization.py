@@ -118,6 +118,9 @@ def save_figures(figures, path, dpi=None,
     separate_files = False
     assert '.pdf' == path[-4:].lower(), \
     "If a file is given, it must be PDF file"
+  assert isinstance(figures, dict), \
+  "figures must be dictionary mapping from figure name to matplotlib.Figure"
+  n_figures = len(figures)
   # ====== saving PDF file ====== #
   if not separate_files:
     if dpi is None:
@@ -128,7 +131,11 @@ def save_figures(figures, path, dpi=None,
     from matplotlib.backends.backend_pdf import PdfPages
     pp = PdfPages(path)
     for key, fig in figures.items():
-      fig.savefig(pp, dpi=dpi, format='pdf', bbox_inches="tight")
+      try:
+        fig.savefig(pp, dpi=dpi, format='pdf', bbox_inches="tight")
+      except Exception as e:
+        print("Error:", key)
+        print(" ", e)
     pp.close()
   # ====== saving PNG file ====== #
   else:
@@ -147,6 +154,8 @@ def save_figures(figures, path, dpi=None,
         print("Error:", ctext(out_path, 'red'))
         print(" ", e)
   # ====== clear figures ====== #
+  print("%s figures save to path: %s" %
+    (ctext(n_figures, 'lightcyan'), ctext(path, 'lightyellow')))
   if clear_figures:
     figures.clear()
 

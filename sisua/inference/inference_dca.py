@@ -15,16 +15,27 @@ from sisua.data import apply_artificial_corruption
 # ===========================================================================
 # Helper for DCA
 # ===========================================================================
+def _no_zero_genes(X):
+  # check if any genes is all zeros (i.e. zero columns)
+  X = X.astype('float32')
+  zero_genes = np.sum(X, axis=0, keepdims=True)
+  if np.sum(zero_genes == 0) > 0:
+    X = X + np.finfo(X.dtype).eps
+  return X
+
 def dca_normalize(X, log=True):
   from dca.api import normalize
   from anndata import AnnData
+  from odin.utils import catch_warnings_error
   # this is the default configuration
   log1p = bool(log)
-  adata = normalize(AnnData(X),
-                    filter_min_counts=False,
-                    size_factors=True,
-                    normalize_input=True,
-                    logtrans_input=log1p)
+  X = _no_zero_genes(X)
+  with catch_warnings_error(Warning):
+    adata = normalize(AnnData(X),
+                      filter_min_counts=False,
+                      size_factors=True,
+                      normalize_input=True,
+                      logtrans_input=log1p)
   return adata.X, adata.obs.size_factors.values
 
 def dca_train(
@@ -75,15 +86,15 @@ def dca_train(
 class InferenceDCA(Inference):
   """ InferenceDCA """
 
-  def __init__(self, gene_dim, prot_dim=None,
-               model='vae', dispersion='gene-cell',
+  def __init__(self, gene_dim,
+               dispersion='gene-cell',
                xnorm='log', tnorm='raw', ynorm='prob',
                xclip=0, yclip=0,
                xdist='zinb', ydist='bernoulli', zdist='normal',
                xdrop=0.3, edrop=0, zdrop=0, ddrop=0,
                hdim=128, zdim=32, nlayer=2,
                batchnorm=True, analytic=True,
-               kl_weight=1., warmup=400, y_weight=1.,
+               kl_weight=1., warmup=400, y_weight=10.,
                extra_module_path=None,
                **kwargs):
     try:
@@ -94,6 +105,8 @@ class InferenceDCA(Inference):
     except ImportError as e:
       raise RuntimeError("pip install dca")
     # ====== validate the arguments ====== #
+    model = kwargs.get('model', 'vae')
+    prot_dim = None
     if model not in ('vae', 'dca'):
       raise RuntimeError("InferenceSCVI only support 'vae' model")
     if xdist not in ('zinb', 'nb'):
@@ -200,6 +213,7 @@ class InferenceDCA(Inference):
     self._n_mcmc_train = n_mcmc_samples
     X = apply_artificial_corruption(
         X, dropout=corruption_rate, distribution=corruption_dist)
+    X = _no_zero_genes(X)
     # ====== training ====== #
     hist = dca_train(
         X=X, network=self._ae, log=self.xnorm == 'log',

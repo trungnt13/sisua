@@ -22,6 +22,7 @@ from odin.visual import (plot_save, plot_figure, to_axis2D, plot_aspect,
 from sisua.data import get_dataset
 from sisua.data.path import EXP_DIR
 from sisua.inference import Inference
+from sisua.label_threshold import GMMThresholding
 from sisua.utils import filtering_experiment_path
 from sisua.data.utils import standardize_protein_name
 from sisua.analysis.imputation_benchmarks import (
@@ -125,8 +126,8 @@ class ResultsSheet(object):
     return self
 
   def save_scores(self, outpath,
-                 scores=['imputation', 'classifier', 'cluster',
-                         'spearman', 'pearson']):
+                  scores=['imputation', 'classifier', 'cluster',
+                          'spearman', 'pearson']):
     """ Saving score to html table format """
     ext = os.path.splitext(outpath)[-1].lower()
     if ext == '':
@@ -479,6 +480,7 @@ class ResultsSheet(object):
     X_crr = self.posteriors[0].X_test if test else self.posteriors[0].X_train
     y = self.posteriors[0].y_test if test else self.posteriors[0].y_train
     labels = self.posteriors[0].labels
+    is_binary_classes = self.posteriors[0].is_binary_classes
     allV = [X_org, X_crr] + [pos.V_test if test else pos.V_train
                              for pos in self.posteriors]
     assert X_org.shape == X_crr.shape and all(v.shape == X_org.shape for v in allV)
@@ -492,7 +494,13 @@ class ResultsSheet(object):
       ids = np.random.permutation(X_org.shape[0])[:5000]
       allV = [v[ids] for v in allV]
       y = y[ids]
-    y = np.argmax(y, axis=-1)
+
+    if is_binary_classes:
+      y = np.argmax(y, axis=-1)
+    else:
+      y = GMMThresholding().fit_transform(y)
+      y = np.argmax(y, axis=-1)
+
     allV = [log_norm(v) for v in allV]
 
     fig = plt.figure(figsize=(min(20, 5 * ncol) + 2, nrow * 5))
@@ -584,6 +592,9 @@ class ResultsSheet(object):
       ctext(time.time() - start_time, 'lightyellow'))
 
   def plot_scores(self, score_type='imputation', width=0.2):
+    """
+    score_type : 'imputation', 'cluster', 'spearman', 'pearson', 'classifier'
+    """
     start_time = time.time()
 
     fn_score = _get_score_fn(score_type)
@@ -646,7 +657,7 @@ class ResultsSheet(object):
   def save_plots(self, path, dpi=None, separate_files=True):
     save_figures(self.figures, path, dpi, separate_files,
                 clear_figures=True)
-    return self._log("save_plots at path '%s'" % ctext(path, 'lightyellow'))
+    return self
 
   @property
   def figures(self):

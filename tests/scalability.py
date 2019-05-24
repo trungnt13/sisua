@@ -40,10 +40,10 @@ def random_system():
   np.random.permutation(2)
   for i in [1, 0] if bool(args.sisua) else [0, 1]:
     if i == 0:
-      model = Inference(ngene, model='kvae')
+      model = Inference(ngene, model='vae')
       name = "scVAE"
     elif i == 1:
-      model = Inference(ngene, nprotein, model='kmovae')
+      model = Inference(ngene, nprotein, model='movae')
       name = "SISUA"
     # elif i == 2:
     #   model = InferenceSCVI(ngene)

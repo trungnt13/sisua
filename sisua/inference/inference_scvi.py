@@ -72,15 +72,15 @@ def _use_cuda():
 class InferenceSCVI(Inference):
   """ InferenceSCVI """
 
-  def __init__(self, gene_dim, prot_dim=None,
-               model='vae', dispersion='gene-cell',
+  def __init__(self, gene_dim,
+               dispersion='gene-cell',
                xnorm='log', tnorm='raw', ynorm='prob',
                xclip=0, yclip=0,
                xdist='zinb', ydist='bernoulli', zdist='normal',
                xdrop=0.3, edrop=0, zdrop=0, ddrop=0,
                hdim=128, zdim=32, nlayer=2,
                batchnorm=True, analytic=True,
-               kl_weight=1., warmup=400, y_weight=1.,
+               kl_weight=1., warmup=400, y_weight=10.,
                extra_module_path=None,
                **kwargs):
     try:
@@ -88,6 +88,8 @@ class InferenceSCVI(Inference):
     except ImportError as e:
       raise RuntimeError(
           "scVI package at https://github.com/YosefLab/scVI is required")
+    model = kwargs.get('model', 'vae')
+    prot_dim = None
     if model not in ('vae', 'scvi'):
       raise RuntimeError("InferenceSCVI only support 'vae' model")
     if xdist not in ('zinb', 'nb'):

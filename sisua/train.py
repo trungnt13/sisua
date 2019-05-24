@@ -104,7 +104,7 @@ def train(model='vae', ds='pbmc_ly', dispersion='gene-cell',
           hdim=128, zdim=32, nlayer=2,
           xdrop=0.3, edrop=0, ddrop=0, zdrop=0,
           batchnorm=True, analytic=True,
-          kl_weight=1., warmup=400, y_weight=1.,
+          kl_weight=1., warmup=400, y_weight=10.,
           monitor=False, override=False, **kwargs):
   import os
   os.environ['ODIN'] = 'gpu,float32,seed=5218'

@@ -4,6 +4,9 @@ import sys
 import pip
 from setuptools import setup, find_packages
 
+if not (sys.version_info.major == 3 and sys.version_info.minor == 6):
+  raise RuntimeError("Sorry, we only support Python=3.6!")
+
 if float(pip.__version__.split('.')[0]) < 19.0:
   raise RuntimeError(
       "'sisua' package require pip version >= 19.0, your pip version is %s, "
