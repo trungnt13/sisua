@@ -49,7 +49,7 @@ b. Single-cell analysis:
     * `Imputation of genes expression`
     * `Prediction of protein markers`
 c. Advanced technical topics:
-    * `Probabilistic embedding` (*coming soon*)
+    * `Probabilistic embedding`__
     * `Hierarchical modeling` (*coming soon*)
     * `Causal analysis` (*coming soon*)
     * `Cross datasets analysis` (*coming soon*)
@@ -62,6 +62,7 @@ e. Further development:
     * `SISUA 2`__
 
 .. __: https://github.com/trungnt13/sisua/blob/master/tutorials/basics.py
+.. __: https://github.com/trungnt13/sisua/blob/master/tutorials/probabilistic_embedding.py
 .. __: https://github.com/trungnt13/sisua/blob/master/tests/scalability.py
 .. __:
 .. __:
