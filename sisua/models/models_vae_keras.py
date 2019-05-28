@@ -14,8 +14,9 @@ from odin.bay import (MultivariateNormal, ZeroInflatedNegativeBinomial,
                       kl_divergence, ZeroInflated, NegativeBinomial,
                       Bernoulli, Poisson, ZeroInflatedPoisson,
                       update_convert_to_tensor_fn,
-                      Moments, ReduceMean, Stddev, GetAttr)
+                      Moments, ReduceMean, Stddev, GetAttr, Sampling)
 
+from sisua.models.base import BioModel
 from sisua.models.helpers import (get_kl_weight, get_masked_supervision)
 # library size
 # 'L', 'L_stddev'
@@ -31,6 +32,7 @@ from sisua.models.helpers import (get_kl_weight, get_masked_supervision)
 def _layers(hdim, batchnorm=True, n_layers=2,
             input_drop=0, output_drop=0,
             name=''):
+  """ Fast utility for creating the feedforward network """
   layers = []
   for i in range(n_layers):
     if 0. < input_drop < 1.:
@@ -49,6 +51,7 @@ def _layers(hdim, batchnorm=True, n_layers=2,
   return Sequential(layers, name=name)
 
 def _output(n_output, dist, name="OutputNet"):
+  """ Parse output distribution """
   if dist == 'zinb':
     return Sequential([
         Dense(ZeroInflatedNegativeBinomial.params_size(n_output)),
@@ -79,7 +82,12 @@ def _output(n_output, dist, name="OutputNet"):
     raise RuntimeError("No support for distribution: %s" % dist)
 
 def _latent(zdim, n_mcmc_sample, name=None):
-  """ Return: q_Z_given_X or q_Z_given_Y """
+  """ Latent posterior
+
+  Returns
+  -------
+  q_Z_given_X or q_Z_given_Y
+  """
   if name is None:
     name = "Latent"
   return Sequential([
@@ -91,6 +99,7 @@ def _latent(zdim, n_mcmc_sample, name=None):
   ], name=name)
 
 def _pZ(zdim):
+  """ Latent prior """
   return tfd.MultivariateNormalDiag(loc=tf.zeros(shape=zdim),
                                     scale_identity_multiplier=1,
                                     name="p_Z")
@@ -99,6 +108,7 @@ def _outputs(q_Z_given_X, p_X_given_Z,
              loss, metrics,
              q_Z_given_Y=None, q_L_given_X=None,
              p_y_given_Z=None):
+  """ Extract relevant outputs from each component of the network """
   assert is_tensor(loss), "Loss must be a Tensor"
   out = {
       'loss': copy_keras_metadata(
@@ -114,7 +124,11 @@ def _outputs(q_Z_given_X, p_X_given_Z,
         [Moments(variance=False)(q_Z_given_X),
          Moments(variance=False)(q_Z_given_Y)])
     out['Z'] = q_Z_given_XY
+  # this is a tfd.Distribution, a keras.Layer and a tensorflow.Tensor
+  # a bit confusing!
+  out['Z_sample'] = Sampling(name='Z_sample')(q_Z_given_X)
   # reconstructed values
+  out['W_sample'] = Sampling(name='W_sample')(p_X_given_Z)
   out['W'] = ReduceMean(axis=0, name='W')(
       Moments(variance=False)(p_X_given_Z))
   out['W_stddev'] = ReduceMean(axis=0, name='W_stddev')(
@@ -128,98 +142,23 @@ def _outputs(q_Z_given_X, p_X_given_Z,
     out['pi'] = ReduceMean(axis=0, name='pi')(pi)
   if hasattr(p_V, 'count_distribution'):
     p_V = GetAttr('count_distribution')(p_V)
-
+  # denoised outputs
+  out['V_sample'] = Sampling(name='V_sample')(p_V)
   out['V'] = ReduceMean(axis=0, name='V')(
       Moments(variance=False)(p_V))
   out['V_stddev'] = ReduceMean(axis=0, name='V_stddev')(
       Stddev()(p_V))
   # library size
   if q_L_given_X is not None:
+    out['L_sample'] = Sampling(name='L_sample')(q_L_given_X)
     out['L'] = Moments(variance=False, name="L")(q_L_given_X)
     out['L_stddev'] = Stddev("L_stddev")(q_L_given_X)
   # semi-supervised
   if p_y_given_Z is not None:
+    out['y_sample'] = Sampling(name='y_sample')(p_y_given_Z)
     out['y'] = ReduceMean(axis=0, name="y")(
         Moments(variance=False)(p_y_given_Z))
   return out
-
-# ===========================================================================
-# Generalized and simplified BioModel
-# ===========================================================================
-@add_metaclass(ABCMeta)
-class BioModel(object):
-  """ BioModel """
-
-  def __init__(self, weights=None):
-    self._is_initialized = False
-    self.all_weights = weights
-
-  def get_weights(self):
-    # Mistake here, BioModel could contain
-    # a list or dictionary of Layer
-    all_weights = {}
-    for key in dir(self):
-      val = getattr(self, key)
-      if isinstance(val, Layer):
-        all_weights[key] = ('single', val.get_weights())
-      elif isinstance(val, (tuple, list)) and all(isinstance(i, Layer) for i in val):
-        all_weights[key] = ('list', [i.get_weights() for i in val])
-      elif isinstance(val, dict) and all(isinstance(i, Layer) for i in val.values()):
-        all_weights[key] = ('dict', {i: j.get_weights() for i, j in val.items()})
-    return all_weights
-
-  def set_weights(self, weights):
-    for key, (layer_type, val) in weights.items():
-      if layer_type == 'list':
-        layers = getattr(self, key)
-        for l, v in zip(layers, val):
-          l.set_weights(v)
-      elif layer_type == 'dict':
-        layers = getattr(self, key)
-        for name, v in layers.items():
-          layers[name].set_weights(v)
-      elif layer_type == 'single':
-        layer = getattr(self, key)
-        layer.set_weights(val)
-      else:
-        raise RuntimeError(
-            "No support for layer type '%s' of layer '%s'" % (layer_type, key))
-
-  def __call__(self, X, T,
-               L, L_mean, L_var,
-               mask, y,
-               nsample, nepoch, configs):
-    # initialize
-    if not self._is_initialized:
-      self._init(X, T,
-                 L, L_mean, L_var,
-                 mask, y,
-                 nsample, nepoch, configs)
-      self._is_initialized = True
-    # make the call
-    output = self._call(X, T,
-                        L, L_mean, L_var,
-                        mask, y,
-                        nsample, nepoch, configs)
-    # set the weight
-    if self.all_weights is not None:
-      self.set_weights(self.all_weights)
-      self.all_weights = None
-    return output
-
-  @abstractmethod
-  def _init(self, X, T,
-            L, L_mean, L_var,
-            mask, y,
-            nsample, nepoch, configs):
-    raise NotImplementedError
-
-  @abstractmethod
-  def _call(self, X, T,
-            L, L_mean, L_var,
-            mask, y,
-            nsample, nepoch, configs):
-    raise NotImplementedError
 
 # ===========================================================================
 # Main model

@@ -7,8 +7,8 @@ import types
 import pickle
 import inspect
 import warnings
-from six import string_types
 from itertools import chain
+from six import string_types
 from functools import partial
 from collections import OrderedDict, defaultdict
 
@@ -45,18 +45,19 @@ from sisua.label_threshold import ProbabilisticEmbedding
 from ._consts import PREDICTION_BATCH_SIZE
 
 # The following tensors are allowed to return
-possible_outputs = ('Z', # latent space
-                    'loss', # a tensor for training
-                    'metr', # metrics for monitoring
-                    # library size
-                    'L', 'L_stddev',
-                    # W is predicted corrupted count (with dropout)
-                    'W', 'W_stddev',
-                    # V is the cleaned count (without dropout)
-                    'V', 'V_stddev',
-                    'y', # predict values of protein markers
-                    'pi' # the zero inflated rate
-                    )
+possible_outputs = (
+    'Z', 'Z_sample', # latent space
+    'loss', # a tensor for training
+    'metr', # metrics for monitoring
+    # library size
+    'L', 'L_sample', 'L_stddev',
+    # W is predicted corrupted count (with dropout)
+    'W', 'W_sample', 'W_stddev',
+    # V is the cleaned count (without dropout)
+    'V', 'V_sample', 'V_stddev',
+    'y', 'y_sample', # predict values of protein markers
+    'pi' # the zero inflated rate
+)
 
 def _signature_error(args):
   print("Function must contain following arguments:")
@@ -432,6 +433,7 @@ class Inference(BaseEstimator):
           self._other_outputs[output_type][k] = v
       # ====== latent space output ====== #
       Z = outputs['Z']
+      Z_sample = outputs.get('Z_sample', None)
       assert Z.get_shape().as_list()[-1] == int(self.zdim), \
           "Expect %d latent dimension but return Z with shape: %s" % \
           (int(self.zdim), Z.get_shape().as_list())
@@ -452,41 +454,51 @@ class Inference(BaseEstimator):
               "Returned metrics must be scalar, but given: %s" % str(m))
       # ====== library size ====== #
       L_expected = outputs.get('L', None)
+      L_sample = outputs.get('L_sample', None)
       L_stddev = outputs.get('L_stddev', None)
       # ====== reconstructed ====== #
       W_expected = outputs.get('W', None)
+      W_sample = outputs.get('W_sample', None)
       W_stddev = outputs.get('W_stddev', None)
       # ====== imputed ====== #
       V_expected = outputs.get('V', None)
+      V_sample = outputs.get('V_sample', None)
       V_stddev = outputs.get('V_stddev', None)
       # ====== zero-inflated pi ====== #
       pi = outputs.get('pi', None)
       # ====== predicted labels ====== #
       y = outputs.get('y', None)
+      y_sample = outputs.get('y_sample', None)
       if is_verbose():
         print(ctext("'%s' outputs:" % output_type, 'lightyellow'))
         print("   Latent           :", ctext(Z, 'cyan'))
+        print("   Latent (sample)  :", ctext(Z_sample, 'cyan'))
         print("   zero-inflated PI :", ctext(pi, 'cyan'))
-        print("   Label Prediction :", ctext(y, 'cyan'))
+        print(ctext("  Labels:", 'lightyellow'))
+        print("   Prediction       :", ctext(y, 'cyan'))
+        print("   Sample           :", ctext(y_sample, 'cyan'))
         print(ctext("  Library size:", 'lightyellow'))
         print("   L expected       :", ctext(L_expected, 'cyan'))
-        print("   L stddev          :", ctext(L_stddev, 'cyan'))
+        print("   L sample         :", ctext(L_sample, 'cyan'))
+        print("   L stddev         :", ctext(L_stddev, 'cyan'))
         print(ctext("  Reconstruction:", 'lightyellow'))
         print("   W expected       :", ctext(W_expected, 'cyan'))
-        print("   W stddev          :", ctext(W_stddev, 'cyan'))
+        print("   W sample         :", ctext(W_sample, 'cyan'))
+        print("   W stddev         :", ctext(W_stddev, 'cyan'))
         print(ctext("  Imputed:", 'lightyellow'))
         print("   V expected       :", ctext(V_expected, 'cyan'))
-        print("   V stddev          :", ctext(V_stddev, 'cyan'))
+        print("   V sample         :", ctext(V_sample, 'cyan'))
+        print("   V stddev         :", ctext(V_stddev, 'cyan'))
         print(ctext("  Training info:", 'lightyellow'))
         print("   Loss    :", ctext(loss, 'cyan'))
         print("   Metrics :", ctext(metr, 'cyan'))
       self._outputs[output_type] = {
-          'z': Z,
+          'z': Z, 'z_sample': Z_sample,
           'pi': pi,
-          'y': y,
-          'l': L_expected, 'l_stddev': L_stddev,
-          'w': W_expected, 'w_stddev': W_stddev,
-          'v': V_expected, 'v_stddev': V_stddev,
+          'y': y, 'y_sample': y_sample,
+          'l': L_expected, 'l_sample': L_sample, 'l_stddev': L_stddev,
+          'w': W_expected, 'w_sample': W_sample, 'w_stddev': W_stddev,
+          'v': V_expected, 'v_sample': V_sample, 'v_stddev': V_stddev,
           'loss': loss,
           'metr': metr
       }
@@ -522,8 +534,13 @@ class Inference(BaseEstimator):
       for name, tensor in output_iter():
         m = Model(inputs=inputs, outputs=tensor,
                   name="predict_%s" % name)
-        f = partial(m.predict, batch_size=PREDICTION_BATCH_SIZE, verbose=0)
+        if '_sample' in name: # special case for sample
+          # NOTE: no batch support (careful memory)
+          f = m.predict_on_batch
+        else: # other output
+          f = partial(m.predict, batch_size=PREDICTION_BATCH_SIZE, verbose=0)
         self._pred_functions[name] = f
+      # metrics
       self._pred_functions['metrics'] = partial(
           Model(inputs=[i for i in self.input_plhs if i is not None],
                 outputs=metrics,
@@ -1073,6 +1090,35 @@ class Inference(BaseEstimator):
       scores = [np.mean(i) for i in scores]
     return {_normalize_tensor_name(name): s
             for name, s in zip(self._metrics_name, scores)}
+
+  # ******************** sampling function ******************** #
+  def _sample(self, name, X, n_mcmc_samples):
+    output = []
+    for s, e in batching(batch_size=PREDICTION_BATCH_SIZE, n=X.shape[0]):
+      x = X[s:e]
+      output.append(
+          self._make_prediction(pred_type=name, X=x, n_mcmc_samples=n_mcmc_samples))
+    return np.concatenate(output, axis=1)
+
+  def sample_Z(self, X, n_mcmc_samples=1):
+    return self._sample('Z_sample', X, n_mcmc_samples)
+
+  def sample_y(self, X, n_mcmc_samples=1):
+    assert self.is_semi_supervised,\
+    "Only semi-supervised model has this prediction!"
+    return self._sample('y_sample', X, n_mcmc_samples)
+
+  def sample_W(self, X, n_mcmc_samples=1):
+    return self._sample('W_sample', X, n_mcmc_samples)
+
+  def sample_V(self, X, n_mcmc_samples=1):
+    return self._sample('V_sample', X, n_mcmc_samples)
+
+  def sample_L(self, X, n_mcmc_samples=1):
+    try:
+      return self._sample('L_sample', X, n_mcmc_samples)
+    except RuntimeError:
+      return np.sum(self.sample_V(X, n_mcmc_samples), axis=-1, keepdims=True)
 
   # ******************** predicting ******************** #
   def predict_Z(self, X):

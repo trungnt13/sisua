@@ -73,15 +73,15 @@ Toolkits
 We provide binary toolkits for *fast and efficient* analyzing single-cell datasets:
 
 * `sisua-train`__: train single-cell modeling algorithms, support training multiple systems in parallel.
-* `sisua-analyze`__: evaluate, compare, and interpret trained model,
+* `sisua-analyze`__: evaluate, compare, and interpret trained model.
+* `sisua-embed`__: probabilistic embedding for semi-supervised training.
 * `sisua-data`__: *coming soon*
-* `sisua-embed`__: *coming soon*
 
 
-.. __: https://github.com/trungnt13/sisua/blob/master/docs/sisua_train.md
-.. __: https://github.com/trungnt13/sisua/blob/master/docs/sisua_analyze.md
-.. __:
-.. __:
+.. __: https://github.com/trungnt13/sisua/blob/master/bin/README.rst
+.. __: https://github.com/trungnt13/sisua/blob/master/bin/README.rst
+.. __: https://github.com/trungnt13/sisua/blob/master/bin/README.rst
+.. __: https://github.com/trungnt13/sisua/blob/master/bin/README.rst
 
 Some important arguments:
 
