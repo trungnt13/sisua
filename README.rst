@@ -54,7 +54,7 @@ c. Advanced technical topics:
     * `Causal analysis` (*coming soon*)
     * `Cross datasets analysis` (*coming soon*)
 d. Benchmarks:
-    * `Scalability test`
+    * `Scalability test`__
     * `Fine-tuning networks`
     * `Data normalization`
 e. Further development:
@@ -62,6 +62,7 @@ e. Further development:
     * `SISUA 2`__
 
 .. __: https://github.com/trungnt13/sisua/blob/master/tutorials/basics.py
+.. __: https://github.com/trungnt13/sisua/blob/master/tests/scalability.py
 .. __:
 .. __:
 

@@ -22,7 +22,7 @@ from odin.visual import (plot_save, plot_figure, to_axis2D, plot_aspect,
 from sisua.data import get_dataset
 from sisua.data.path import EXP_DIR
 from sisua.inference import Inference
-from sisua.label_threshold import GMMThresholding
+from sisua.label_threshold import ProbabilisticEmbedding
 from sisua.utils import filtering_experiment_path
 from sisua.data.utils import standardize_protein_name
 from sisua.analysis.imputation_benchmarks import (
@@ -498,7 +498,7 @@ class ResultsSheet(object):
     if is_binary_classes:
       y = np.argmax(y, axis=-1)
     else:
-      y = GMMThresholding().fit_transform(y)
+      y = ProbabilisticEmbedding().fit_transform(y)
       y = np.argmax(y, axis=-1)
 
     allV = [log_norm(v) for v in allV]

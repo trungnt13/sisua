@@ -40,7 +40,7 @@ from sisua.data import get_library_size, apply_artificial_corruption
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
 from sisua.data import get_dataset, SingleCellDataset
 from sisua.utils import LearningCurves, plot_monitoring_epoch
-from sisua.label_threshold import GMMThresholding
+from sisua.label_threshold import ProbabilisticEmbedding
 
 from ._consts import PREDICTION_BATCH_SIZE
 
@@ -125,9 +125,9 @@ class Inference(BaseEstimator):
       different strategies for data normalization
       raw - keep the raw data (i.e. count or expression level)
       log - log-normalization
-      bin - using `sisua.label_threshold.GMMThresholding` to convert
+      bin - using `sisua.label_threshold.ProbabilisticEmbedding` to convert
             data to binary format
-      prob - using `sisua.label_threshold.GMMThresholding` to convert
+      prob - using `sisua.label_threshold.ProbabilisticEmbedding` to convert
              data to probability values
 
   xdist : the distribution name for X
@@ -602,7 +602,7 @@ class Inference(BaseEstimator):
       is_binary_classes = sorted(np.unique(x.astype('float32'))) == [0., 1.]
       if not is_binary_classes:
         if data_name not in self._gmm_threshold:
-          gmm = GMMThresholding()
+          gmm = ProbabilisticEmbedding()
           gmm.fit(x)
           self._gmm_threshold[data_name] = gmm
         else:

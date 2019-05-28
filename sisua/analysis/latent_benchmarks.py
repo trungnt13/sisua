@@ -21,7 +21,7 @@ from odin.utils import (ctext, catch_warnings_ignore, one_hot)
 from odin.visual import (plot_figure, plot_scatter_heatmap,
                          to_axis, plot_colorbar)
 
-from sisua.label_threshold import GMMThresholding
+from sisua.label_threshold import ProbabilisticEmbedding
 from sisua.data.utils import standardize_protein_name
 from sisua.data.const import (
     UNIVERSAL_RANDOM_SEED, MARKER_GENES, PROTEIN_PAIR_COMPARISON)
@@ -148,7 +148,7 @@ def streamline_classifier(Z_train, y_train, Z_test, y_test, labels_name,
       is_binary_classes = sorted(np.unique(y_train.astype('float32'))) == [0., 1.]
       # ====== not binary classes ====== #
       if not is_binary_classes:
-        gmm = GMMThresholding()
+        gmm = ProbabilisticEmbedding()
         gmm.fit(np.concatenate((y_train, y_test), axis=0))
         y_train = gmm.predict(y_train)
         y_test = gmm.predict(y_test)
