@@ -44,7 +44,7 @@ def read_CITEseq_CBMC(override=False):
     # ====== extract the data ====== #
     data_dict = {}
     for name, data in crypto.unzip_aes(zip_path, password=_PASSWORD,
-                                       verbose=True):
+                                       verbose=False):
       base_name = os.path.splitext(name)[0]
       if '.npz' in name:
         data = sp.sparse.load_npz(BytesIO(data)).todense()
@@ -55,7 +55,7 @@ def read_CITEseq_CBMC(override=False):
         raise RuntimeError("Unknown format: %s" % name)
       data_dict[base_name] = data
     # ====== post-processing ====== #
-    X = data_dict['X'].astype('float32')
+    X = np.array(data_dict['X'].astype('float32'))
     X_row, X_col = data_dict['X_row'], data_dict['X_col']
     X, X_col = remove_allzeros_columns(matrix=X, colname=X_col)
     assert len(X_row) == X.shape[0] and len(X_col) == X.shape[1]

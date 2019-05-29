@@ -81,7 +81,6 @@ def read_MNIST(override=False):
                       dtype='float32')
     all_classes = np.array(['#%d' % i for i in all_classes],
                            dtype="U")
-    print("All classes:", ctext(all_classes, 'cyan'))
 
     X_train_row = np.array(["image {}".format(i + 1)
                             for i in range(X_train.shape[0])])

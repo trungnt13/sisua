@@ -125,7 +125,6 @@ def read_10xPBMC_PP(override=False):
     all_classes = np.array(sorted(np.unique(labels)),
                            dtype="U")
     cls_2_idx = {c: i for i, c in enumerate(all_classes)}
-    print("All classes:", ctext(all_classes, 'lightcyan'))
     y = one_hot(np.array([cls_2_idx[l] for l in labels]),
                 nb_classes=len(all_classes),
                 dtype='float32')

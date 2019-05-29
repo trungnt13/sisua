@@ -48,7 +48,7 @@ def read_FACS(n_protein, override=False):
     # ====== extract the data ====== #
     data_dict = {}
     for name, data in crypto.unzip_aes(zip_path, password=_PASSWORD,
-                                       verbose=True):
+                                       verbose=False):
       base_name = os.path.splitext(name)[0]
       if '.npz' in name:
         data = sp.sparse.load_npz(BytesIO(data)).todense()

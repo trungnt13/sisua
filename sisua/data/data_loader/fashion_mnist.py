@@ -34,7 +34,6 @@ def _preprocessing_dataset(ds, outpath):
 
   y_train = one_hot(y_train, nb_classes=n_classes)
   y_test = one_hot(y_test, nb_classes=n_classes)
-  print("All classes:", ctext(', '.join(labels), 'cyan'))
 
   X_train = np.concatenate((X_train, X_test), axis=0)
   y_train = np.concatenate((y_train, y_test), axis=0)

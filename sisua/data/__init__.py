@@ -6,6 +6,7 @@ import copy
 import pandas as pd
 from numbers import Number
 from six import string_types
+from collections import OrderedDict
 
 import numpy as np
 from odin.fuel import MmapData
@@ -49,11 +50,11 @@ def get_dataset_meta():
 
       # ====== PBMC ECC ====== #
       'pbmcecc_lyfull': lambda override: read_PBMCeec(subset='ly', override=override, filtered_genes=False),
-      'pbmcecc_myfull': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=False),
+      # 'pbmcecc_myfull': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=False),
       'pbmcecc_ly': lambda override: read_PBMCeec(subset='ly', override=override, filtered_genes=True),
-      'pbmcecc_my': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=True),
-      'pbmcecc': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=True),
-      'pbmcecc_full': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=False),
+      # 'pbmcecc_my': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=True),
+      # 'pbmcecc': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=True),
+      # 'pbmcecc_full': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=False),
 
       # ====== cross PBMC ====== #
       'cross8k_lyfull': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=False, override=override, filtered_genes=False),
@@ -87,6 +88,26 @@ def get_dataset_meta():
       'hemato': read_Hemato,
   }
   return data_meta
+
+def get_dataset_summary(return_html=False):
+  from sisua.data.utils import standardize_protein_name
+  all_datasets = []
+  keywords = []
+  for name, fn in sorted(get_dataset_meta().items()):
+    ds = fn(override=False)
+    info = OrderedDict([
+        ('#Cells', ds['X'].shape[0]),
+        ('#Genes', ds['X'].shape[1]),
+        ('#Labels', ds['y'].shape[1]),
+        ('Binary', sorted(np.unique(ds['y'].astype('float32'))) == [0., 1.]),
+        ('Labels', ', '.join([standardize_protein_name(i) for i in ds['y_col']])),
+    ])
+    all_datasets.append(info)
+    keywords.append(name)
+  df = pd.DataFrame(all_datasets, index=keywords)
+  if return_html:
+    return df.to_html()
+  return df
 
 @cache_memory
 def get_dataset(dataset_name, override=False):

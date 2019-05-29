@@ -18,14 +18,14 @@ fn_dim_reduction = fast_tsne
 
 train_config = dict(
     batch_size=66,
-    n_epoch=250,
+    n_epoch=200,
     detail_logging=True,
 )
 n_samples = 4
 # ===========================================================================
 # Load data
 # ===========================================================================
-ds, gene, prot = get_dataset('cortex')
+ds, gene, prot = get_dataset('pbmcscvi')
 print(ds)
 
 X_train = gene.get_data('train')
@@ -62,7 +62,6 @@ def create_sample(model):
       z_mean=model.predict_Z(X_test),
       z_sample=model.sample_Z(X_test, n_samples),
   )
-  z['z_mean'] = fn_dim_reduction(z['z_mean'])
   return z
 
 scvi = create_sample(model=scvi)
@@ -91,15 +90,26 @@ vs.plot_figure(nrow=12, ncol=18)
 
 # ====== helper plotting ====== #
 def plot_latent(data, idx, title):
+  z_mean = fn_dim_reduction(data['z_mean'])
+
+  # only the mean
   ax = vs.subplot(2, 3, idx)
-  vs.plot_scatter(data['z_mean'], ax=ax, title=title,
+  vs.plot_scatter(z_mean,
+                  ax=ax, title='[Only Mean]' + title,
                   legend_enable=False, **fig_config)
 
+  # mean and sample (single t-SNE)
   ax = vs.subplot(2, 3, idx + 3)
-  for z in tqdm(data['z_sample'], total=n_samples):
-    z = fn_dim_reduction(z)
-    vs.plot_scatter(z, ax=ax, **fig_config1)
-  vs.plot_scatter(data['z_mean'], ax=ax, title=title, **fig_config)
+  z = np.concatenate((np.expand_dims(data['z_mean'], axis=0),
+                      data['z_sample']), axis=0)
+  z = np.reshape(fast_tsne(z.reshape(-1, z.shape[-1])),
+                 z.shape[:-1] + (2,))
+  for i in z[1:]:
+    vs.plot_scatter(i, ax=ax,
+                    legend_enable=False, **fig_config1)
+  vs.plot_scatter(z[0],
+                  ax=ax, title='[Both Mean and Samples]' + title,
+                  legend_enable=True, **fig_config)
 
 # ====== plot ====== #
 plot_latent(data=scvi, idx=1, title='scVI')
