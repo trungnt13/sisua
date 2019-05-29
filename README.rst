@@ -61,7 +61,7 @@ e. Further development:
     * `Roadmap`__
     * `SISUA 2`__
 
-.. __: https://github.com/trungnt13/sisua/blob/master/docs/dataset_description.html
+.. __: https://github.com/trungnt13/sisua/blob/master/docs/dataset_description.md
 .. __: https://github.com/trungnt13/sisua/blob/master/tutorials/basics.py
 .. __: https://github.com/trungnt13/sisua/blob/master/tutorials/probabilistic_embedding.py
 .. __: https://github.com/trungnt13/sisua/blob/master/tests/scalability.py
@@ -108,7 +108,7 @@ Some important arguments:
 
 .. __: https://github.com/trungnt13/sisua/tree/master/sisua/models
 .. __: https://github.com/trungnt13/sisua/tree/master/sisua/data
-.. __: https://github.com/trungnt13/sisua/blob/master/docs/dataset_description.html
+.. __: https://github.com/trungnt13/sisua/blob/master/docs/dataset_description.md
 
 Configuration
 *************

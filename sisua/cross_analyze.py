@@ -18,7 +18,6 @@ from sisua.data import get_dataset, get_dataset_summary
 from sisua.analysis import Posterior
 from sisua.data.utils import standardize_protein_name
 
-
 def cross_analyze(datasets, models, verbose=False):
   datasets = as_tuple(datasets, t=string_types)
   models = as_tuple(models, t=string_types)
