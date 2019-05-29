@@ -13,7 +13,6 @@ from odin.stats import (train_valid_test_split, describe,
                         sparsity_percentage)
 
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
-from sisua.utils.visualization import save_figures
 
 # ===========================================================================
 # Helper

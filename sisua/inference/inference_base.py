@@ -1221,6 +1221,11 @@ class Inference(BaseEstimator):
     return model_id
 
   @property
+  def short_id(self):
+    """ Shorter id, remove all the training configuration """
+    return '_'.join(self.id.split('_')[:-5])
+
+  @property
   def kl_weight(self):
     return float(self._configs['kl_weight'])
 

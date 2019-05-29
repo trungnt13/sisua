@@ -4,25 +4,30 @@ import os
 import shutil
 import pickle
 from six import string_types
+from collections import defaultdict
+from itertools import product
 
 import seaborn as sns
 from matplotlib import pyplot as plt
+from sisua.data import get_dataset, get_dataset_summary
 
 from odin import visual as vs
-from odin.ml import fast_tsne, fast_pca
 from odin.utils import as_tuple, ctext
+from odin.ml import fast_tsne, fast_pca
 
 import numpy as np
 
-from sisua.data import get_dataset, get_dataset_summary
-from sisua.analysis import Posterior
+from sisua.data import get_dataset
+from sisua.data.path import EXP_DIR
 from sisua.data.utils import standardize_protein_name
+from sisua.analysis import Posterior
 
-def cross_analyze(datasets, models, verbose=False):
+def cross_analyze(datasets, outpath, model='movae', verbose=False):
   datasets = as_tuple(datasets, t=string_types)
-  models = as_tuple(models, t=string_types)
   assert len(datasets) > 1, \
   "Require more than one datasets for cross analysis"
+  if not os.path.exists(outpath):
+    os.mkdir(outpath)
   # ====== load datasets ====== #
   all_datasets = {name: get_dataset(name)[0]
                   for name in datasets}
@@ -35,73 +40,88 @@ def cross_analyze(datasets, models, verbose=False):
                               for i in ds['y_col']]),
   ))
   for name, ds in all_datasets.items()]
+  # ====== check gene expression is matching ====== #
+  genes = all_datasets[0][1]['X_col']
+  for name, ds in all_datasets:
+    assert np.all(ds['X_col'] == genes), "Set of training genes mis-match"
   # ====== get the list of all overlapping protein ====== #
   all_proteins = set(all_datasets[0][1]['y_col'])
   for name, ds in all_datasets:
     all_proteins &= set(ds['y_col'])
+  # ====== only select certain protein ====== #
   if verbose:
     print("Datasets       :", ctext(', '.join(datasets), 'yellow'))
-    print("Models         :", ctext(', '.join(models), 'yellow'))
+    print("Model          :", ctext(model, 'yellow'))
     print("Shared proteins:", ctext(', '.join(all_proteins), 'yellow'))
-  exit()
+    for name, ds in all_datasets:
+      print(" ", ctext(name, 'cyan'))
+      print("   X    :", ds['X'].shape)
+      print("   X_col:", ds['X_col'])
+      print("   y    :", ds['y'].shape)
+      print("   y_col:", ', '.join(ds['y_col']))
+  # ====== load all the model ====== #
+  all_models = []
+  for ds_name in datasets:
+    if verbose:
+      print("Search model for dataset '%s' ..." % ctext(ds_name, 'yellow'))
+    exp_path = os.path.join(EXP_DIR, ds_name)
+    for model_name in os.listdir(exp_path):
+      if model_name.split('_')[0] == model:
+        path = os.path.join(exp_path, model_name, 'model.pkl')
+        if os.path.exists(path):
+          with open(path, 'rb') as f:
+            m = pickle.load(f)
+            all_models.append(m)
+            if verbose:
+              print(" ", ctext(m.id, 'cyan'))
+  if verbose:
+    print("%s datasets and %s models => %s experiments" % (
+        ctext(len(all_datasets), 'yellow'),
+        ctext(len(all_models), 'yellow'),
+        ctext(len(all_datasets) * len(all_models), 'yellow'),
+    ))
+  # ====== start generate analysis ====== #
+  for ds_name, ds in all_datasets:
+    y_true = {i: j
+              for i, j in zip(ds['y_col'], ds['y'].T)
+              if i in all_proteins}
+    # preserve the order in all_proteins
+    y_true = np.hstack([y_true[i][:, np.newaxis] for i in all_proteins])
 
-  ids = [i for i, j in enumerate(ds8k['y_col']) if j in all_proteins]
-  ds8k['y'] = ds8k['y'][:, ids]
-  ds8k['y_col'] = np.array(ds8k['y_col'])[ids]
+    # path for the dataset
+    ds_path = os.path.join(outpath, ds_name)
+    if not os.path.exists(ds_path):
+      os.mkdir(ds_path)
 
-  ids = [i for i, j in enumerate(dsecc['y_col']) if j in all_proteins]
-  dsecc['y'] = dsecc['y'][:, ids]
-  dsecc['y_col'] = np.array(dsecc['y_col'])[ids]
+    for infer in all_models:
+      ds_infer = infer.configs['dataset']
+      path = os.path.join(ds_path, '%s_%s.pdf' %
+        (ds_infer.replace('_', ''), infer.short_id))
+      # analysis
+      pos = Posterior(infer, ds=ds)
+      pos.new_figure(
+      ).plot_latents_scatter(size=4
+      ).plot_latents_heatmap(
+      ).plot_correlation_series(
+      )
+      # protein series
+      if infer.is_semi_supervised:
+        y_pred = {i: j
+                  for i, j in zip(dict(all_datasets)[ds_infer]['y_col'],
+                                  infer.predict_y(ds['X']).T)
+                  if i in all_proteins}
+        y_pred = np.hstack([y_pred[i][:, np.newaxis] for i in all_proteins])
+        pos.plot_protein_series(
+            y_true_new=y_true, y_pred_new=y_pred, labels_new=all_proteins)
+      # save plot and show log
+      pos.save_plots(path, dpi=80)
+      if verbose:
+        print("Data:%s - Model:%s" % (
+            ctext(ds_name, 'yellow'),
+            ctext(ds_infer, 'yellow')))
+        print(" Outpath:", ctext(path, 'cyan'))
 
 cross_analyze(datasets=['cross8k_ly', 'crossecc_ly'],
-              models='vae',
+              outpath='/tmp/cross',
+              model='movae',
               verbose=True)
-
-# ===========================================================================
-# Load inferences
-# ===========================================================================
-model_name = 'movae_genecell_Xlog0zinb_Yprob0bernoulli_Traw_Znormal_080spvs1e+02_net02128032_drop30000000_1kl400_alytcT_bnormT_binomial25'
-with open(os.path.join('/home/trung/bio_log/crossecc_ly', model_name, 'model.pkl'), 'rb') as f:
-  infer_pbmcecc = pickle.load(f)
-with open(os.path.join('/home/trung/bio_log/cross8k_ly', model_name, 'model.pkl'), 'rb') as f:
-  infer_pbmc8k = pickle.load(f)
-
-# ===========================================================================
-# Analysis
-# ===========================================================================
-outpath = '/tmp/cross'
-if os.path.exists(outpath):
-  shutil.rmtree(outpath)
-os.mkdir(outpath)
-
-Posterior(infer_pbmcecc, ds=ds8k
-).new_figure(
-).plot_latents_scatter(size=4,
-).plot_latents_heatmap(
-).plot_correlation_series(
-).plot_protein_series(
-).save_plots(os.path.join(outpath, 'modelECC_ds8k.pdf'))
-
-Posterior(infer_pbmcecc, ds=dsecc
-).new_figure(
-).plot_latents_scatter(size=4
-).plot_latents_heatmap(
-).plot_correlation_series(
-).plot_protein_series(
-).save_plots(os.path.join(outpath, 'modelECC_dsECC.pdf'))
-
-Posterior(infer_pbmc8k, ds=ds8k
-).new_figure(
-).plot_latents_scatter(size=4
-).plot_latents_heatmap(
-).plot_correlation_series(
-).plot_protein_series(
-).save_plots(os.path.join(outpath, 'model8k_ds8k.pdf'))
-
-Posterior(infer_pbmc8k, ds=dsecc
-).new_figure(
-).plot_latents_scatter(size=4
-).plot_latents_heatmap(
-).plot_correlation_series(
-).plot_protein_series(
-).save_plots(os.path.join(outpath, 'model8k_dsECC.pdf'))

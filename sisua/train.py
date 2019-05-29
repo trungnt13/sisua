@@ -217,7 +217,7 @@ def main():
 
     processes = []
     for args in multiple_args:
-      print("  \nConfigurations {%s}\n" %
+      print("  \nConfigurations {%s}" %
         ', '.join(['%s:%s' % (i, ctext(j, 'cyan'))
                    for i, j in args]))
       # all new kwargs

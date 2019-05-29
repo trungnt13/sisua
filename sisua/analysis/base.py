@@ -12,8 +12,7 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 from odin.fuel import Dataset
-from odin.backend import log_norm
-from odin.ml import fast_pca, fast_tsne
+from odin.ml import fast_tsne
 from odin.utils import (md5_checksum, as_tuple, flatten_list, catch_warnings_ignore,
                         cache_memory, ctext)
 from odin.visual import (plot_save, plot_figure, to_axis2D, plot_aspect,
@@ -788,7 +787,10 @@ class Posterior(object):
     return OrderedDict([(i, j[score_idx]) for i, j in corr.items()])
 
   # ******************** Protein analysis ******************** #
-  def plot_protein_series(self, test=True, fontsize=10):
+  def plot_protein_series(self, test=True, fontsize=10,
+                          y_true_new=None, y_pred_new=None, labels_new=None):
+    from odin.backend import log_norm
+
     if not self.is_semi_supervised:
       return self
 
@@ -798,9 +800,14 @@ class Posterior(object):
       y_pred, y_true = self.y_pred_train, self.y_train
     if not self.is_binary_classes:
       y_true = log_norm(y_true, axis=1)
-    # y_true = self.preprocessY(y_true)
+    labels = self.protein_name if labels_new is None else labels_new
+    # ====== override provided values ====== #
+    if y_true_new is not None:
+      y_true = y_true_new
+    if y_pred_new is not None:
+      y_pred = y_pred_new
 
-    n_protein = len(self.protein_name)
+    n_protein = len(labels)
     colors = sns.color_palette(n_colors=2)
 
     #######
@@ -859,7 +866,7 @@ class Posterior(object):
 
     if self.is_binary_classes:
       protein_name = ''
-    elif protein_name in self.labels:
+    elif protein_name in self.protein_name:
       idx = [i for i, j in enumerate(self.protein_name)
              if protein_name.strip().lower() in j.strip().lower()][0]
 

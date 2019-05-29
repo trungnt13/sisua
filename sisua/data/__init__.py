@@ -92,10 +92,10 @@ def get_dataset_meta():
 def get_dataset_summary(return_html=False):
   from sisua.data.utils import standardize_protein_name
   all_datasets = []
-  keywords = []
   for name, fn in sorted(get_dataset_meta().items()):
     ds = fn(override=False)
     info = OrderedDict([
+        ('Keyword', name),
         ('#Cells', ds['X'].shape[0]),
         ('#Genes', ds['X'].shape[1]),
         ('#Labels', ds['y'].shape[1]),
@@ -103,13 +103,11 @@ def get_dataset_summary(return_html=False):
         ('Labels', ', '.join([standardize_protein_name(i) for i in ds['y_col']])),
     ])
     all_datasets.append(info)
-    keywords.append(name)
-  df = pd.DataFrame(all_datasets, index=keywords)
+  df = pd.DataFrame(all_datasets)
   if return_html:
     return df.to_html()
   return df
 
-@cache_memory
 def get_dataset(dataset_name, override=False):
   """ Check `get_dataset_meta` for more information
 
