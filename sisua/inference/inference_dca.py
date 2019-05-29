@@ -343,3 +343,19 @@ class InferenceDCA(Inference):
     return self._ae.extra_models['pi'].predict({
         'count': X,
         'size_factors': L}, batch_size=PREDICTION_BATCH_SIZE)
+
+  # ******************** sampling methods ******************** #
+  def sample_Z(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
+
+  def sample_y(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
+
+  def sample_W(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
+
+  def sample_V(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
+
+  def sample_L(self, X, n_mcmc_samples=1):
+    raise NotImplementedError

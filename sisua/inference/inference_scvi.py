@@ -369,3 +369,33 @@ class InferenceSCVI(Inference):
       out = _to_array(out)
       PI.append(out)
     return np.concatenate(PI, axis=0)
+
+  # ******************** sampling function ******************** #
+  def sample_Z(self, X, n_mcmc_samples=1):
+    self._vae.eval()
+    from scvi.inference import Posterior
+    pos = Posterior(model=self._vae, gene_dataset=_create_gene_dataset(X),
+                    shuffle=False, use_cuda=_use_cuda(),
+                    data_loader_kwargs={'batch_size': 64})
+
+    return np.concatenate(
+        [np.expand_dims(pos.get_latent(sample=True)[0], axis=0)
+         for i in range(n_mcmc_samples)], axis=0)
+
+  def sample_y(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
+
+  def sample_W(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
+
+  def sample_V(self, X, n_mcmc_samples=1):
+    self._vae.eval()
+    V = []
+    for x in _create_data_iter(X, log_variational=False):
+      # scVI do log normalization within .inference()
+      out = self._vae.get_sample_rate(x, n_samples=n_mcmc_samples)
+      V.append(_to_array(out))
+    return np.concatenate(V, axis=1)
+
+  def sample_L(self, X, n_mcmc_samples=1):
+    raise NotImplementedError
