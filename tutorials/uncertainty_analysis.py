@@ -1,7 +1,5 @@
 from __future__ import print_function, division, absolute_import
 
-
-from tqdm import tqdm
 import numpy as np
 
 from odin import visual as vs
@@ -14,7 +12,7 @@ from sisua.inference import InferenceSISUA, InferenceSCVI, InferenceSCVAE
 # Configuration
 # ===========================================================================
 SAVE_FIGURE_PATH = '/tmp/tmp.pdf'
-fn_dim_reduction = fast_tsne
+fn_dim_reduction = fast_tsne # or fast_pca
 
 train_config = dict(
     batch_size=66,

@@ -12,7 +12,7 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 from odin.fuel import Dataset
-from odin.ml import fast_tsne
+from odin.ml import fast_tsne, fast_pca
 from odin.utils import (md5_checksum, as_tuple, flatten_list, catch_warnings_ignore,
                         cache_memory, ctext)
 from odin.visual import (plot_save, plot_figure, to_axis2D, plot_aspect,
@@ -280,7 +280,7 @@ class Posterior(object):
     return self
 
   # ******************** Imputation analysis ******************** #
-  def plot_cellsize_series(self, test=True, ax=None, fontsize=10):
+  def plot_cellsize_series(self, test=True, fontsize=10, ax=None):
     ax = to_axis2D(ax)
     if test:
       mean, std, x = self.L_test, self.Lstddev_test, self.X_test_org
@@ -305,7 +305,7 @@ class Posterior(object):
                     ax.get_figure())
     return self
 
-  def plot_correlation_series(self, test=True, fontsize=10):
+  def plot_correlation_series(self, test=True, fontsize=10, fig=None):
     from scipy.stats import pearsonr, spearmanr
     if test:
       v, x, y = self.V_test, self.X_test_org, self.y_test
@@ -320,39 +320,11 @@ class Posterior(object):
     assert len(original_series) == len(imputed_series)
     n_pair = len(imputed_series)
 
-    # for prot_gene in original_series.keys():
-    #   prot_name, gene_name = prot_gene.split('/')
-    #   prot_name = '[Protein]%s' % prot_name
-    #   gene_name = '[Gene]%s' % gene_name
+    if fig is None:
+      fig = plt.figure(figsize=(15, 5 * n_pair), constrained_layout=True)
+    assert isinstance(fig, plt.Figure), \
+    "fig must be instance of matplotlib.Figure"
 
-    #   org, prot = original_series[prot_gene]
-    #   imp, _ = imputed_series[prot_gene]
-    #   assert np.all(prot == _)
-
-    #   figures = []
-    #   for name, gene in zip(("Original", "Imputed"), (org, imp)):
-    #     fig = sns.jointplot(x=prot_name, y=gene_name,
-    #                   data=pd.DataFrame({prot_name: prot, gene_name: gene}),
-    #                   kind="scatter",
-    #                   joint_kws=dict(s=25, alpha=0.6, linewidths=0),
-    #                   marginal_kws=dict(bins=18, rug=True)
-    #     )
-    #     fig = fig.fig
-    #     fig.get_axes()[1].set_title(
-    #         '[%s]Pearson:%.2f Spearman:%.2f' %
-    #         (name, pearsonr(gene, prot)[0], spearmanr(gene, prot).correlation,
-    #     ), fontsize=fontsize)
-    #     figures.append(fig)
-
-    #   from odin import visual as V
-    #   data = np.concatenate([V.fig2data(fig) for fig in figures], axis=0)
-    #   fig = V.data2fig(data)
-    #   V.plot_save()
-    #   exit()
-    # exit()
-
-    fig = plt.figure(figsize=(15, 5 * n_pair),
-                     constrained_layout=True)
     width = 4
     grids = fig.add_gridspec(n_pair, 2 * width)
 
@@ -367,9 +339,13 @@ class Posterior(object):
                                           ("Imputed", imputed_gene))):
         ax = fig.add_subplot(
             grids[idx, width * j: (width * j + width - 1)])
+
+        # plot the points
         ax.scatter(y, series,
                    s=25, alpha=0.6, linewidths=0)
         plot_aspect('auto', 'box', ax)
+
+        # annotations
         ax.set_title('[%s]Pearson:%.2f Spearman:%.2f' % (
             name,
             pearsonr(series, y)[0],
@@ -378,6 +354,7 @@ class Posterior(object):
         ax.set_xlabel('[Protein] %s' % prot_name, fontsize=fontsize)
         ax.set_ylabel('[Gene] %s' % gene_name, fontsize=fontsize)
 
+        # box plot for the distribution
         ax = fig.add_subplot(
             grids[idx, (width * j + width - 1): (width * j + width)])
         ax.boxplot(series)
@@ -817,13 +794,12 @@ class Posterior(object):
       y_true = np.argmax(y_true, axis=-1)
       y_pred = np.argmax(y_pred, axis=-1)
       plot_confusion_matrix(cm=confusion_matrix(y_true, y_pred),
-        labels=self.protein_name, colorbar=True,
+        labels=labels, colorbar=True,
         fontsize=fontsize)
     #######
     else:
       fig = plt.figure(figsize=(12, n_protein * 4))
-      for cidx, (name, pred, true) in enumerate(
-          zip(self.protein_name, y_pred.T, y_true.T)):
+      for cidx, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):
         assert pred.shape == true.shape
         ids = np.argsort(true)
 
@@ -857,37 +833,49 @@ class Posterior(object):
     self.add_figure('protein_series_%s' % ('test' if test else 'train'), fig)
     return self
 
-  def plot_protein_scatter(self, test=True, protein_name='CD4'):
+  def plot_protein_scatter(self, test=True, pca=False, protein_name='CD4',
+                           fig=None,
+                           y_true_new=None, y_pred_new=None, labels_new=None):
     if not self.is_semi_supervised:
       return self
+
+    fn_dim = fast_pca if pca else fast_tsne
     data_type = 'test' if test else 'train'
-    protein_name = standardize_protein_name(protein_name)
+    protein_name = standardize_protein_name(protein_name).strip().lower()
     fig_name = 'protein_scatter_%s_%s' % (data_type, protein_name)
 
-    if self.is_binary_classes:
-      protein_name = ''
-    elif protein_name in self.protein_name:
-      idx = [i for i, j in enumerate(self.protein_name)
-             if protein_name.strip().lower() in j.strip().lower()][0]
+    labels = self.protein_name if labels_new is None else labels_new
+    labels = [i.strip().lower() for i in labels]
 
+    if y_true_new is None:
       y_true = self.y_test if test else self.y_train
-      y_true = y_true[:, idx]
-
+    else:
+      y_true = y_true_new
+    if y_pred_new is None:
       y_pred = self.y_pred_test if test else self.y_pred_train
+    else:
+      y_pred = y_pred_new
+
+    if protein_name in labels:
+      idx = [i for i, j in enumerate(labels) if protein_name in j][0]
+      y_true = y_true[:, idx]
       y_pred = y_pred[:, idx]
 
       Z = self.Z_test if test else self.Z_train
       V = self.V_test if test else self.V_train
 
-      fig = plot_figure(10, 10)
+      if fig is None:
+        fig = plot_figure(10, 10)
+      assert isinstance(fig, plt.Figure), \
+      "fig must be instance of matplotlib.Figure"
 
-      x = fast_tsne(Z)
+      x = fn_dim(Z)
       ax = plot_scatter_heatmap(x, val=y_true, ax=221, grid=False, colorbar=True)
       ax.set_xlabel('Latent/Original')
       ax = plot_scatter_heatmap(x, val=y_pred, ax=222, grid=False, colorbar=True)
       ax.set_xlabel('Latent/Predicted')
 
-      x = fast_tsne(V)
+      x = fn_dim(V)
       ax = plot_scatter_heatmap(x, val=y_true, ax=223, grid=False, colorbar=True)
       ax.set_xlabel('Input/Original')
       ax = plot_scatter_heatmap(x, val=y_pred, ax=224, grid=False, colorbar=True)
@@ -897,6 +885,20 @@ class Posterior(object):
       with catch_warnings_ignore(UserWarning):
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
       self.add_figure(fig_name, fig)
+    return self
+
+  # ******************** setter ******************** #
+  def set_mcmc_samples(self, n):
+    self._n_mcmc_samples = int(n)
+    return self
+
+  def set_labels(self, y_train=None, y_test=None,
+                 y_train_pred=None, y_test_pred=None,
+                 labels=None):
+    """ This can override the provided protein labels, helpful
+    when running the trained model on different dataset for
+    cross-dataset validation """
+    raise NotImplementedError
     return self
 
   # ******************** properties ******************** #
@@ -909,10 +911,6 @@ class Posterior(object):
               for k, v in self._figures.items()), \
     "Invalid stored Figures"
     return self._figures
-
-  def set_mcmc_samples(self, n):
-    self._n_mcmc_samples = int(n)
-    return self
 
   @property
   def gene_name(self):
