@@ -327,9 +327,9 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
     if not use_PCA:
       Z = fast_tsne(Z, n_components=2, perplexity=30.0,
                     learning_rate=200, n_iter=1000,
-                    random_state=52181208, n_jobs=8)
+                    random_state=87654321, n_jobs=8)
     else:
-      Z = fast_pca(Z, n_components=2, random_state=52181208)
+      Z = fast_pca(Z, n_components=2, random_state=87654321)
 
   # ====== select proteins ====== #
   def logit(p):
@@ -401,9 +401,9 @@ def plot_latents_binary(Z, y, labels_name, title=None,
     if not use_PCA:
       Z = fast_tsne(Z, n_components=2, perplexity=30.0,
                     learning_rate=200, n_iter=1000,
-                    random_state=52181208, n_jobs=8)
+                    random_state=87654321, n_jobs=8)
     else:
-      Z = fast_pca(Z, n_components=2, random_state=52181208)
+      Z = fast_pca(Z, n_components=2, random_state=87654321)
   # ====== clustering metrics ====== #
   scores = clustering_scores(
       latent=Z, labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,

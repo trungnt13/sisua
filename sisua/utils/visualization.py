@@ -50,7 +50,7 @@ def downsample_data(*X):
                if x is not None))
   assert len(_) == 1, "Inconsistent shape[0] for X and y"
   num_samples = _[0]
-  _RAND = np.random.RandomState(seed=52181208)
+  _RAND = np.random.RandomState(seed=87654321)
   # ====== Downsample if the data is huge ====== #
   if num_samples > 8000:
     print("[Warning] Given: %s; downsample to 8000 samples" %
@@ -221,7 +221,7 @@ def plot_evaluate_reconstruction(X, W, y_raw, y_prob,
 
   # ====== Compare image ====== #
   if enable_image:
-    _RAND = np.random.RandomState(seed=52181208)
+    _RAND = np.random.RandomState(seed=87654321)
     n_img = 12
     n_img_row = min(3, X.shape[0] // n_img)
     n_row_per_row = 2 if pi is None else 3
@@ -263,9 +263,9 @@ def plot_evaluate_reconstruction(X, W, y_raw, y_prob,
   if enable_tsne:
     def pca_and_tsne(x, w):
       x_pca, w_pca = fast_pca(x, w, n_components=512,
-                              random_state=52181208)
-      x_tsne = fast_tsne(x_pca, n_components=2, random_state=52181208)
-      w_tsne = fast_tsne(w_pca, n_components=2, random_state=52181208)
+                              random_state=87654321)
+      x_tsne = fast_tsne(x_pca, n_components=2, random_state=87654321)
+      w_tsne = fast_tsne(w_pca, n_components=2, random_state=87654321)
       return x_pca[:, :2], x_tsne, w_pca[:, :2], w_tsne
     # transforming the data
     (X_cell_pca, X_cell_tsne,

@@ -129,7 +129,7 @@ For example:
   os.environ['SISUA_DATA'] = '/tmp/bio_data'
   os.environ['SISUA_EXP'] = '/tmp/bio_log'
 
-  from sisua import EXP_DIR, DATA_DIR
+  from sisua.data import EXP_DIR, DATA_DIR
 
   print(DATA_DIR) # /tmp/bio_data
   print(EXP_DIR)  # /tmp/bio_log
@@ -141,4 +141,5 @@ or you could set the variables in advance:
   export SISUA_DATA=/tmp/bio_data
   export SISUA_EXP=/tmp/bio_log
   python sisua/train.py
+  # or using the provided toolkit: sisua-train
 

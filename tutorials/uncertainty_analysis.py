@@ -6,6 +6,7 @@ from odin import visual as vs
 from odin.ml import fast_tsne, fast_pca
 
 from sisua.data import get_dataset
+from sisua.label_threshold import ProbabilisticEmbedding
 from sisua.inference import InferenceSISUA, InferenceSCVI, InferenceSCVAE
 
 # ===========================================================================
@@ -20,10 +21,13 @@ train_config = dict(
     detail_logging=True,
 )
 n_samples = 4
+
+# maximum amount of data points for testing (visualization)
+n_samples_visualization = 2000
 # ===========================================================================
 # Load data
 # ===========================================================================
-ds, gene, prot = get_dataset('pbmcscvi')
+ds, gene, prot = get_dataset('pbmc8k_ly')
 print(ds)
 
 X_train = gene.get_data('train')
@@ -34,8 +38,21 @@ y_test = prot.get_data('test')
 
 labels = ds['y_col']
 print("Labels:", ', '.join(labels))
+
+# ====== preprocessing the labels ====== #
+if not prot.is_binary:
+  pb = ProbabilisticEmbedding()
+  pb.fit(y_test)
+  y_test = pb.predict_proba(y_test)
 y_test = np.array([labels[int(i)]
                    for i in np.argmax(y_test, axis=1)])
+
+# ====== downsampling if necessary ====== #
+np.random.seed(5218)
+ids = np.random.permutation(X_test.shape[0])[:n_samples_visualization]
+X_test = X_test[ids]
+y_test = y_test[ids]
+
 # ===========================================================================
 # Create the inference
 # ===========================================================================
