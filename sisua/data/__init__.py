@@ -19,7 +19,7 @@ from sisua.data.path import EXP_DIR
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
 from sisua.data.utils import validating_dataset
 from sisua.data.single_cell_dataset import (
-    apply_artificial_corruption, get_library_size, SingleCellDataset)
+    apply_artificial_corruption, get_library_size, SingleCellOMICS)
 
 def get_dataset_meta():
   from sisua.data.data_loader.pbmc_CITEseq import read_CITEseq_PBMC
@@ -33,7 +33,8 @@ def get_dataset_meta():
       read_Cortex, read_Hemato, read_PBMC, read_Retina)
   from sisua.data.data_loader.pbmc8k import read_PBMC8k
   from sisua.data.data_loader.pbmcecc import read_PBMCeec
-  from sisua.data.experimental_data.pbmc_8k_ecc_ly import read_PBMC_ecc_to_8k
+  from sisua.data.experimental_data.pbmc_8k_ecc_ly import (
+      read_PBMCcross_ecc_8k, read_PBMCcross_remove_protein)
 
   data_meta = {
       # ====== PBMC 10x ====== #
@@ -57,11 +58,24 @@ def get_dataset_meta():
       # 'pbmcecc_full': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=False),
 
       # ====== cross PBMC ====== #
-      'cross8k_lyfull': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=False, override=override, filtered_genes=False),
-      'cross8k_ly': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=False, override=override, filtered_genes=True),
+      'cross8k_lyfull': lambda override: read_PBMCcross_ecc_8k(subset='ly', return_ecc=False, override=override, filtered_genes=False),
+      'cross8k_ly': lambda override: read_PBMCcross_ecc_8k(subset='ly', return_ecc=False, override=override, filtered_genes=True),
 
-      'crossecc_lyfull': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=True, override=override, filtered_genes=False),
-      'crossecc_ly': lambda override: read_PBMC_ecc_to_8k(subset='ly', return_ecc=True, override=override, filtered_genes=True),
+      'crossecc_lyfull': lambda override: read_PBMCcross_ecc_8k(subset='ly', return_ecc=True, override=override, filtered_genes=False),
+      'crossecc_ly': lambda override: read_PBMCcross_ecc_8k(subset='ly', return_ecc=True, override=override, filtered_genes=True),
+
+      'cross8k_nocd4': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=False, override=override, filtered_genes=True, remove_protein='CD4'),
+      'crossecc_nocd4': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=True, override=override, filtered_genes=True, remove_protein='CD4'),
+
+      'cross8k_nocd8': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=False, override=override, filtered_genes=True, remove_protein='CD8'),
+      'crossecc_nocd8': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=True, override=override, filtered_genes=True, remove_protein='CD8'),
+
+      'cross8k_nocd48': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=False, override=override, filtered_genes=True, remove_protein=['CD4', 'CD8']),
+      'crossecc_nocd48': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=True, override=override, filtered_genes=True, remove_protein=['CD4', 'CD8']),
+
+      'cross8k_onlycd8': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=False, override=override, filtered_genes=True,
+                                                                        remove_protein=['CD3', 'CD4', 'CD16', 'CD56', 'CD19',
+                                                                                        'CD25', 'CD45RA', 'CD45RO', 'PD-1', 'TIGIT', 'CD127']),
 
       # ====== CITEseq ====== #
       'pbmc_citeseq': read_CITEseq_PBMC,
@@ -114,8 +128,8 @@ def get_dataset(dataset_name, override=False):
   Return
   ------
   dataset: `odin.fuel.dataset.Dataset` contains original data
-  cell_gene: instance of `sisua.data.SingleCellDataset` for cell-gene matrix
-  cell_protein: instance of `sisua.data.SingleCellDataset` for cell-protein matrix
+  cell_gene: instance of `sisua.data.SingleCellOMICS` for cell-gene matrix
+  cell_protein: instance of `sisua.data.SingleCellOMICS` for cell-protein matrix
   """
   data_meta = get_dataset_meta()
   # ====== special case: get all dataset ====== #
@@ -127,11 +141,11 @@ def get_dataset(dataset_name, override=False):
   ds = data_meta[dataset_name](override=override)
   validating_dataset(ds)
   # ====== get particular dataset ====== #
-  cell_gene = SingleCellDataset(
-      data=ds['X'], rowname=ds['X_row'], colname=ds['X_col'])
+  cell_gene = SingleCellOMICS(
+      matrix=ds['X'], rowname=ds['X_row'], colname=ds['X_col'])
 
-  cell_prot = SingleCellDataset(
-      data=ds['y'], rowname=ds['X_row'], colname=ds['y_col'])
+  cell_prot = SingleCellOMICS(
+      matrix=ds['y'], rowname=ds['X_row'], colname=ds['y_col'])
 
   assert cell_gene.md5 == cell_prot.md5
   # ******************** return ******************** #
@@ -213,7 +227,7 @@ def PBMC8k_myeloid(filtered_genes=True):
       'pbmc8k_my' if filtered_genes else 'pbmc8k_myfull')[0]
 
 def PBMC8k(filtered_genes=True):
-  """ PBMC 8k"""
+  """ PBMC 8k """
   return get_dataset(
       'pbmc8k' if filtered_genes else 'pbmc8k_full')[0]
 
@@ -241,3 +255,13 @@ def CROSS8k_lymphoid(filtered_genes=True):
 def CROSSecc_lymphoid(filtered_genes=True):
   return get_dataset(
       'crossecc_ly' if filtered_genes else 'crossecc_lyfull')[0]
+
+# ====== cross dataset without specific proteins ====== #
+def CROSS8k_noCD4():
+  return get_dataset('cross8k_nocd4')[0]
+
+def CROSS8k_noCD8():
+  return get_dataset('cross8k_nocd8')[0]
+
+def CROSS8k_noCD48():
+  return get_dataset('cross8k_nocd48')[0]

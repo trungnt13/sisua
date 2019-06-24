@@ -79,10 +79,23 @@ def get_all_posteriors(path_or_dataset, incl=[], excl=[], fn_filter=None,
 # The Posterior
 # ===========================================================================
 class Posterior(object):
-  """ Posterior """
+  """ Posterior
 
-  def __init__(self, path_or_infer,
-               ds_name=None, ds=None,
+  Parameters
+  ----------
+  path_or_infer : {sisua.inference.Inference, string}
+
+  ds : {string, odin.fuel.Dataset}
+
+  n_mcmc_samples : int
+    number of MCMC samples for evaluation
+
+  verbose : bool
+    turn on verbose
+
+  """
+
+  def __init__(self, path_or_infer, ds=None,
                n_mcmc_samples=100, verbose=False):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
@@ -109,10 +122,10 @@ class Posterior(object):
     assert self._infer.is_fitted, \
     "Only fitted model can create a Posterior"
     # ====== dataset name ====== #
-    if ds_name is None and ds is None:
-      ds_name = self._infer.configs.get('dataset', None)
-    if isinstance(ds_name, string_types):
-      self._ds, gene_ds, prot_ds = _fast_load_dataset(ds_name)
+    if ds is None:
+      ds = self._infer.configs.get('dataset', None)
+    if isinstance(ds, string_types):
+      self._ds, gene_ds, prot_ds = _fast_load_dataset(ds)
       X_train_org = gene_ds.get_data(data_type='train')
       X_test_org = gene_ds.get_data(data_type='test')
       y_train = prot_ds.get_data(data_type='train')
@@ -142,6 +155,7 @@ class Posterior(object):
       gene_name = np.array([str(i) for i in ds['X_col']])\
       if 'X_col' in ds else \
       ['Gene#%d' % i for i in range(X_train_org.shape[1])]
+
       if y_train is not None:
         prot_name = np.array([str(i) for i in ds['y_col']])\
         if 'y_col' in ds else \
@@ -152,12 +166,14 @@ class Posterior(object):
       raise ValueError("ds_name must be string_types, " +
         "ds must be instance of odin.fuel.Dataset or dictionary")
 
+    # prepare the corrupted data
     X_train = apply_artificial_corruption(X_train_org,
         dropout=self.infer.corruption_rate,
         distribution=self.infer.corruption_dist)
     X_test = apply_artificial_corruption(X_test_org,
         dropout=self.infer.corruption_rate,
         distribution=self.infer.corruption_dist)
+
     # validate the dimension
     assert (self.infer.gene_dim ==
             X_train.shape[1] == X_test.shape[1] ==
@@ -173,9 +189,11 @@ class Posterior(object):
     self._y_train = np.asarray(y_train)
     self._y_test = np.asarray(y_test)
 
+    # gene and protein name
     self._gene_name = gene_name
     self._prot_name = [standardize_protein_name(i)
                        for i in prot_name]
+
     # ====== MCMC ====== #
     self._n_mcmc_samples = int(n_mcmc_samples)
 

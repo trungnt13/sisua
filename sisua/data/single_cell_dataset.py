@@ -7,6 +7,7 @@ import numpy as np
 
 from odin.fuel import MmapData
 from odin import visual as vs
+from odin.visual import Visualizer
 from odin.utils import ctext, cache_memory
 from odin.utils.crypto import md5_checksum
 from odin.stats import (train_valid_test_split, describe,
@@ -92,21 +93,23 @@ def get_library_size(X, return_library_size=False):
 
 
 # ===========================================================================
-# Main class
+# OMICS
 # ===========================================================================
-class SingleCellDataset(object):
-  """ SingleCellDataset """
+class SingleCellOMICS(Visualizer):
+  """ SingleCellOMICS
+
+  """
   TRAIN_PERCENTAGE = 0.9
 
-  def __init__(self, data, rowname=None, colname=None):
-    super(SingleCellDataset, self).__init__()
-    assert data.ndim == 2, "data must be a matrix [n_cells, n_features]"
+  def __init__(self, matrix, rowname=None, colname=None):
+    super(SingleCellOMICS, self).__init__()
+    assert matrix.ndim == 2, "data must be a matrix [n_cells, n_features]"
     if rowname is None:
-      rowname = ['Sample#%d' % i for i in range(data.shape[0])]
+      rowname = ['Sample#%d' % i for i in range(matrix.shape[0])]
     if colname is None:
-      colname = ['Feature#%d' % i for i in range(data.shape[1])]
+      colname = ['Feature#%d' % i for i in range(matrix.shape[1])]
     # ====== check zero and one columns ====== #
-    s = data.sum(0)
+    s = matrix.sum(0)
     assert np.all(s > 1), \
     "All columns sum must be greater than 1 " + \
     "(i.e. non-zero and > 1 for train, test splitting)"
@@ -116,17 +119,17 @@ class SingleCellDataset(object):
     row = np.array(rowname)
     md5 = [None, None]
     # prepare the data
-    if isinstance(data, MmapData):
-      data = data[:]
-    data = data.astype('float32')
-    # split train, test
+    if isinstance(matrix, MmapData):
+      matrix = matrix[:]
+    data = matrix.astype('float32')
+    # ====== split train, test ====== #
     rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
     ids = rand.permutation(data.shape[0])
     # try splitting again until get all non-zeros columns
     # in both training an testing set
     train_ids, test_ids = train_valid_test_split(
         x=ids,
-        train=SingleCellDataset.TRAIN_PERCENTAGE,
+        train=SingleCellOMICS.TRAIN_PERCENTAGE,
         inc_test=False, seed=rand.randint(10e8))
     train_ids = np.array(train_ids)
     test_ids = np.array(test_ids)
@@ -365,7 +368,8 @@ class SingleCellDataset(object):
     return np.sum(X, axis=0)
 
   # ******************** plotting helper ******************** #
-  def plot_percentile_histogram(self, n_hist, title=None, outlier=0.001):
+  def plot_percentile_histogram(self, n_hist, title=None, outlier=0.001,
+                                non_zeros=False, fig=None):
     """ Data is chopped into multiple percentile (`n_hist`) and the
     histogram is plotted for each percentile.
 
@@ -374,11 +378,15 @@ class SingleCellDataset(object):
     arr = np.concatenate(
         [self.get_data(data_type='train'), self.get_data(data_type='test')],
         axis=0)
+    if non_zeros:
+      arr = arr[arr != 0]
 
     n_percentiles = n_hist + 1
     n_col = 5
     n_row = int(np.ceil(n_hist / n_col))
-    fig = vs.plot_figure(nrow=int(n_row * 1.5), ncol=20)
+    if fig is None:
+      fig = vs.plot_figure(nrow=int(n_row * 1.5), ncol=20)
+    self.assert_figure(fig)
     percentile = np.linspace(start=np.min(arr),
                              stop=np.max(arr),
                              num=n_percentiles)
@@ -388,14 +396,16 @@ class SingleCellDataset(object):
       max_mask = arr <= p_max
       mask = np.logical_and(min_mask, max_mask)
       a = arr[mask]
-      vs.plot_histogram(a, bins=120, ax=(n_row, n_col, i + 1),
-                       fontsize=8,
-                       color='red' if len(a) / n_samples < outlier else 'blue',
-                       title=("[%s]" % title if i == 0 else "") +
-                       "%d(samples)  Range:[%g, %g]" %
-                       (len(a), p_min, p_max))
+      _, bins = vs.plot_histogram(a, bins=120, ax=(n_row, n_col, i + 1),
+                             fontsize=8,
+                             color='red' if len(a) / n_samples < outlier else 'blue',
+                             title=("[%s]" % title if i == 0 else "") +
+                             "%d(samples)  Range:[%g, %g]" %
+                             (len(a), p_min, p_max))
+      plt.gca().set_xticks(np.linspace(np.min(bins), np.max(bins), num=8))
     plt.tight_layout()
-    return fig
+    self.add_figure('percentile_%dhistogram' % n_hist, fig)
+    return self
 
   # ******************** logging ******************** #
   def __str__(self):

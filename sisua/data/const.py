@@ -15,7 +15,6 @@ PROTEIN_PAIR_COMPARISON = [
     ('TIGIT', 'CD127'),
 ]
 
-
 # Mapping from protein to gene expression
 # CCR5
 # CCR7
