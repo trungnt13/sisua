@@ -433,3 +433,12 @@ class SingleCellOMICS(Visualizer):
     s += "  test  :" + ctext('%-15s' % str(test.shape), 'cyan') + describe(test, shorten=True)
 
     return s
+
+# ===========================================================================
+# Single Cell dataset
+# ===========================================================================
+class SingleCellDataset(object):
+  """ SingleCellDataset """
+
+  def __init__(self):
+    super(SingleCellDataset, self).__init__()

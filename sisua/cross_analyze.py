@@ -82,9 +82,9 @@ def _analyze(ds_name, model_path, outpath,
   with catch_warnings_ignore(RuntimeWarning):
     # analysis
     pos.new_figure(
-    ).plot_latents_scatter(size=4
-    ).plot_latents_heatmap(
-    ).plot_correlation_series()
+    ).plot_latents_binary_scatter(size=4
+    ).plot_latents_distance_heatmap(
+    ).plot_correlation_marker_pairs()
     # protein series
     if infer.is_semi_supervised:
       y_pred = {i: j
@@ -93,7 +93,7 @@ def _analyze(ds_name, model_path, outpath,
                 if i in all_proteins}
       y_pred = np.hstack([y_pred[i][:, np.newaxis]
                           for i in all_proteins])
-      pos.plot_protein_series(
+      pos.plot_protein_predicted_series(
           y_true_new=y_true, y_pred_new=y_pred, labels_new=all_proteins)
       for prot_name in all_proteins:
         pos.plot_protein_scatter(protein_name=prot_name,

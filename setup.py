@@ -21,7 +21,7 @@ with open('README.rst') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai==0.2.0",
+    "odin-ai==0.3.0",
     "seaborn>=0.9",
     "pandas",
     "dca==0.2.2",
@@ -59,6 +59,6 @@ setup(
     packages=find_packages(),
     test_suite='tests',
     url='https://github.com/trungnt13/sisua',
-    version='0.2.0',
+    version='0.3.0',
     zip_safe=False,
 )

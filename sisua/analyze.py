@@ -127,11 +127,11 @@ def analyze(dataset_name, models, incl, excl,
   res.plot_imputation_scatter(test=False, pca=True, color_by_library=False)
   res.plot_imputation_scatter(test=True, pca=True, color_by_library=False)
 
-  res.plot_correlation_series(test=False)
-  res.plot_correlation_series(test=True)
+  res.plot_correlation_marker_pairs(test=False)
+  res.plot_correlation_marker_pairs(test=True)
 
-  res.plot_latents_scatter(test=False)
-  res.plot_latents_scatter(test=True)
+  res.plot_latents_binary_scatter(test=False)
+  res.plot_latents_binary_scatter(test=True)
 
   res.save_plots(outpath, separate_files=True)
 

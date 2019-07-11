@@ -90,11 +90,12 @@ def train_and_evaluate(ds_name, exp_name):
   ).save_plots(
       os.path.join(FIGURE_PATH, 'learning_curves_%s.pdf' % exp_name))
 
-  res.plot_correlation_series(
+  res.plot_correlation_marker_pairs(
   ).save_plots(
       os.path.join(FIGURE_PATH, 'correlation8k_%s.pdf' % exp_name))
 
-  res.plot_latents_scatter(
+  res.plot_latents_binary_scatter(test=False
+  ).plot_latents_binary_scatter(test=True
   ).save_plots(
       os.path.join(FIGURE_PATH, 'latent8k_%s.pdf' % exp_name))
 
@@ -108,11 +109,12 @@ def train_and_evaluate(ds_name, exp_name):
 
   res = ResultsSheet(pos, verbose=True)
 
-  res.plot_correlation_series(
+  res.plot_correlation_marker_pairs(
   ).save_plots(
       os.path.join(FIGURE_PATH, 'correlationECC_%s.pdf' % exp_name))
 
-  res.plot_latents_scatter(
+  res.plot_latents_binary_scatter(test=False
+  ).plot_latents_binary_scatter(test=True
   ).save_plots(
       os.path.join(FIGURE_PATH, 'latentECC_%s.pdf' % exp_name))
 
@@ -130,5 +132,4 @@ jobs = [('cross8k_' + i, i)
         for i in ('onlycd8', 'ly', 'nocd48', 'nocd4', 'nocd8')]
 p = Pool(processes=3)
 p.starmap(train_and_evaluate, jobs)
-p.join()
 p.close()

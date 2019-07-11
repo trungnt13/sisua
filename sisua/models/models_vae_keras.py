@@ -14,7 +14,7 @@ from odin.bay import (MultivariateNormal, ZeroInflatedNegativeBinomial,
                       kl_divergence, ZeroInflated, NegativeBinomial,
                       Bernoulli, Poisson, ZeroInflatedPoisson,
                       update_convert_to_tensor_fn,
-                      Moments, ReduceMean, Stddev, GetAttr, Sampling)
+                      Moments, ReduceMean, Stddev, GetDistributionAttr, Sampling)
 
 from sisua.models.base import BioModel
 from sisua.models.helpers import (get_kl_weight, get_masked_supervision)
@@ -136,12 +136,12 @@ def _outputs(q_Z_given_X, p_X_given_Z,
   # get the denoised
   p_V = p_X_given_Z
   if isinstance(p_V, tfd.Independent):
-    p_V = GetAttr('distribution')(p_X_given_Z)
+    p_V = GetDistributionAttr('distribution')(p_X_given_Z)
   if isinstance(p_V, ZeroInflated):
-    pi = GetAttr('inflated_distribution.probs')(p_V)
+    pi = GetDistributionAttr('inflated_distribution.probs')(p_V)
     out['pi'] = ReduceMean(axis=0, name='pi')(pi)
   if hasattr(p_V, 'count_distribution'):
-    p_V = GetAttr('count_distribution')(p_V)
+    p_V = GetDistributionAttr('count_distribution')(p_V)
   # denoised outputs
   out['V_sample'] = Sampling(name='V_sample')(p_V)
   out['V'] = ReduceMean(axis=0, name='V')(

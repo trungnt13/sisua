@@ -81,7 +81,7 @@ class InferenceSCVI(Inference):
                hdim=128, zdim=32, nlayer=2,
                batchnorm=True, analytic=True,
                kl_weight=1., warmup=400, y_weight=10.,
-               extra_module_path=None,
+               extra_module_path=None, no_library_size=False,
                **kwargs):
     try:
       import scvi
@@ -101,7 +101,7 @@ class InferenceSCVI(Inference):
     if tnorm not in ('raw',):
       raise ValueError(
           "Only support raw count target value for scVI")
-    self._name = 'scvi'
+    self._name = 'scvinl' if no_library_size else 'scvi'
     # ====== others ====== #
     self._history = {'train': defaultdict(list),
                      'valid': defaultdict(list)}
@@ -122,6 +122,11 @@ class InferenceSCVI(Inference):
     self._corruption_rate = None
     self._corruption_dist = None
     self._initialize_model()
+    self._no_library_size = bool(no_library_size)
+
+  @property
+  def no_library_size(self):
+    return self._no_library_size
 
   # ******************** pickling ******************** #
   def _initialize_model(self, weights=None):
@@ -144,10 +149,10 @@ class InferenceSCVI(Inference):
     torch.save(self._vae.state_dict(), weights)
     weights.seek(0)
     weights = weights.read()
-    return states, weights
+    return states, weights, self._no_library_size
 
   def __setstate__(self, states):
-    states, weights = states
+    states, weights, self._no_library_size = states
     self.set_states(states)
     self._initialize_model(weights=weights)
 
@@ -297,6 +302,8 @@ class InferenceSCVI(Inference):
        qz_m, qz_v, z,
        ql_m, ql_v, library) = self._vae.inference(
           x, batch_index=None, y=None, n_samples=n_mcmc_samples)
+      if self.no_library_size:
+        px_rate = px_scale * x.sum(1).unsqueeze(1)
       w = (1 - px_dropout) * px_rate
       w = w.mean(0)
       W.append(_to_array(w))
@@ -328,7 +335,11 @@ class InferenceSCVI(Inference):
     V = []
     for x in _create_data_iter(X, log_variational=False):
       # scVI do log normalization within .inference()
-      out = self._vae.get_sample_rate(x, n_samples=n_mcmc_samples).mean(0)
+      if self._no_library_size:
+        out = self._vae.get_sample_scale(x, n_samples=n_mcmc_samples).mean(0)
+        out = out * x.sum(1).unsqueeze(1)
+      else:
+        out = self._vae.get_sample_rate(x, n_samples=n_mcmc_samples).mean(0)
       V.append(_to_array(out))
     return np.concatenate(V, axis=0)
 

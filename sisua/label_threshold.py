@@ -192,9 +192,9 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
       order = np.argsort(means_)
       self._models.append((order, gmm))
 
-  def fit_transform(self, X):
+  def fit_transform(self, X, return_probabilities=True):
     self.fit(X)
-    return self.predict_proba(X)
+    return self.predict_proba(X) if return_probabilities else self.predict(X)
 
   def _predict(self, X, threshold):
     assert X.shape[1] == self.n_classes, "Number of classes mis-match"

@@ -387,7 +387,7 @@ class ResultsSheet(object):
                         model_id=model_id, ax=ax)
 
   # ******************** series plot ******************** #
-  def plot_correlation_series(self, test=True, fontsize=8):
+  def plot_correlation_marker_pairs(self, test=True, fontsize=8):
     start_time = time.time()
 
     from scipy.stats import pearsonr, spearmanr
@@ -461,7 +461,7 @@ class ResultsSheet(object):
     with catch_warnings_ignore(UserWarning):
       plt.tight_layout()
     self.add_figure('correlation_%s' % data_type, fig)
-    return self._log('plot_correlation_series[%s] %s(s)' %
+    return self._log('plot_correlation_marker_pairs[%s] %s(s)' %
       (data_type, ctext(time.time() - start_time, 'lightyellow')))
 
   def plot_imputation_scatter(self, test=True, pca=False, color_by_library=True):
@@ -529,7 +529,7 @@ class ResultsSheet(object):
     return self._log('plot_imputation_scatter[%s] %s(s)' %
       (data_type, ctext(time.time() - start_time, 'lightyellow')))
 
-  def plot_latents_scatter(self, test=True, pca=False):
+  def plot_latents_binary_scatter(self, test=True, pca=False):
     start_time = time.time()
     data_type = 'test' if test else 'train'
 
@@ -545,7 +545,7 @@ class ResultsSheet(object):
     for idx, pos in enumerate(self):
       ax = plt.subplot(nrow, ncol, idx + 1)
       with catch_warnings_ignore(Warning):
-        pos.plot_latents_scatter(test=test, ax=ax,
+        pos.plot_latents_binary_scatter(test=test, ax=ax,
                                  legend=True if idx == 0 else False,
                                  pca=pca)
 
@@ -553,7 +553,7 @@ class ResultsSheet(object):
       plt.tight_layout()
     self.add_figure(
         'latents_scatter_%s' % data_type, fig)
-    return self._log('plot_latents_scatter[%s] %s(s)' %
+    return self._log('plot_latents_binary_scatter[%s] %s(s)' %
       (data_type, ctext(time.time() - start_time, 'lightyellow')))
 
   def plot_learning_curves(self):

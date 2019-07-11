@@ -17,7 +17,8 @@ from odin.stats import (train_valid_test_split, describe,
 
 from sisua.data.path import EXP_DIR
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
-from sisua.data.utils import validating_dataset
+from sisua.data.utils import (validating_dataset,
+    standardize_protein_name, get_gene_id2name)
 from sisua.data.single_cell_dataset import (
     apply_artificial_corruption, get_library_size, SingleCellOMICS)
 

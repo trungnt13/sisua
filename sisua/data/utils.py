@@ -2,6 +2,7 @@ from __future__ import print_function, division, absolute_import
 
 import os
 import pickle
+import base64
 from six import string_types
 
 import numpy as np
@@ -51,6 +52,8 @@ _protein_name = {
     "Ox40;CD134": "CD134",
     "CD8a": "CD8",
     "CD8A": "CD8",
+    "CD4 T cells": "CD4",
+    "CD8 T cells": "CD8",
 }
 def standardize_protein_name(name):
   """ standardize """
@@ -62,6 +65,22 @@ def standardize_protein_name(name):
   if name in _protein_name:
     name = _protein_name[name]
   return name
+
+# ===========================================================================
+# Gene identifier processing
+# ===========================================================================
+def get_gene_id2name():
+  """ Return the mapping from gene identifier to gene symbol (i.e. name)
+  for PBMC 8k data
+  """
+  from odin.utils import get_file
+  from sisua.data.path import DOWNLOAD_DIR
+  url = base64.decodebytes(
+      b'aHR0cHM6Ly9haS1kYXRhc2V0cy5zMy5hbWF6b25hd3MuY29tL2dlbmVfaWQybmFtZS5wa2w=\n')
+  url = str(url, 'utf-8')
+  get_file('gene_id2name.pkl', url, DOWNLOAD_DIR)
+  with open(os.path.join(DOWNLOAD_DIR, 'gene_id2name.pkl'), 'rb') as f:
+    return pickle.load(f)
 
 # ===========================================================================
 # Utilities

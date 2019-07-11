@@ -4,6 +4,7 @@ import time
 import pickle
 import inspect
 from six import string_types
+from itertools import product
 from collections import defaultdict, OrderedDict
 
 import numpy as np
@@ -204,6 +205,8 @@ class Posterior(object):
     return self
 
   def add_figure(self, name, fig):
+    if fig is None:
+      return self
     for k, v in self.figures.items():
       if v == fig:
         return
@@ -232,7 +235,28 @@ class Posterior(object):
     return self
 
   # ******************** Latent space analysis ******************** #
-  def plot_latents_heatmap(self, test=True, legend=True, ax=None):
+  def plot_latents_protein_pairs(self, test=True, legend=True, pca=False):
+    """ Using marker gene/protein to select mutual exclusive protein
+    pair for comparison
+
+    """
+    if test:
+      z, y = self.Z_test, self.y_test
+    else:
+      z, y = self.Z_train, self.y_train
+    title = ("[test]%s" if test else "[train]%s") % self.short_id
+
+    fig = plot_latents_multiclasses(
+        Z=z, y=y, labels_name=self.labels,
+        title=title, use_PCA=bool(pca),
+        show_colorbar=bool(legend))
+
+    if fig is not None:
+      self.add_figure('latents_pairs_%s' % ('test' if test else 'train'),
+                      fig)
+    return self
+
+  def plot_latents_distance_heatmap(self, test=True, legend=True, ax=None):
     ax = to_axis2D(ax)
     if test:
       z, y = self.Z_test, self.y_test
@@ -240,24 +264,23 @@ class Posterior(object):
       z, y = self.Z_train, self.y_train
     title = ("[test]%s" if test else "[train]%s") % self.short_id
 
-    if self.is_binary_classes:
-      plot_distance_heatmap(
-          z, labels=y, labels_name=self.labels,
-          legend_enable=bool(legend),
-          ax=ax, fontsize=8, legend_ncol=2,
-          title=title)
-    else:
-      ax = plot_latents_multiclasses(
-          Z=z, y=y, labels_name=self.labels,
-          title=title, use_PCA=False,
-          show_colorbar=bool(legend))
+    if not self.is_binary_classes:
+      from sisua.label_threshold import ProbabilisticEmbedding
+      y = ProbabilisticEmbedding().fit_transform(y, return_probabilities=True)
 
-    self.add_figure('latents_heatmap_%s' % ('test' if test else 'train'),
+    plot_distance_heatmap(
+        z, labels=y, labels_name=self.labels,
+        legend_enable=bool(legend),
+        ax=ax, fontsize=8, legend_ncol=2,
+        title=title)
+
+    self.add_figure('latents_distance_heatmap_%s' %
+                    ('test' if test else 'train'),
                     ax.get_figure())
     return self
 
-  def plot_latents_scatter(self, test=True, legend=True, pca=False,
-                           size=8, ax=None):
+  def plot_latents_binary_scatter(self, test=True, legend=True, pca=False,
+                                  size=8, ax=None):
     """
     test : if True, plotting latent space of test set, otherwise, use training set
     """
@@ -323,7 +346,91 @@ class Posterior(object):
                     ax.get_figure())
     return self
 
-  def plot_correlation_series(self, test=True, fontsize=10, fig=None):
+  def plot_correlation_top_pairs(self, test=True, data_type='V',
+                                 n=8, proteins=None, top=True,
+                                 fontsize=10, fig=None):
+    """
+    Parameters
+    ----------
+
+    proteins : {None, 'marker', list of string}
+
+    """
+    if test:
+      v, x, w, y = self.V_test, self.X_test_org, self.W_test, self.y_test
+    else:
+      v, x, w, y = self.V_train, self.X_train_org, self.W_train, self.y_train
+    correlations = self.get_correlation_all_pairs(
+        data_type=data_type, test=test)
+
+    if data_type == 'V':
+      ydata = v
+      data_type_name = "Imputed"
+    elif data_type == 'X':
+      ydata = x
+      data_type_name = "Original"
+    elif data_type == 'W':
+      ydata = w
+      data_type_name = "Reconstructed"
+
+    n = int(n)
+    if isinstance(proteins, string_types) and proteins.lower().strip() == 'marker':
+      from sisua.data.const import MARKER_GENES
+      proteins = [i for i in self.labels
+                  if standardize_protein_name(i) in MARKER_GENES]
+    elif proteins is None:
+      proteins = self.labels
+    proteins = as_tuple(proteins, t=string_types)
+
+    labels = {standardize_protein_name(j).lower(): i
+              for i, j in enumerate(self.labels)}
+    prot_ids = []
+    for i in proteins:
+      i = standardize_protein_name(i).lower()
+      if i in labels:
+        prot_ids.append(labels[i])
+    prot_ids = set(prot_ids)
+
+    # mapping protein_id -> (gene, pearson, spearman)
+    correlations_map = defaultdict(list)
+    for gene_id, prot_id, pearson, spearman in correlations:
+      if prot_id in prot_ids:
+        correlations_map[prot_id].append((gene_id, pearson, spearman))
+    correlations_map = {i: j[:n] if top else j[-n:][::-1]
+                        for i, j in correlations_map.items()}
+
+    # ====== create figure ====== #
+    nrow = len(correlations_map)
+    ncol = n
+    if fig is None:
+      fig = plot_figure(nrow=3 * nrow, ncol=4 * ncol)
+    for i, (prot_idx, data) in enumerate(correlations_map.items()):
+      prot = self.protein_name[prot_idx]
+      for j, (gene_idx, pearson, spearman) in enumerate(data):
+        ax = plt.subplot(nrow, ncol, i * ncol + j + 1)
+        gene = self.gene_name[gene_idx]
+        sns.scatterplot(x=y[:, prot_idx], y=ydata[:, gene_idx], ax=ax)
+
+        title = 'Pearson:%.2f Spearman:%.2f' % (pearson, spearman)
+        ax.set_title(title, fontsize=fontsize)
+        ax.set_ylabel('Protein:%s Gene:%s' % (prot, gene), fontsize=fontsize + 2)
+
+    # ====== store the figure ====== #
+    plt.suptitle('[set: %s][data_type: %s]%s%d' %
+                 ('test' if test else 'train', data_type_name,
+                  'top' if top else 'bottom', n),
+                 fontsize=fontsize + 2)
+    with catch_warnings_ignore(UserWarning):
+      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    self.add_figure(
+        'correlation_%s_%s%s%d' % ('test' if test else 'train',
+                                   data_type,
+                                   'top' if top else 'bottom',
+                                   n),
+        plt.gcf())
+    return self
+
+  def plot_correlation_marker_pairs(self, test=True, fontsize=10, fig=None):
     from scipy.stats import pearsonr, spearmanr
     if test:
       v, x, y = self.V_test, self.X_test_org, self.y_test
@@ -457,17 +564,17 @@ class Posterior(object):
   @property
   def scores_spearman(self):
     return \
-    self.get_correlation(
+    self.get_correlation_marker_pairs(
         data_type='V', score_type='spearman', is_original=False, test=False), \
-    self.get_correlation(
+    self.get_correlation_marker_pairs(
         data_type='V', score_type='spearman', is_original=False, test=True)
 
   @property
   def scores_pearson(self):
     return \
-    self.get_correlation(
+    self.get_correlation_marker_pairs(
         data_type='V', score_type='pearson', is_original=False, test=False), \
-    self.get_correlation(
+    self.get_correlation_marker_pairs(
         data_type='V', score_type='pearson', is_original=False, test=True)
 
   @property
@@ -743,33 +850,58 @@ class Posterior(object):
   def original_spearman(self):
     """ Correlation score between original gene expression and protein marker """
     return \
-    self.get_correlation(score_type='spearman', test=False, is_original=True), \
-    self.get_correlation(score_type='spearman', test=True, is_original=True)
+    self.get_correlation_marker_pairs(score_type='spearman', test=False, is_original=True), \
+    self.get_correlation_marker_pairs(score_type='spearman', test=True, is_original=True)
 
   @property
   def imputed_spearman(self):
     """ Correlation score between imputed gene expression and protein marker """
     return \
-    self.get_correlation(score_type='spearman', test=False, is_original=False), \
-    self.get_correlation(score_type='spearman', test=True, is_original=False)
+    self.get_correlation_marker_pairs(score_type='spearman', test=False, is_original=False), \
+    self.get_correlation_marker_pairs(score_type='spearman', test=True, is_original=False)
 
   @property
   def original_pearson(self):
     """ Correlation score between original gene expression and protein marker """
     return \
-    self.get_correlation(score_type='pearson', test=False, is_original=True), \
-    self.get_correlation(score_type='pearson', test=True, is_original=True)
+    self.get_correlation_marker_pairs(score_type='pearson', test=False, is_original=True), \
+    self.get_correlation_marker_pairs(score_type='pearson', test=True, is_original=True)
 
   @property
   def imputed_pearson(self):
     """ Correlation score between imputed gene expression and protein marker """
     return \
-    self.get_correlation(score_type='pearson', test=False, is_original=False), \
-    self.get_correlation(score_type='pearson', test=True, is_original=False)
+    self.get_correlation_marker_pairs(score_type='pearson', test=False, is_original=False), \
+    self.get_correlation_marker_pairs(score_type='pearson', test=True, is_original=False)
 
-  def get_correlation(self, data_type='X', score_type='spearman',
-                      test=True, is_original=False):
+  def get_correlation_marker_pairs(self, data_type='X', score_type='spearman',
+                                  test=True, is_original=False):
+    """
+    Parameters
+    ----------
+    data_type : {'X', 'V', 'W'}
+      'X' for input gene expression, 'V' for imputed gene expression,
+      and 'W' for reconstructed gene expression
+
+    score_type : {'spearman', 'pearson'}
+      spearman correlation for rank (monotonic) relationship, and pearson
+      for linear correlation
+
+    test : bool
+      if True, calculate the score on test set
+
+    is_original : bool
+      in case `data_type='X'`, if False, using the artificial corrupted
+      data during training for calculating the correlation
+
+    Return
+    ------
+    correlation : OrderedDict
+      mapping from marker protein/gene name (string) to
+      correlation score (scalar)
+    """
     assert score_type in ('spearman', 'pearson')
+    assert data_type in ('X', 'V', 'W')
     y = self.y_test if test is True else self.y_train
     X = getattr(self, '%s_%s%s' % (data_type,
                                   'test' if test else 'train',
@@ -781,8 +913,67 @@ class Posterior(object):
     score_idx = 0 if score_type == 'spearman' else 1
     return OrderedDict([(i, j[score_idx]) for i, j in corr.items()])
 
+  @cache_memory
+  def get_correlation_all_pairs(self, data_type='X',
+                               test=True, is_original=False):
+    """
+    Parameters
+    ----------
+    data_type : {'X', 'V', 'W'}
+      'X' for input gene expression, 'V' for imputed gene expression,
+      and 'W' for reconstructed gene expression
+
+    test : bool
+      if True, calculate the score on test set
+
+    is_original : bool
+      in case `data_type='X'`, if False, using the artificial corrupted
+      data during training for calculating the correlation
+
+    Return
+    ------
+    correlation : tuple of four scalars
+      list of tuple contained 4 scalars
+      (gene-idx, protein-idx, pearson, spearman)
+    """
+    assert data_type in ('X', 'V', 'W')
+
+    from scipy.stats import pearsonr, spearmanr
+    if test:
+      v, x, w, y = self.V_test, self.X_test_org, self.W_test, self.y_test
+    else:
+      v, x, w, y = self.V_train, self.X_train_org, self.W_train, self.y_train
+    n_proteins = y.shape[1]
+    n_genes = x.shape[1]
+
+    if data_type == 'X':
+      data = x
+    elif data_type == 'V':
+      data = v
+    elif data_type == 'W':
+      data = w
+
+    # ====== search for most correlated series ====== #
+    def _corr(idx):
+      for gene_idx, prot_idx in idx:
+        g = data[:, gene_idx]
+        p = y[:, prot_idx]
+        with catch_warnings_ignore(RuntimeWarning):
+          yield (gene_idx, prot_idx,
+                 pearsonr(g, p)[0], spearmanr(g, p).correlation)
+
+    jobs = list(product(range(n_genes), range(n_proteins)))
+
+    # ====== multiprocessing ====== #
+    from odin.utils.mpi import MPI
+    mpi = MPI(jobs, func=_corr, ncpu=3, batch=len(jobs) // 3)
+    all_correlations = sorted(
+        [i for i in mpi],
+        key=lambda scores: (scores[-2] + scores[-1]) / 2)[::-1]
+    return all_correlations
+
   # ******************** Protein analysis ******************** #
-  def plot_protein_series(self, test=True, fontsize=10,
+  def plot_protein_predicted_series(self, test=True, fontsize=10,
                           y_true_new=None, y_pred_new=None, labels_new=None):
     from odin.backend import log_norm
 
@@ -879,25 +1070,32 @@ class Posterior(object):
       y_true = y_true[:, idx]
       y_pred = y_pred[:, idx]
 
+      X = self.X_test_org if test else self.X_train_org
       Z = self.Z_test if test else self.Z_train
       V = self.V_test if test else self.V_train
 
       if fig is None:
-        fig = plot_figure(10, 10)
+        fig = plot_figure(nrow=13, ncol=10)
       assert isinstance(fig, plt.Figure), \
       "fig must be instance of matplotlib.Figure"
 
       x = fn_dim(Z)
-      ax = plot_scatter_heatmap(x, val=y_true, ax=221, grid=False, colorbar=True)
-      ax.set_xlabel('Latent/Original')
-      ax = plot_scatter_heatmap(x, val=y_pred, ax=222, grid=False, colorbar=True)
-      ax.set_xlabel('Latent/Predicted')
+      ax = plot_scatter_heatmap(x, val=y_true, ax=321, grid=False, colorbar=True)
+      ax.set_xlabel('Latent/ProteinOriginal')
+      ax = plot_scatter_heatmap(x, val=y_pred, ax=322, grid=False, colorbar=True)
+      ax.set_xlabel('Latent/ProteinPredicted')
 
       x = fn_dim(V)
-      ax = plot_scatter_heatmap(x, val=y_true, ax=223, grid=False, colorbar=True)
-      ax.set_xlabel('Input/Original')
-      ax = plot_scatter_heatmap(x, val=y_pred, ax=224, grid=False, colorbar=True)
-      ax.set_xlabel('Input/Predicted')
+      ax = plot_scatter_heatmap(x, val=y_true, ax=323, grid=False, colorbar=True)
+      ax.set_xlabel('InputImputed/ProteinOriginal')
+      ax = plot_scatter_heatmap(x, val=y_pred, ax=324, grid=False, colorbar=True)
+      ax.set_xlabel('InputImputed/ProteinPredicted')
+
+      x = fn_dim(X)
+      ax = plot_scatter_heatmap(x, val=y_true, ax=325, grid=False, colorbar=True)
+      ax.set_xlabel('InputOriginal/ProteinOriginal')
+      ax = plot_scatter_heatmap(x, val=y_pred, ax=326, grid=False, colorbar=True)
+      ax.set_xlabel('InputOriginal/ProteinPredicted')
 
       fig.suptitle('[%s]%s' % (data_type, protein_name))
       with catch_warnings_ignore(UserWarning):

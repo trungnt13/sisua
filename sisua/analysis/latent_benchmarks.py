@@ -202,8 +202,11 @@ def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
                   legend_loc='upper center', legend_ncol=3, legend_colspace=0.2,
                   fontsize=10, show_colorbar=True, title=None):
   """
-  Example
-  -------
+  Parameters
+  ----------
+  X : (n_samples, n_features)
+    coordination for scatter points
+
   labels : (n_samples, n_classes) or (n_samples, 1) or (n_samples,)
     list of classes index, in case of binary classification,
     the list can be float value represent confidence value for
@@ -285,8 +288,7 @@ def plot_distance_heatmap(X, labels, labels_name=None, lognorm=True,
     if len(labels_name) == 2: # binary (easy peasy)
       all_colors = np.array((cm(np.min(labels)), cm(np.max(labels))))
     else: # multiple classes
-      all_colors = cm(np.unique(labels))
-    assert len(all_colors) == len(labels_name)
+      all_colors = cm(list(range(len(labels_name))))
     legend_elements = [Line2D([0], [0], marker='o', color=color, label=name,
                               linewidth=0, linestyle=None, lw=0,
                               markerfacecolor=color, markersize=fontsize // 2)
@@ -310,9 +312,17 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
                               show_colorbar=False):
   """ Label `y` is multi-classes
   i.e. each samples could belong to multiple classes at once
+
+  Return
+  ------
+  fig : matplotlib.Figure or None
+      if no pair found, return None, otherwise, the
+      figure used to plot all protein pairs
+
   """
   from sisua.data.utils import standardize_protein_name
-  labels_name = [standardize_protein_name(i) for i in labels_name]
+  labels_name = [standardize_protein_name(i)
+                 for i in labels_name]
 
   if title is None:
     title = ''
@@ -333,9 +343,10 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
 
   # ====== select proteins ====== #
   def logit(p):
+    eps = np.finfo('float32').eps
     p = np.copy(p)
-    p[p == 0] = np.min(p[p > 0])
-    p[p == 1] = np.max(p[p < 1])
+    p[p == 0] = eps
+    p[p == 1] = 1 - eps
     return np.log(p / (1 - p))
 
   # normalize to 0, 1
@@ -344,7 +355,8 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
   y = (y - y_min) / (y_max - y_min)
 
   # select most 2 different protein
-  labels_index = {name: i for i, name in enumerate(labels_name)}
+  labels_index = {name: i
+                  for i, name in enumerate(labels_name)}
   pairs = []
   for i, j in PROTEIN_PAIR_COMPARISON:
     if i in labels_index and j in labels_index:
@@ -352,12 +364,12 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
   n_pairs = len(pairs)
 
   if n_pairs == 0:
-    return labels_name
+    return None
 
   # we could handle 5 pairs in 1 row, no problem
   ncol = min(5, n_pairs)
   nrow = int(np.ceil(n_pairs / ncol))
-  plt.figure(figsize=(ncol * 4, nrow * 4))
+  fig = plt.figure(figsize=(ncol * 4, nrow * 4))
 
   for idx, labels_name in enumerate(pairs):
     ax = plt.subplot(nrow, ncol, idx + 1)
@@ -377,7 +389,7 @@ def plot_latents_multiclasses(Z, y, labels_name, title=None,
         colorbar_ticks=[labels_name[0], 'Others', labels_name[1]],
         title='%s' % ('/'.join(labels_name)))
   plt.suptitle(title)
-  return ax
+  return fig
 
 def plot_latents_binary(Z, y, labels_name, title=None,
                  elev=None, azim=None, use_PCA=False,

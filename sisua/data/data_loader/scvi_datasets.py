@@ -45,7 +45,17 @@ def _read_scvi_dataset(name, clazz_name, override):
     X = gene_dataset._X
     if hasattr(X, 'todense'):
       X = np.array(X.todense())
+
     gene_names = np.array(gene_dataset.gene_names)
+    # convert gene identifier to gene symbol (i.e. name)
+    if hasattr(gene_dataset, 'de_metadata'):
+      from sisua.data.utils import get_gene_id2name
+      meta = gene_dataset.de_metadata
+      converter = {i: j for i, j in zip(meta.ENSG, meta.GS)}
+      pbmc8kconverter = get_gene_id2name()
+      gene_names = np.array([
+          pbmc8kconverter[i] if i in pbmc8kconverter else converter[i]
+          for i in gene_names])
     assert len(gene_names) == X.shape[1]
 
     label_names = np.array(gene_dataset.cell_types)
