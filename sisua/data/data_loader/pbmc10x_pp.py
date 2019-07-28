@@ -10,7 +10,7 @@ import numpy as np
 import scipy as sp
 from scipy.io import mmread
 
-from odin import fuel as F
+from odin.fuel import MmapArrayWriter, Dataset
 from odin.utils import (crypto, get_file, ctext, mpi, batching,
                         select_path, one_hot)
 
@@ -138,16 +138,13 @@ def read_10xPBMC_PP(override=False):
       print("Saving %s to %s ..." % (ctext(name, 'lightyellow'),
                                      ctext(path, 'cyan')))
       if name == 'X':
-        out = F.MmapData(path=path, dtype=data.dtype,
-                         shape=(0,) + data.shape[1:], read_only=False)
-        for start, end in batching(batch_size=1024, n=data.shape[0]):
-          x = data[start:end]
-          out.append(x)
-        out.flush()
-        out.close()
+        with MmapArrayWriter(path=path, dtype=data.dtype,
+                         shape=(0,) + data.shape[1:]) as out:
+          for start, end in batching(batch_size=1024, n=data.shape[0]):
+            out.write(data[start:end])
       else:
         with open(path, 'wb') as f:
           pickle.dump(data, f)
   # ====== load and return dataset ====== #
-  ds = F.Dataset(path=_10xPBMC_PREPROCESSED, read_only=True)
+  ds = Dataset(path=_10xPBMC_PREPROCESSED, read_only=True)
   return ds

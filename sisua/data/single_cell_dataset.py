@@ -1,29 +1,47 @@
 from __future__ import print_function, division, absolute_import
 
 import os
-import copy
+from copy import deepcopy
+from six import string_types
 
 import numpy as np
+import scipy as sp
+from scipy.sparse import issparse
+import tensorflow as tf
 
-from odin.fuel import MmapData
 from odin import visual as vs
-from odin.visual import Visualizer
-from odin.utils import ctext, cache_memory
+from odin.visual import Visualizer, to_axis
+from odin.fuel import MmapArrayWriter
+from odin.utils import ctext, cache_memory, batching, as_tuple
 from odin.utils.crypto import md5_checksum
 from odin.stats import (train_valid_test_split, describe,
                         sparsity_percentage)
 
-from sisua.data.const import UNIVERSAL_RANDOM_SEED
+import scanpy as sc
+from sisua.label_threshold import ProbabilisticEmbedding
+
+# ===========================================================================
+# Heuristic constants
+# ===========================================================================
+_DEFAULT_BATCH_SIZE = 4096
 
 # ===========================================================================
 # Helper
 # ===========================================================================
-def apply_artificial_corruption(x, dropout, distribution):
+def apply_artificial_corruption(x, dropout, distribution, copy=False,
+                                seed=8):
+  """
+  Parameters
+  ----------
+  x : (n_samples, n_features)
+  dropout : scalar (0.0 - 1.0)
+  distribution : {'uniform', 'binomial
+  """
   distribution = str(distribution).lower()
   dropout = float(dropout)
   assert 0 <= dropout < 1, \
   "dropout value must be >= 0 and < 1, given: %f" % dropout
-  rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
+  rand = np.random.RandomState(seed=seed)
 
   if dropout == 0:
     return x
@@ -33,7 +51,10 @@ def apply_artificial_corruption(x, dropout, distribution):
   # code for corrupting the data
   # https://github.com/YosefLab/scVI/blob/2357dde15351450e452efa426c516c60a2d5ee96/scvi/dataset/dataset.py#L83
   # the test data won't be corrupted
-  corrupted_x = copy.deepcopy(x)
+  if copy:
+    corrupted_x = deepcopy(x)
+  else:
+    corrupted_x = x
 
   # multiply the entry n with a Ber(0.9) random variable.
   if distribution == "uniform":
@@ -59,10 +80,12 @@ def apply_artificial_corruption(x, dropout, distribution):
         "Only support 2 corruption distribution: 'uniform' and 'binomial', "
         "but given: '%s'" % distribution)
 
+  if isinstance(corrupted_x, sp.sparse.base.spmatrix):
+    corrupted = type(corrupted_x)(corrupted)
   corrupted_x[i, j] = corrupted
   return corrupted_x
 
-def get_library_size(X, return_library_size=False):
+def get_library_size(X, return_log_count=False):
   """ Copyright scVI authors
   https://github.com/YosefLab/scVI/blob/master/README.rst
 
@@ -73,7 +96,9 @@ def get_library_size(X, return_library_size=False):
 
   Parameters
   ----------
-  return_library_size : bool (default: False)
+  X : matrix
+    single-cell data matrix (n_samples, n_features)
+  return_log_count : bool (default=False)
     if True, return the log-count library size
 
   Return
@@ -83,289 +108,792 @@ def get_library_size(X, return_library_size=False):
   """
   assert X.ndim == 2, "Only support 2-D matrix"
   total_counts = X.sum(axis=1)
-  assert np.all(total_counts > 0), "Some cell contains zero count!"
-  log_counts = np.log(total_counts)
+  assert np.all(total_counts >= 0), "Some cell contains negative-count!"
+  log_counts = np.log(total_counts + 1e-8)
   local_mean = (np.mean(log_counts) * np.ones((X.shape[0], 1))).astype(np.float32)
   local_var = (np.var(log_counts) * np.ones((X.shape[0], 1))).astype(np.float32)
-  if not return_library_size:
+  if not return_log_count:
     return local_mean, local_var
   return np.expand_dims(log_counts, -1), local_mean, local_var
-
 
 # ===========================================================================
 # OMICS
 # ===========================================================================
-class SingleCellOMICS(Visualizer):
-  """ SingleCellOMICS
+class SingleCellOMICS(sc.AnnData, Visualizer):
+  """ An annotated data matrix.
 
+  Parameters
+  ----------
+  X
+      A #observations × #variables data matrix. A view of the data is used
+      if the data type matches, otherwise, a copy is made.
+  obs
+      Key-indexed one-dimensional observations annotation of length
+      #observations.
+  var
+      Key-indexed one-dimensional variables annotation of length #variables.
+  uns
+      Key-index unstructured annotation.
+  obsm
+      Key-indexed multi-dimensional observations annotation of length
+      #observations. If passing a :class:`~numpy.ndarray`,
+      it needs to have a structured datatype.
+  varm
+      Key-indexed multi-dimensional variables annotation of length #variables.
+      If passing a :class:`~numpy.ndarray`, it needs to have a structured
+      datatype.
+  dtype
+      Data type used for storage.
+  shape
+      Shape tuple (#observations, #variables). Can only be provided
+      if ``X`` is ``None``.
+  filename
+      Name of backing file. See :class:`anndata.h5py.File`.
+  filemode
+      Open mode of backing file. See :class:`anndata.h5py.File`.
+  layers
+      Dictionary with keys as layers' names and values as matrices of the
+      same dimensions as X.
   """
-  TRAIN_PERCENTAGE = 0.9
 
-  def __init__(self, matrix, rowname=None, colname=None):
-    super(SingleCellOMICS, self).__init__()
-    assert matrix.ndim == 2, "data must be a matrix [n_cells, n_features]"
-    if rowname is None:
-      rowname = ['Sample#%d' % i for i in range(matrix.shape[0])]
-    if colname is None:
-      colname = ['Feature#%d' % i for i in range(matrix.shape[1])]
-    # ====== check zero and one columns ====== #
-    s = matrix.sum(0)
-    assert np.all(s > 1), \
-    "All columns sum must be greater than 1 " + \
-    "(i.e. non-zero and > 1 for train, test splitting)"
-    # ====== meta data ====== #
-    self._col = np.array(colname)
-    # ====== getting the data ====== #
-    row = np.array(rowname)
-    md5 = [None, None]
-    # prepare the data
-    if isinstance(matrix, MmapData):
-      matrix = matrix[:]
-    data = matrix.astype('float32')
-    # ====== split train, test ====== #
-    rand = np.random.RandomState(seed=UNIVERSAL_RANDOM_SEED)
-    ids = rand.permutation(data.shape[0])
-    # try splitting again until get all non-zeros columns
-    # in both training an testing set
-    train_ids, test_ids = train_valid_test_split(
-        x=ids,
-        train=SingleCellOMICS.TRAIN_PERCENTAGE,
-        inc_test=False, seed=rand.randint(10e8))
-    train_ids = np.array(train_ids)
-    test_ids = np.array(test_ids)
-    self._raw_data = (data[train_ids], data[test_ids])
-    # store the indices
-    self._indices = (train_ids, test_ids)
-    self._n_train = len(train_ids)
-    self._n_test = len(test_ids)
+  def __init__(self, X=None, obs=None, var=None,
+               uns=None, obsm=None, varm=None,
+               layers=None, raw=None,
+               dtype='float32', shape=None,
+               filename=None, filemode=None,
+               asview=False, name="scOMICS"):
+    if X is not None:
+      if obs is None:
+        obs = {'rowid': ['Row#%d' % i for i in range(X.shape[0])]}
+      if var is None:
+        var = {'colid': ['Col#%d' % i for i in range(X.shape[1])]}
+    super(SingleCellOMICS, self).__init__(X=X, obs=obs, var=var, uns=uns,
+      obsm=obsm, varm=varm, layers=layers, raw=raw,
+      dtype=dtype, shape=shape, filename=filename, filemode=filemode,
+      asview=asview)
+    self._name = str(name)
+    self._indices = np.arange(self.X.shape[0], dtype='int32')
+    self._calculate_library_info()
 
-    # store the row
-    train_row = row[train_ids]
-    test_row = row[test_ids]
-    self._row = (train_row, test_row)
+  def _calculate_library_info(self):
+    total_counts = self.X.sum(axis=1)
+    log_counts, local_mean, local_var = get_library_size(
+      self.X, return_log_count=True)
+    self._total_counts = total_counts
+    self._log_counts = log_counts
+    self._local_mean = local_mean
+    self._local_var = local_var
 
-    # check md5 checksum
-    md5_row = ''.join([md5_checksum(i) for i in
-                       [train_row, test_row]])
-    md5_indices = ''.join([md5_checksum(i) for i in
-                           [train_ids, test_ids]])
-    if md5[0] is None:
-      md5[0] = md5_row
+  def apply_indices(self, indices, observation=True):
+    """
+    Parameters
+    ----------
+    indices : array of `int` or `bool`
+    observation : `bool` (default=True)
+      if True, applying the indices to the observation (i.e. axis=0),
+      otherwise, to the variable (i.e. axis=1)
+    """
+    from anndata.core.alignedmapping import AxisArrays
+    indices = np.array(indices)
+    itype = indices.dtype.type
+    if not issubclass(itype, (np.bool, np.bool_, np.integer)):
+      raise ValueError("indices type must be boolean or integer.")
+    if observation:
+      self._X = self._X[indices]
+      self._obs = self._obs.iloc[indices]
+      self._n_obs = self._X.shape[0]
+      self._obsm = AxisArrays(
+        self, 0, vals={i: j[indices] for i, j in self._obsm.items()})
+      self._indices = self._indices[indices]
     else:
-      assert md5[0] == md5_row
-    if md5[1] is None:
-      md5[1] = md5_indices
+      self._X = self._X[:, indices]
+      self._var = self._var.iloc[indices]
+      self._n_vars = self._X.shape[1]
+      self._varm = AxisArrays(
+        self, 1, vals={i: j[indices] for i, j in self._varm.items()})
+    return self
+
+  def copy(self, X=None, filename=None, name=None):
+    """Full copy, optionally on disk. (this code is copied from
+    `AnnData`, modification to return `SingleCellOMICS` instance.
+    """
+    from anndata.core.views import DictView
+    if not self.isbacked:
+      omics = SingleCellOMICS(
+        X if X is not None else (self._X.copy()
+                                 if self._X is not None else
+                                 None),
+        self._obs.copy(),
+        self._var.copy(),
+        # deepcopy on DictView does not work and is unnecessary
+        # as uns was copied already before
+        self._uns.copy() if isinstance(self._uns, DictView) else
+        deepcopy(self._uns),
+        self._obsm.copy(), self._varm.copy(),
+        raw=None if self._raw is None else self._raw.copy(),
+        layers=dict(self.layers),
+        dtype=self._X.dtype.name if self._X is not None else 'float32',
+        name=self.name + '_copy' if name is None else name)
     else:
-      assert md5[1] == md5_indices
-    self._md5 = tuple(md5)
+      if filename is None:
+        raise ValueError(
+            'To copy an SingleCellOMICS object in backed mode, '
+            'pass a filename: `.copy(filename=\'myfilename.h5ad\')`.')
+      if self.isview:
+        self.write(filename)
+      else:
+        from shutil import copyfile
+        copyfile(self.filename, filename)
+      omics = SingleCellOMICS(filename=filename,
+        name=self.name if name is None else name)
+    omics._indices = self.indices
+    return omics
 
-    # ====== cell statistics ====== #
-    train_raw, test_raw = self._raw_data
-    self._cell_size = (np.sum(train_raw, axis=-1, keepdims=True),
-                       np.sum(test_raw, axis=-1, keepdims=True))
-    self._cell_max = max(np.max(c) for c in self._cell_size)
-    self._cell_min = min(np.min(c) for c in self._cell_size)
-    c = np.concatenate(self._cell_size, axis=0)
-    self._cell_mean = np.mean(c)
-    self._cell_std = np.std(c)
-    self._cell_median = np.median(c)
-
-    # ====== library size modeling ====== #
-    self._library_size = get_library_size(train_raw)
-
-    # ====== feature statistics ====== #
-    x = np.sum(train_raw, axis=0, keepdims=True) + \
-        np.sum(test_raw, axis=0, keepdims=True)
-    self._feat_size = (np.repeat(x, repeats=self.n_train, axis=0),
-                       np.repeat(x, repeats=self.n_test, axis=0))
-    self._feat_mean = np.mean(x)
-    self._feat_std = np.std(x)
-    self._feat_max = np.max(x)
-    self._feat_min = np.min(x)
+  @property
+  def name(self):
+    return self._name
 
   @property
   def is_binary(self):
-    X = self.get_data(data_type='all', dropout=0)
-    return sorted(np.unique(X.astype('float32'))) == [0., 1.]
-
-  @property
-  def shape(self):
-    return (None, self._raw_data[0].shape[1])
-
-  @property
-  def md5(self):
-    """ Return unique tuple of 3 MD5 checksums:
-     * the row
-     * the indices used to split dataset
-    X and y should have the same row and indices checksum
-    """
-    return self._md5
-
-  @property
-  def n_train(self):
-    return self._n_train
-
-  @property
-  def n_test(self):
-    return self._n_test
-
-  @property
-  def col_name(self):
-    return self._col
-
-  @property
-  def row_name(self):
-    return self._row
+    return sorted(np.unique(self.X.astype('float32'))) == [0., 1.]
 
   @property
   def indices(self):
-    """ The array indices used for train, test splitting
-
-    Return
-    ------
-    tuple : (train_indices, test_indices)
-    """
+    """ Return the row indices had been used to created this data,
+    helpful when using `SingleCellOMICS.split` to keep track the
+    data partition """
     return self._indices
 
-  # ******************** cell statistics ******************** #
   @property
-  def cell_size(self):
-    """ Tuple of three matrices:
-    * train: (n_train, 1)
-    * test : (n_test , 1)
-    """
-    return self._cell_size
+  def n_obs(self):
+    """Number of observations."""
+    return self._n_obs if self._X is None else self._X.shape[0]
 
   @property
-  def cell_mean(self):
-    return self._cell_mean
+  def n_vars(self):
+    """Number of variables/features."""
+    return self._n_vars if self._X is None else self._X.shape[1]
 
   @property
-  def cell_std(self):
-    return self._cell_std
-
-  @property
-  def cell_max(self):
-    return self._cell_max
-
-  @property
-  def cell_median(self):
-    return self._cell_median
-
-  @property
-  def cell_min(self):
-    return self._cell_min
+  def dtype(self):
+    return self.X.dtype
 
   @property
   def library_size(self):
     """ Return the mean and variance for library size
-    modeling in log-space
+    modeling in log-space """
+    return self._local_mean, self._local_var
 
-    This is the only statistics from training set,
-    only used for training
+  @property
+  def total_counts(self):
+    return self._total_counts
 
-    NO cheating!
+  @property
+  def log_counts(self):
+    return self._log_counts
+
+  # ******************** converter ******************** #
+  def as_tensorflow_dataset(self, obs=(), obsm=(), include_x=True):
+    data = [self.X] if include_x else []
+    for name in as_tuple(obs, t=string_types):
+      data.append(self.obs[name].values)
+    for name in as_tuple(obsm, t=string_types):
+      data.append(self.obsm[name])
+    assert len(data) > 0, "No data is given"
+    ds = tf.data.Dataset.from_tensor_slices(
+      data[0] if len(data) == 1 else tuple(data))
+    return ds
+
+  # ******************** transformation ******************** #
+  def split(self, seed=8, train_percent=0.8):
+    """ Spliting the data into training and test dataset
+
+    Parameters
+    ----------
+    seed : `int` (default=8)
+      the same seed will ensure the same partition of any `SingleCellOMICS`,
+      as long as all the data has the same number of `SingleCellOMICS.nsamples`
+    train_percent : `float` (default=0.8)
+      the percent of data used for training, the rest is for testing
+    add_name : `bool` (default=True)
+      annotation the name of new data with 'train' and 'test'
+
+    Returns
+    -------
+    train : `SingleCellOMICS`
+    test : `SingleCellOMICS`
     """
-    return self._library_size
+    assert 0 < train_percent < 1
+    ids = np.random.RandomState(
+      seed=seed).permutation(self.n_obs).astype('int32')
+    ntrain = int(train_percent * self.n_obs)
 
-  # ******************** feature statistics ******************** #
-  @property
-  def feat_size(self):
-    """ Tuple of three matrices (the gene count is
-    repeated along 0 axis):
-    * train: (n_train, feat_dim)
-    * test : (n_test , feat_dim)
+    train_ids = ids[:ntrain]
+    train = SingleCellOMICS(
+      X=self.X[train_ids],
+      obs=self.obs.iloc[train_ids],
+      obsm={i: j[train_ids] for i, j in self.obsm.items()},
+      var=self.var, varm=self.varm,
+      uns=self.uns, # it is tricky to split unstructed annotation
+      name=self.name + '_train')
+    train._indices = train_ids # copy the indices, this is important
+
+    test_ids = ids[ntrain:]
+    test = SingleCellOMICS(
+      X=self.X[test_ids],
+      obs=self.obs.iloc[test_ids],
+      obsm={i: j[test_ids] for i, j in self.obsm.items()},
+      var=self.var, varm=self.varm,
+      uns=self.uns, # it is tricky to split unstructed annotation
+      name=self.name + '_test')
+    test._indices = test_ids # copy the indices, this is important
+    return train, test
+
+  def corrupt(self, corruption_rate=0.25, corruption_dist='binomial',
+              inplace=True, seed=8):
     """
-    return self._feat_size
+    Parameters
+    ----------
+    corruption_rate : `float` (default=0.25)
+    corruption_dist : {'binomial', 'uniform} (default='binomial')
+    inplace : `bool` (default=True)
+      Perform computation inplace or return new `SingleCellOMICS` with
+      the corrupted data.
+    seed : `int` (default=8)
+        seed for the random state.
 
-  @property
-  def feat_dim(self):
-    return self.shape[1]
+    """
+    if corruption_rate <= 0:
+      return self if inplace else self.copy()
 
-  @property
-  def feat_mean(self):
-    return self._feat_mean
+    data = apply_artificial_corruption(self.X,
+      corruption_rate, corruption_dist, copy=not inplace, seed=seed)
+    name = '%s_%s%s' % (self.name, corruption_dist,
+                        str(corruption_rate).split('.')[-1])
+    if not inplace:
+      return self.copy(X=data, name=name)
+    self._name = name
+    return self
 
-  @property
-  def feat_std(self):
-    return self._feat_std
+  def filter_highly_variable_genes(self, min_disp=0.5, max_disp=np.inf,
+                                   min_mean=0.0125, max_mean=3,
+                                   n_top_genes=None,
+                                   n_bins=20, flavor='seurat',
+                                   inplace=True):
+    """ Annotate highly variable genes [Satija15]_ [Zheng17]_.
 
-  @property
-  def feat_max(self):
-    return self._feat_max
+    Expects logarithmized data.
 
-  @property
-  def feat_min(self):
-    return self._feat_min
+    Depending on `flavor`, this reproduces the R-implementations of Seurat
+    [Satija15]_ and Cell Ranger [Zheng17]_.
 
-  # ******************** helper ******************** #
-  @cache_memory
-  def _get_data_all(self, dropout=0, distribution="uniform"):
-    # no dropout
-    if dropout is None or dropout <= 0 or dropout >= 1:
-      return self._raw_data
-    train, test = self._raw_data
-    return (
-        apply_artificial_corruption(train, dropout=dropout, distribution=distribution),
-        apply_artificial_corruption(test, dropout=dropout, distribution=distribution))
+    The normalized dispersion is obtained by scaling with the mean and standard
+    deviation of the dispersions for genes falling into a given bin for mean
+    expression of genes. This means that for each bin of mean expression, highly
+    variable genes are selected.
 
-  def __getitem__(self, key):
-    return self.get_data(data_type=key, dropout=0)
+    Parameters
+    ----------
+    min_disp : `float`, optional (default=0.5)
+        If `n_top_genes` unequals `None`, this and all other cutoffs for
+        the means and the normalized dispersions are ignored.
+    max_disp : `float`, optional (default=`np.inf`)
+        If `n_top_genes` unequals `None`, this and all other cutoffs for
+        the means and the normalized dispersions are ignored.
+    min_mean : `float`, optional (default=0.0125)
+        If `n_top_genes` unequals `None`, this and all other cutoffs for
+        the means and the normalized dispersions are ignored.
+    max_mean : `float`, optional (default=3)
+        If `n_top_genes` unequals `None`, this and all other cutoffs for
+        the means and the normalized dispersions are ignored.
+    n_top_genes : {`int`, `None`}, optional (default=`None`)
+        Number of highly-variable genes to keep.
+    n_bins : `int`, optional (default: 20)
+        Number of bins for binning the mean gene expression. Normalization is
+        done with respect to each bin. If just a single gene falls into a bin,
+        the normalized dispersion is artificially set to 1.
+    flavor : `{'seurat', 'cell_ranger'}`, optional (default='seurat')
+        Choose the flavor for computing normalized dispersion. In their default
+        workflows, Seurat passes the cutoffs whereas Cell Ranger passes
+        `n_top_genes`.
+    inplace : `bool` (default=True)
+        if False, copy the `SingleCellOMICS` and apply the vargene filter.
 
-  def get_data(self, data_type='all', dropout=0, distribution="uniform"):
-    data_type = str(data_type).lower()
-    assert data_type in ('all', 'train', 'test')
-    new_data = self._get_data_all(dropout=dropout, distribution=distribution)
-    # return
-    if data_type == 'all':
-      return np.concatenate(new_data, axis=0)
-    if data_type == 'train':
-      return new_data[0]
-    if data_type == 'test':
-      return new_data[1]
+    Returns
+    -------
+    New `SingleCellOMICS` with filtered features if `applying_filter=True` else
+    assign `SingleCellOMICS.highly_variable_features` with following attributes
 
-  # ====== shortcut ====== #
-  @property
-  def X(self):
-    return self.get_data(data_type='all', dropout=0)
+    highly_variable : bool
+        boolean indicator of highly-variable genes
+    **means**
+        means per gene
+    **dispersions**
+        dispersions per gene
+    **dispersions_norm**
+        normalized dispersions per gene
 
-  @property
-  def X_train(self):
-    return self.get_data(data_type='train', dropout=0)
+    Notes
+    -----
+    Proxy to `scanpy.pp.highly_variable_genes`
+    It is recommended to do `log1p` normalization before if `flavor='seurat'`
+    """
+    flavor = str(flavor).lower()
+    # prevent overflow in exp
+    if np.max(self.X) > 88 and \
+      self.dtype.itemsize <= 4 and \
+      flavor == 'seurat':
+      self._X = self._X.astype('float64')
+    # prepare the data
+    omics = self if inplace else self.copy()
+    sc.pp.highly_variable_genes(omics,
+                                min_disp=min_disp, max_disp=max_disp,
+                                min_mean=min_mean, max_mean=max_mean,
+                                n_top_genes=n_top_genes,
+                                flavor=flavor,
+                                subset=True, inplace=False)
+    omics._name += '_vargene'
+    omics._n_vars = omics._X.shape[1]
+    return omics
 
-  @property
-  def X_test(self):
-    return self.get_data(data_type='test', dropout=0)
+  def filter_genes(self, min_counts=None, max_counts=None,
+                   min_cells=None, max_cells=None,
+                   inplace=True):
+    """ Filter features (columns) based on number of rows or counts.
 
-  @property
-  def X_row(self):
-    return np.concatenate(self.row_name)
+    Keep columns that have at least ``[min_counts, max_counts]``
+    or are expressed in at least ``[min_row_counts, max_row_counts]``
 
-  @property
-  def X_col(self):
-    return np.array(self.col_name)
+    Parameters
+    ----------
+    min_counts : {int, None} (default=None)
+      Minimum number of counts required for a feature to pass filtering.
+    max_counts : {int, None} (default=None)
+      Maximum number of counts required for a feature to pass filtering.
+    min_row_counts : {int, None} (default=None)
+      Minimum number of rows expressed required for a feature to pass filtering.
+    max_row_counts : {int, None} (default=None)
+      Maximum number of rows expressed required for a feature to pass filtering.
+    inplace : `bool` (default=True)
+      if False, return new `SingleCellOMICS` with the filtered
+      genes applied
+
+    Returns
+    -------
+    if `applying_filter=False` annotates the `SingleCellOMICS`, otherwise,
+    return new `SingleCellOMICS` with the new subset of genes
+
+    gene_subset : `numpy.ndarray`
+        Boolean index mask that does filtering. `True` means that the
+        gene is kept. `False` means the gene is removed.
+    number_per_gene : `numpy.ndarray`
+        Depending on what was thresholded (`counts` or `cells`), the array
+        stores `n_counts` or `n_cells` per gene.
+
+    Note
+    ----
+    Proxy method to Scanpy preprocessing
+    """
+    omics = self if inplace else self.copy()
+    sc.pp.filter_genes(omics,
+            min_counts=min_counts, max_counts=max_counts,
+            min_cells=min_cells, max_cells=max_cells,
+            inplace=True)
+    omics._name += '_filtergene'
+    omics._n_vars = omics._X.shape[1]
+    return omics
+
+  def filter_cells(self, min_counts=None, max_counts=None,
+                   min_genes=None, max_genes=None,
+                   inplace=True):
+    """ Filter examples (rows) based on number of features or counts.
+
+    Keep rows that have at least ``[min_counts, max_counts]``
+    or are expressed in at least ``[min_col_counts, max_col_counts]``
+
+    Parameters
+    ----------
+    min_counts : {int, None} (default=None)
+      Minimum number of counts required for a feature to pass filtering.
+    max_counts : {int, None} (default=None)
+      Maximum number of counts required for a feature to pass filtering.
+    min_genes : {int, None} (default=None)
+      Minimum number of rows expressed required for a feature to pass filtering.
+    max_genes : {int, None} (default=None)
+      Maximum number of rows expressed required for a feature to pass filtering.
+    inplace : `bool` (default=True)
+      if False, return new `SingleCellOMICS` with the filtered
+      cells applied
+
+    Returns
+    -------
+    if `applying_filter=False` annotates the `SingleCellOMICS`, otherwise,
+    return new `SingleCellOMICS` with the new subset of cells
+
+    cells_subset : numpy.ndarray
+        Boolean index mask that does filtering. ``True`` means that the
+        cell is kept. ``False`` means the cell is removed.
+    number_per_cell : numpy.ndarray
+        Depending on what was tresholded (``counts`` or ``genes``), the array stores
+        ``n_counts`` or ``n_cells`` per gene.
+
+    Note
+    ----
+    Proxy method to Scanpy preprocessing
+    """
+    # scanpy messed up here, the obs was not updated with the new indices
+    cells_subset, number_per_cell = sc.pp.filter_cells(self,
+        min_counts=min_counts, max_counts=max_counts,
+        min_genes=min_genes, max_genes=max_genes,
+        inplace=False)
+    omics = self if inplace else self.copy()
+    omics.apply_indices(cells_subset, observation=True)
+    omics._name += '_filtercell'
+    return omics
+
+  def probabilistic_embedding(self, n_components_per_class=2, positive_component=1,
+                              log_norm=False, clip_quartile=0., remove_zeros=True,
+                              ci_threshold=-0.68, seed=8, pbe=None):
+    """ Fit a GMM on each feature column to get the probability or binary
+    representation of the features
+
+    Parameters
+    ----------
+    pbe : {`ProbabilisticEmbedding`, `None`}
+      pretrained instance of `ProbabilisticEmbedding` if given
+    """
+    # We turn-off default log_norm here since the data can be normalized
+    # separately in advance.
+    if pbe is None:
+      pbe = ProbabilisticEmbedding(
+        n_components_per_class=n_components_per_class,
+        positive_component=positive_component,
+        log_norm=log_norm, clip_quartile=clip_quartile,
+        remove_zeros=remove_zeros,
+        ci_threshold=ci_threshold, random_state=seed)
+      pbe.fit(self.X)
+    else:
+      assert isinstance(pbe, ProbabilisticEmbedding), \
+        'pbe, if given, must be instance of ProbabilisticEmbedding'
+    self.obsm['X_prob'] = pbe.predict_proba(self._X)
+    self.obsm['X_bin'] = pbe.predict(self._X)
+    self.uns['pbe'] = pbe
+    self._name += '_pbe'
+    return self
+
+  def pca(self, n_comps=50, seed=8):
+    """ Code from `scanpy.pp.pca`, there is bug when `chunked=True` so we
+    modify it here. """
+    from sklearn.decomposition import IncrementalPCA
+
+    if self.n_vars < n_comps:
+      n_comps = self.n_vars - 1
+
+    X_pca = np.zeros((self.n_obs, n_comps), self.dtype)
+    pca_ = IncrementalPCA(n_components=n_comps)
+
+    for chunk, _, _ in self.chunked_X(_DEFAULT_BATCH_SIZE):
+        chunk = chunk.toarray() if issparse(chunk) else chunk
+        pca_.partial_fit(chunk)
+
+    for chunk, start, end in self.chunked_X(_DEFAULT_BATCH_SIZE):
+        chunk = chunk.toarray() if issparse(chunk) else chunk
+        X_pca[start:end] = pca_.transform(chunk)
+
+    self.obsm['X_pca'] = X_pca
+    self.varm['PCs'] = pca_.components_.T
+    self.uns['pca'] = {}
+    self.uns['pca']['variance'] = pca_.explained_variance_
+    self.uns['pca']['variance_ratio'] = pca_.explained_variance_ratio_
+    return self
+
+  def normalize(self, total_counts_per_cell=False, log1p=False, scale=False,
+                target_sum=None, exclude_highly_expressed=False,
+                max_fraction=0.05, inplace=True):
+    """
+    If ``exclude_highly_expressed=True``, very highly expressed genes are
+    excluded from the computation of the normalization factor (size factor)
+    for each cell. This is meaningful as these can strongly influence
+    the resulting normalized values for all other genes [1]_.
+
+    Parameters
+    ----------
+    total_counts : bool (default=False)
+      Normalize counts per cell.
+    log1p : bool (default=False)
+      Logarithmize the data matrix.
+    scale : bool (default=False)
+      Scale data to unit variance and zero mean.
+    target_sum : {float, None} (default=None)
+      If None, after normalization, each observation (cell) has a
+      total count equal to the median of total counts for
+      observations (cells) before normalization.
+    exclude_highly_expressed : bool (default=False)
+      Exclude (very) highly expressed genes for the computation of the
+      normalization factor (size factor) for each cell. A gene is considered
+      highly expressed, if it has more than ``max_fraction`` of the total counts
+      in at least one cell. The not-excluded genes will sum up to
+      ``target_sum``.
+    max_fraction : bool (default=0.05)
+      If ``exclude_highly_expressed=True``, consider cells as highly expressed
+      that have more counts than ``max_fraction`` of the original total counts
+      in at least one cell.
+    inplace : `bool` (default=True)
+      if False, return new `SingleCellOMICS` with the filtered
+      cells applied
+
+    References
+    ----------
+    [1] Weinreb et al. (2016), SPRING: a kinetic interface for visualizing
+    high dimensional single-cell expression data, bioRxiv.
+
+    Note
+    ----
+    Proxy to `scanpy.pp.normalize_total`,  `scanpy.pp.log1p`
+    and  `scanpy.pp.scale`
+    """
+    omics = self if inplace else self.copy()
+
+    if total_counts_per_cell:
+      sc.pp.normalize_total(omics, target_sum=target_sum,
+        exclude_highly_expressed=exclude_highly_expressed,
+        max_fraction=max_fraction, inplace=True)
+      # since the total count info is "flaten", store the old info
+      omics._total_counts = self._total_counts
+      omics._log_counts = self._log_counts
+      omics._local_mean = self._local_mean
+      omics._local_var = self._local_var
+      omics._name += '_countnorm'
+
+    if log1p:
+      sc.pp.log1p(omics, chunked=True, chunk_size=_DEFAULT_BATCH_SIZE,
+                  copy=False)
+      omics._name += '_log1p'
+
+    if scale:
+      sc.pp.scale(omics, zero_center=True, copy=False)
+      omics._name += '_scale'
+    return omics
 
   # ====== statistics ====== #
   @property
   def sparsity(self):
-    return sparsity_percentage(self.get_data(data_type='all'))
+    return sparsity_percentage(self.X)
 
   @property
-  def sparsity_train(self):
-    return sparsity_percentage(self.get_data(data_type='train'))
+  def counts_per_cell(self):
+    """ Return total number of counts per cell. This method
+    is scalable. """
+    counts = 0
+    for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=self.X.shape[1]):
+      counts += np.sum(self.X[:, s:e], axis=1)
+    return counts
 
   @property
-  def sparsity_test(self):
-    return sparsity_percentage(self.get_data(data_type='test'))
+  def counts_per_gene(self):
+    """ Return total number of counts per gene. This method
+    is scalable. """
+    counts = 0
+    for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=self.X.shape[0]):
+      counts += np.sum(self.X[s:e], axis=0)
+    return counts
 
-  @property
-  def n_cells_per_gene(self):
-    """ Important statistics to evaluate the quality of genes
-    Return a number of non-zeros cell for each gene
+  # ******************** metrics ******************** #
+  def neighbors(self, n_neighbors=15, n_pcs=None, use_rep=None,
+                knn=True, method='umap', metric='euclidean',
+                seed=8):
+    """\
+    Compute a neighborhood graph of observations [McInnes18]_.
+
+    The neighbor search efficiency of this heavily relies on UMAP [McInnes18]_,
+    which also provides a method for estimating connectivities of data points -
+    the connectivity of the manifold (`method=='umap'`). If `method=='gauss'`,
+    connectivities are computed according to [Coifman05]_, in the adaption of
+    [Haghverdi16]_.
+
+    Parameters
+    ----------
+    n_neighbors : `int` (default=15)
+        The size of local neighborhood (in terms of number of neighboring data
+        points) used for manifold approximation. Larger values result in more
+        global views of the manifold, while smaller values result in more local
+        data being preserved. In general values should be in the range 2 to 100.
+        If `knn` is `True`, number of nearest neighbors to be searched. If `knn`
+        is `False`, a Gaussian kernel width is set to the distance of the
+        `n_neighbors` neighbor.
+    n_pcs : {`int`, `None`} (default=None)
+        Use this many PCs. If n_pcs==0 use .X if use_rep is None.
+    use_rep : {`None`, ‘X’} or any key for .obsm, optional (default=None)
+        Use the indicated representation. If None, the representation is
+        chosen automatically: for .n_vars < 50, .X is used, otherwise
+        ‘X_pca’ is used. If ‘X_pca’ is not present, it’s computed with
+        default parameters.
+    knn : `bool` (default=True)
+        If `True`, use a hard threshold to restrict the number of neighbors to
+        `n_neighbors`, that is, consider a knn graph. Otherwise, use a Gaussian
+        Kernel to assign low weights to neighbors more distant than the
+        `n_neighbors` nearest neighbor.
+    seed : `int` (default=8)
+        A numpy random seed.
+    method : {{'umap', 'gauss', `None`}}  (default: `'umap'`)
+        Use 'umap' [McInnes18]_ or 'gauss' (Gauss kernel following [Coifman05]_
+        with adaptive width [Haghverdi16]_) for computing connectivities.
+    metric : {`str`, `callable`} (default='euclidean')
+        A known metric’s name or a callable that returns a distance.
+
+    Returns
+    -------
+    returns `SingleCellOMICS` with the following:
+
+    **connectivities** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
+        Weighted adjacency matrix of the neighborhood graph of data
+        points. Weights should be interpreted as connectivities.
+    **distances** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
+        Instead of decaying weights, this stores distances for each pair of
+        neighbors.
     """
-    X = self.get_data(data_type='all')
-    X = X != 0.
-    return np.sum(X, axis=0)
+    sc.pp.neighbors(self, n_neighbors=n_neighbors, knn=knn,
+                    method=method, metric=metric,
+                    n_pcs=n_pcs, use_rep=use_rep,
+                    random_state=seed, copy=False)
+    return self
+
+  def louvain(self, resolution=None, restrict_to=None, key_added='louvain',
+              adjacency=None, flavor='vtraag', directed=True,
+              use_weights=False, partition_type=None, partition_kwargs=None,
+              seed=8):
+    """Cluster cells into subgroups [Blondel08]_ [Levine15]_ [Traag17]_.
+
+    Cluster cells using the Louvain algorithm [Blondel08]_ in the implementation
+    of [Traag17]_. The Louvain algorithm has been proposed for single-cell
+    analysis by [Levine15]_.
+
+    This requires having ran :func:`~scanpy.pp.neighbors` or :func:`~scanpy.external.pp.bbknn` first,
+    or explicitly passing a ``adjacency`` matrix.
+
+    Parameters
+    ----------
+    resolution
+        For the default flavor (``'vtraag'``), you can provide a resolution
+        (higher resolution means finding more and smaller clusters),
+        which defaults to 1.0. See “Time as a resolution parameter” in [Lambiotte09]_.
+    restrict_to
+        Restrict the clustering to the categories within the key for sample
+        annotation, tuple needs to contain ``(obs_key, list_of_categories)``.
+    key_added
+        Key under which to add the cluster labels. (default: ``'louvain'``)
+    adjacency
+        Sparse adjacency matrix of the graph, defaults to
+        ``adata.uns['neighbors']['connectivities']``.
+    flavor : {``'vtraag'``, ``'igraph'``}
+        Choose between to packages for computing the clustering.
+        ``'vtraag'`` is much more powerful, and the default.
+    directed
+        Interpret the ``adjacency`` matrix as directed graph?
+    use_weights
+        Use weights from knn graph.
+    partition_type
+        Type of partition to use.
+        Only a valid argument if ``flavor`` is ``'vtraag'``.
+    partition_kwargs
+        Key word arguments to pass to partitioning,
+        if ``vtraag`` method is being used.
+    seed
+        Change the initialization of the optimization.
+
+    Returns
+    -------
+    :obj:`None`
+        By default (``copy=False``), updates ``adata`` with the following fields:
+
+        ``adata.obs['louvain']`` (:class:`pandas.Series`, dtype ``category``)
+            Array of dim (number of samples) that stores the subgroup id
+            (``'0'``, ``'1'``, ...) for each cell.
+
+    :class:`~anndata.AnnData`
+        When ``copy=True`` is set, a copy of ``adata`` with those fields is returned.
+    """
+    sc.tl.louvain(self, resolution=resolution,
+      random_state=seed,
+      restrict_to=restrict_to,
+      key_added=key_added,
+      adjacency=adjacency,
+      flavor=flavor,
+      directed=directed,
+      use_weights=use_weights,
+      partition_type=partition_type,
+      partition_kwargs=partition_kwargs,
+      copy=False
+    )
+    return self
+
+  def calculate_qc_metrics(self, expr_type='counts', var_type='genes',
+                           qc_vars=(), percent_top=(50, 100, 200, 500),
+                           layer=None, use_raw=False, parallel=None):
+    """\
+    Calculate quality control metrics.
+
+    Calculates a number of qc metrics for an AnnData object, see section
+    `Returns` for specifics. Largely based on `calculateQCMetrics` from scater
+    [McCarthy17]_. Currently is most efficient on a sparse CSR or dense matrix.
+
+    Parameters
+    ----------
+    expr_type : str
+      Name of kind of values in X.
+    var_type : str
+      The kind of thing the variables are.
+    qc_vars : Collection[str]
+      Keys for boolean columns of .var which identify variables you could
+      want to control for (e.g. “ERCC” or “mito”).
+    percent_top : Collection[int]
+      Which proportions of top genes to cover. If empty or None don’t
+      calculate. Values are considered 1-indexed, percent_top=[50] finds
+      cumulative proportion to the 50th most expressed gene.
+    layer : str, None
+      If provided, use adata.layers[layer] for expression values instead of
+      adata.X.
+    use_raw : bool
+      If True, use adata.raw.X for expression values instead of adata.X.
+    parallel : bool, None
+      Whether to force parallelism. Otherwise usage of paralleism is based
+      on compilation time and sample size heuristics.
+
+    Returns
+    -------
+    updates `SingleCellOMICS`'s `obs` and `var`.
+
+    Observation level metrics include:
+    total_{var_type}_by_{expr_type}
+      E.g. “total_genes_by_counts”. Number of genes with positive counts in
+      a cell.
+    total_{expr_type}
+      E.g. “total_counts”. Total number of counts for a cell.
+    pct_{expr_type}_in_top_{n}_{var_type} - for n in percent_top
+      E.g. “pct_counts_in_top_50_genes”. Cumulative percentage of counts for
+      50 most expressed genes in a cell.
+    total_{expr_type}_{qc_var} - for qc_var in qc_vars
+      E.g. “total_counts_mito”. Total number of counts for variabes in qc_vars.
+    pct_{expr_type}_{qc_var} - for qc_var in qc_vars
+      E.g. “pct_counts_mito”. Proportion of total counts for a cell which are
+      mitochondrial.
+
+    Variable level metrics include:
+    total_{expr_type}
+      E.g. “total_counts”. Sum of counts for a gene.
+    mean_{expr_type}
+      E.g. “mean counts”. Mean expression over all cells.
+    n_cells_by_{expr_type}
+      E.g. “n_cells_by_counts”. Number of cells this expression is measured in.
+    pct_dropout_by_{expr_type}
+      E.g. “pct_dropout_by_counts”. Percentage of cells this feature does not
+      appear in.
+    """
+    sc.pp.calculate_qc_metrics(self,
+        expr_type=expr_type, var_type=var_type,
+        qc_vars=qc_vars, percent_top=percent_top, layer=layer,
+        use_raw=use_raw, parallel=parallel, inplace=True)
+    return self
 
   # ******************** plotting helper ******************** #
   def plot_percentile_histogram(self, n_hist, title=None, outlier=0.001,
@@ -375,20 +903,16 @@ class SingleCellOMICS(Visualizer):
 
     """
     from matplotlib import pyplot as plt
-    arr = np.concatenate(
-        [self.get_data(data_type='train'), self.get_data(data_type='test')],
-        axis=0)
+    arr = self.X
     if non_zeros:
       arr = arr[arr != 0]
-
     n_percentiles = n_hist + 1
     n_col = 5
     n_row = int(np.ceil(n_hist / n_col))
     if fig is None:
       fig = vs.plot_figure(nrow=int(n_row * 1.5), ncol=20)
     self.assert_figure(fig)
-    percentile = np.linspace(start=np.min(arr),
-                             stop=np.max(arr),
+    percentile = np.linspace(start=np.min(arr), stop=np.max(arr),
                              num=n_percentiles)
     n_samples = len(arr)
     for i, (p_min, p_max) in enumerate(zip(percentile, percentile[1:])):
@@ -407,38 +931,29 @@ class SingleCellOMICS(Visualizer):
     self.add_figure('percentile_%dhistogram' % n_hist, fig)
     return self
 
-  # ******************** logging ******************** #
+  def plot_heatmap(self, ax=None):
+    raise NotImplementedError
+
+  def plot_rank_features_stacked_violin(self, n_features=10, ax=None):
+    raise NotImplementedError
+
+  # ******************** logging and io ******************** #
+  def save_to_mmaparray(self, path, dtype=None):
+    """ This only save the data without row names and column names """
+    with MmapArrayWriter(
+      path=path, shape=self.shape,
+      dtype=self.dtype if dtype is None else dtype,
+      remove_exist=True) as f:
+      for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=self.n_obs):
+        x = self.X[s:e]
+        if dtype is not None:
+          x = x.astype(dtype)
+        f.write(x)
+
   def __str__(self):
-    s = "======== Data ========\n"
-
-    s += ctext('Raw:', 'lightcyan') + ':' + '\n'
-    for name, dat in zip(["train", "test"], self._raw_data):
-      s += "  %-5s :" % name + ctext('%-15s' % str(dat.shape), 'cyan') + describe(dat, shorten=True) + '\n'
-      s += "    Sparsity: %s\n" % ctext('%.2f' % sparsity_percentage(dat.astype('int32')), 'cyan')
-      s += "    #ZeroCol: %s\n" % ctext(np.sum(np.sum(dat, axis=0) == 0), 'cyan')
-      s += "    #ZeroRow: %s\n" % ctext(np.sum(np.sum(dat, axis=1) == 0), 'cyan')
-
-    s += ctext('SizeFactor:', 'lightcyan') + ':' + '\n'
-    s += '  mean:%f std:%f max:%f min:%f\n' % \
-    (self.cell_mean, self.cell_std, self.cell_max, self.cell_min)
-    train, test = self.cell_size
-    s += "  train :" + ctext('%-15s' % str(train.shape), 'cyan') + describe(train, shorten=True) + '\n'
-    s += "  test  :" + ctext('%-15s' % str(test.shape), 'cyan') + describe(test, shorten=True) + '\n'
-
-    s += ctext('Feat:', 'lightcyan') + ':' + '\n'
-    s += '  mean:%f std:%f max:%f min:%f\n' % \
-    (self.feat_mean, self.feat_std, self.feat_max, self.feat_min)
-    train, test = self.feat_size
-    s += "  train :" + ctext('%-15s' % str(train.shape), 'cyan') + describe(train, shorten=True) + '\n'
-    s += "  test  :" + ctext('%-15s' % str(test.shape), 'cyan') + describe(test, shorten=True)
-
-    return s
-
-# ===========================================================================
-# Single Cell dataset
-# ===========================================================================
-class SingleCellDataset(object):
-  """ SingleCellDataset """
-
-  def __init__(self):
-    super(SingleCellDataset, self).__init__()
+    text = super(SingleCellOMICS, self).__str__()
+    text = text.replace('AnnData object', self.name)
+    text += '\n    Sparsity: %.2f' % self.sparsity
+    text += '\n    Cell: %s' % describe(self.counts_per_cell, shorten=True)
+    text += '\n    Gene: %s' % describe(self.counts_per_gene, shorten=True)
+    return text

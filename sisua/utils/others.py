@@ -8,7 +8,7 @@ from collections import OrderedDict, defaultdict
 import numpy as np
 
 from odin.utils import ctext, as_tuple
-from odin.fuel import MmapData, Dataset
+from odin.fuel import Dataset
 from odin.stats import sparsity_percentage
 
 def filtering_experiment_path(ds_name, incl_keywords, excl_keywords,

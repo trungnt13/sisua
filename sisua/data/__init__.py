@@ -9,7 +9,6 @@ from six import string_types
 from collections import OrderedDict
 
 import numpy as np
-from odin.fuel import MmapData
 from odin.utils import ctext, one_hot, cache_memory
 from odin.utils.crypto import md5_checksum
 from odin.stats import (train_valid_test_split, describe,
@@ -21,8 +20,14 @@ from sisua.data.utils import (validating_dataset,
     standardize_protein_name, get_gene_id2name)
 from sisua.data.single_cell_dataset import (
     apply_artificial_corruption, get_library_size, SingleCellOMICS)
+from sisua.data import normalization_recipes
 
 def get_dataset_meta():
+  """
+  Return
+  ------
+  dictionary : dataset name -> loading_function()
+  """
   from sisua.data.data_loader.pbmc_CITEseq import read_CITEseq_PBMC
   from sisua.data.data_loader.pbmc10x_pp import read_10xPBMC_PP
   from sisua.data.data_loader.cbmc_CITEseq import read_CITEseq_CBMC
@@ -39,7 +44,8 @@ def get_dataset_meta():
 
   data_meta = {
       # ====== PBMC 10x ====== #
-      'pbmcscvae': read_10xPBMC_PP,
+      # TODO: fix error with PBMC-scVAE
+      # 'pbmcscvae': read_10xPBMC_PP,
       'pbmcscvi': read_PBMC,
 
       # ====== pbmc 8k ====== #
@@ -75,9 +81,7 @@ def get_dataset_meta():
       'crossecc_nocd48': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=True, override=override, filtered_genes=True, remove_protein=['CD4', 'CD8']),
 
       'cross8k_onlycd8': lambda override: read_PBMCcross_remove_protein(subset='ly', return_ecc=False, override=override, filtered_genes=True,
-                                                                        remove_protein=['CD3', 'CD4', 'CD16', 'CD56', 'CD19',
-                                                                                        'CD25', 'CD45RA', 'CD45RO', 'PD-1', 'TIGIT', 'CD127']),
-
+                                                                        remove_protein=['CD3', 'CD4', 'CD16', 'CD56', 'CD19']),
       # ====== CITEseq ====== #
       'pbmc_citeseq': read_CITEseq_PBMC,
       'cbmc_citeseq': read_CITEseq_CBMC,
@@ -129,8 +133,6 @@ def get_dataset(dataset_name, override=False):
   Return
   ------
   dataset: `odin.fuel.dataset.Dataset` contains original data
-  cell_gene: instance of `sisua.data.SingleCellOMICS` for cell-gene matrix
-  cell_protein: instance of `sisua.data.SingleCellOMICS` for cell-protein matrix
   """
   data_meta = get_dataset_meta()
   # ====== special case: get all dataset ====== #
@@ -141,19 +143,16 @@ def get_dataset(dataset_name, override=False):
         % (dataset_name, ",".join(list(data_meta.keys()))))
   ds = data_meta[dataset_name](override=override)
   validating_dataset(ds)
-  # ====== get particular dataset ====== #
-  cell_gene = SingleCellOMICS(
-      matrix=ds['X'], rowname=ds['X_row'], colname=ds['X_col'])
-
-  cell_prot = SingleCellOMICS(
-      matrix=ds['y'], rowname=ds['X_row'], colname=ds['y_col'])
-
-  assert cell_gene.md5 == cell_prot.md5
   # ******************** return ******************** #
-  setattr(ds, 'name', dataset_name)
-  setattr(cell_gene, 'name', dataset_name)
-  setattr(cell_prot, 'name', dataset_name)
-  return ds, cell_gene, cell_prot
+  x = SingleCellOMICS(X=ds['X'],
+                      obs={'cellid': ds['X_row']},
+                      var={'geneid': ds['X_col']},
+                      name=dataset_name + 'X')
+  y = SingleCellOMICS(X=ds['y'],
+                      obs={'cellid': ds['X_row']},
+                      var={'protid': ds['y_col']},
+                      name=dataset_name + 'Y')
+  return x, y
 
 def get_scvi_dataset(dataset_name):
   """ Convert any SISUA dataset to relevant format for scVI models """

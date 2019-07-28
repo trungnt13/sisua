@@ -15,7 +15,6 @@ from odin.visual import (print_dist, merge_text_graph, plot_confusion_matrix,
                          generate_random_colors)
 from odin.utils import (unique_labels, ctext, auto_logging, batching, UnitTimer,
                         ArgController, get_script_path, mpi)
-from odin.autoconfig import get_rng
 from odin.stats import train_valid_test_split
 
 from sklearn.decomposition import PCA

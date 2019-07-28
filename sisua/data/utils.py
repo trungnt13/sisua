@@ -7,7 +7,7 @@ from six import string_types
 
 import numpy as np
 from odin.utils import ctext, as_tuple
-from odin.fuel import MmapData, Dataset
+from odin.fuel import MmapArrayWriter, Dataset
 
 # ===========================================================================
 # Helpers
@@ -142,12 +142,11 @@ def save_to_dataset(path, X, X_col, y, y_col,
   # save data
   if print_log:
     print("Saving data to %s ..." % ctext(path, 'cyan'))
-  out = MmapData(os.path.join(path, 'X'),
-                 dtype='float32', shape=(0, X.shape[1]),
-                 read_only=False)
-  out.append(X)
-  out.flush()
-  out.close()
+  with MmapArrayWriter(
+    path=os.path.join(path, 'X'),
+    dtype='float32', shape=(0, X.shape[1]),
+    remove_exist=True) as out:
+    out.write(X)
   with open(os.path.join(path, 'y'), 'wb') as f:
     pickle.dump(y, f)
   # save the meta info

@@ -13,7 +13,6 @@ import numpy as np
 import seaborn as sns
 from scipy import stats
 
-from odin import nnet as N, backend as K, training as T, visual as V
 from odin.visual import (print_dist, merge_text_graph, plot_confusion_matrix,
                          plot_figure, plot_histogram_layers, plot_save,
                          generate_random_colors, plot_histogram, Visualizer)
@@ -28,7 +27,6 @@ with warnings.catch_warnings():
   from sklearn.neighbors import KernelDensity
   from sklearn.base import DensityMixin, BaseEstimator
 
-from sisua.data import get_dataset, EXP_DIR
 from sisua.data.utils import standardize_protein_name
 
 # ===========================================================================
@@ -109,7 +107,7 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
   def __init__(self, n_components_per_class=2, positive_component=1,
                log_norm=True, clip_quartile=0., remove_zeros=True,
-               ci_threshold=-0.68, random_state=5218,
+               ci_threshold=-0.68, random_state=8,
                verbose=False):
     super(ProbabilisticEmbedding, self).__init__()
     self.n_components_per_class = int(n_components_per_class)
@@ -281,7 +279,7 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
     nrow = n_classes
     ncol = 1
-    fig = V.plot_figure(nrow=nrow * 2, ncol=8)
+    fig = plot_figure(nrow=nrow * 2, ncol=8)
     # add 1 for threshold color
     # add 1 for PDF color
     colors = sns.color_palette(n_colors=self.n_components_per_class + 2)
@@ -437,6 +435,7 @@ def get_arguments():
       y_prot_names = data[0]
     outpath = args.outpath
   else:
+    from sisua.data import get_dataset
     ds, gene_ds, prot_ds = get_dataset(inp, override=False)
     y_prot = ds['y']
     y_prot_names = np.array(ds['y_col'])

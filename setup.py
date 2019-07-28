@@ -25,7 +25,8 @@ requirements = [
     "seaborn>=0.9",
     "pandas",
     "dca==0.2.2",
-    'scvi==0.2.4'
+    'scvi==0.2.4',
+    'scanpy==1.4.4',
 ]
 
 setup(

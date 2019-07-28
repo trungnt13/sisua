@@ -7,7 +7,7 @@ from io import BytesIO
 
 import numpy as np
 
-from odin.fuel import Dataset, MmapData
+from odin.fuel import Dataset
 from odin.utils import ctext, get_file, batching, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
 

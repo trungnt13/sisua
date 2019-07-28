@@ -7,7 +7,7 @@ from io import BytesIO
 
 import numpy as np
 
-from odin.fuel import Dataset, MmapData
+from odin.fuel import Dataset
 from odin.utils import ctext, get_file, batching, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
 
@@ -103,7 +103,6 @@ def read_PBMC8k(subset, override=False, filtered_genes=False):
     if cell_types is not None:
       with open(os.path.join(preprocessed_path, 'cell_types'), 'wb') as f:
         pickle.dump(cell_types, f)
-
     save_to_dataset(preprocessed_path, X, X_col, y, y_col,
                     rowname=X_row)
 

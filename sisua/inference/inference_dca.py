@@ -99,9 +99,7 @@ class InferenceDCA(Inference):
                **kwargs):
     try:
       import dca as _dca_
-      from odin.autoconfig import get_session
       from keras import backend
-      backend.set_session(get_session())
     except ImportError as e:
       raise RuntimeError("pip install dca")
     # ====== validate the arguments ====== #

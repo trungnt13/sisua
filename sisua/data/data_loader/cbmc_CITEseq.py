@@ -9,7 +9,7 @@ from io import BytesIO, StringIO
 import numpy as np
 import scipy as sp
 
-from odin.fuel import MmapData, Dataset
+from odin.fuel import Dataset
 from odin.utils import get_file, crypto, ctext, batching
 
 from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
