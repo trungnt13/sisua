@@ -18,6 +18,7 @@ from odin.stats import (train_valid_test_split, describe,
                         sparsity_percentage)
 
 import scanpy as sc
+from anndata.core.alignedmapping import AxisArrays
 from sisua.label_threshold import ProbabilisticEmbedding
 
 # ===========================================================================
@@ -161,22 +162,25 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
                layers=None, raw=None,
                dtype='float32', shape=None,
                filename=None, filemode=None,
-               asview=False, name="scOMICS"):
+               asview=False,
+               oidx=None, vidx=None,
+               name="scOMICS"):
     if X is not None:
       if obs is None:
         obs = {'rowid': ['Row#%d' % i for i in range(X.shape[0])]}
       if var is None:
         var = {'colid': ['Col#%d' % i for i in range(X.shape[1])]}
+    self._inplace_subset_var
     super(SingleCellOMICS, self).__init__(X=X, obs=obs, var=var, uns=uns,
       obsm=obsm, varm=varm, layers=layers, raw=raw,
       dtype=dtype, shape=shape, filename=filename, filemode=filemode,
-      asview=asview)
+      asview=asview, oidx=oidx, vidx=vidx)
     self._name = str(name)
     self._indices = np.arange(self.X.shape[0], dtype='int32')
     self._calculate_library_info()
 
   def _calculate_library_info(self):
-    total_counts = self.X.sum(axis=1)
+    total_counts = np.sum(self.X, axis=1, keepdims=True)
     log_counts, local_mean, local_var = get_library_size(
       self.X, return_log_count=True)
     self._total_counts = total_counts
@@ -184,8 +188,34 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     self._local_mean = local_mean
     self._local_var = local_var
 
+  def __getitem__(self, index):
+    """Returns a sliced view of the object."""
+    oidx, vidx = self._normalize_indices(index)
+    omics = SingleCellOMICS(self, oidx=oidx, vidx=vidx, asview=True)
+    # update observation indexing
+    omics._obs = self._obs.iloc[oidx]
+    omics._obsm = AxisArrays(
+      omics, 0, vals={i: j[oidx] for i, j in self._obsm.items()})
+    omics._indices = self._indices[oidx]
+    # update variable indexing
+    omics._var = self._var.iloc[vidx]
+    omics._varm = AxisArrays(
+      omics, 1, vals={i: j[vidx] for i, j in self._varm.items()})
+    # other meta
+    omics._n_obs = omics._obs.shape[0]
+    omics._n_vars = omics._var.shape[0]
+    omics._name = self._name + '_index'
+    # library info
+    omics._total_counts = self._total_counts[oidx]
+    omics._log_counts = self._log_counts[oidx]
+    omics._local_mean = self._local_mean[oidx]
+    omics._local_var = self._local_var[oidx]
+    return omics
+
   def apply_indices(self, indices, observation=True):
-    """
+    """ Inplace indexing, this indexing algorithm also update
+    `obs`, `obsm`, `var`, `varm` to complement with the new indices.
+
     Parameters
     ----------
     indices : array of `int` or `bool`
@@ -193,7 +223,6 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       if True, applying the indices to the observation (i.e. axis=0),
       otherwise, to the variable (i.e. axis=1)
     """
-    from anndata.core.alignedmapping import AxisArrays
     indices = np.array(indices)
     itype = indices.dtype.type
     if not issubclass(itype, (np.bool, np.bool_, np.integer)):
@@ -205,6 +234,10 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       self._obsm = AxisArrays(
         self, 0, vals={i: j[indices] for i, j in self._obsm.items()})
       self._indices = self._indices[indices]
+      self._total_counts = self._total_counts[indices]
+      self._log_counts = self._log_counts[indices]
+      self._local_mean = self._local_mean[indices]
+      self._local_var = self._local_var[indices]
     else:
       self._X = self._X[:, indices]
       self._var = self._var.iloc[indices]
@@ -246,7 +279,12 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         copyfile(self.filename, filename)
       omics = SingleCellOMICS(filename=filename,
         name=self.name if name is None else name)
+    # other info related to SingleCellOMICS
     omics._indices = self.indices
+    omics._total_counts = self._total_counts
+    omics._log_counts = self._log_counts
+    omics._local_mean = self._local_mean
+    omics._local_var = self._local_var
     return omics
 
   @property
@@ -283,6 +321,14 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     """ Return the mean and variance for library size
     modeling in log-space """
     return self._local_mean, self._local_var
+
+  @property
+  def local_mean(self):
+    return self._local_mean
+
+  @property
+  def local_var(self):
+    return self._local_var
 
   @property
   def total_counts(self):
@@ -371,9 +417,12 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     name = '%s_%s%s' % (self.name, corruption_dist,
                         str(corruption_rate).split('.')[-1])
     if not inplace:
-      return self.copy(X=data, name=name)
-    self._name = name
-    return self
+      omics = self.copy(X=data)
+    else:
+      omics = self
+    omics._name = name
+    omics._calculate_library_info()
+    return omics
 
   def filter_highly_variable_genes(self, min_disp=0.5, max_disp=np.inf,
                                    min_mean=0.0125, max_mean=3,
@@ -406,8 +455,9 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     max_mean : `float`, optional (default=3)
         If `n_top_genes` unequals `None`, this and all other cutoffs for
         the means and the normalized dispersions are ignored.
-    n_top_genes : {`int`, `None`}, optional (default=`None`)
-        Number of highly-variable genes to keep.
+    n_top_genes : {`float`, int`, `None`}, optional (default=`None`)
+        Number of highly-variable genes to keep., if the value is in (0, 1],
+        intepret as percent of genes
     n_bins : `int`, optional (default: 20)
         Number of bins for binning the mean gene expression. Normalization is
         done with respect to each bin. If just a single gene falls into a bin,
@@ -439,12 +489,13 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     It is recommended to do `log1p` normalization before if `flavor='seurat'`
     """
     flavor = str(flavor).lower()
-    # prevent overflow in exp
-    if np.max(self.X) > 88 and \
-      self.dtype.itemsize <= 4 and \
-      flavor == 'seurat':
-      self._X = self._X.astype('float64')
+    if n_top_genes is not None:
+      if 0. < n_top_genes < 1.:
+        n_top_genes = int(n_top_genes * self.n_vars)
+      n_top_genes += 1
     # prepare the data
+    # this function will take the exponential of X all the time,
+    # so non-logarithmzed data might led to overflow
     omics = self if inplace else self.copy()
     sc.pp.highly_variable_genes(omics,
                                 min_disp=min_disp, max_disp=max_disp,
@@ -454,6 +505,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
                                 subset=True, inplace=False)
     omics._name += '_vargene'
     omics._n_vars = omics._X.shape[1]
+    # recalculate library info
+    omics._calculate_library_info()
     return omics
 
   def filter_genes(self, min_counts=None, max_counts=None,
@@ -501,6 +554,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
             inplace=True)
     omics._name += '_filtergene'
     omics._n_vars = omics._X.shape[1]
+    # recalculate library info
+    omics._calculate_library_info()
     return omics
 
   def filter_cells(self, min_counts=None, max_counts=None,
@@ -607,9 +662,19 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     self.uns['pca']['variance_ratio'] = pca_.explained_variance_ratio_
     return self
 
-  def normalize(self, total_counts_per_cell=False, log1p=False, scale=False,
+  def expm1(self, inplace=True):
+    omics = self if inplace else self.copy()
+    _expm1 = lambda x: (np.expm1(x.data, out=x.data)
+                        if issparse(x) else
+                        np.expm1(x, out=x))
+    for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
+      omics._X[s:e] = _expm1(omics._X[s:e])
+    omics._name += '_expm1'
+    return omics
+
+  def normalize(self, total_counts=False, log1p=False, scale=False,
                 target_sum=None, exclude_highly_expressed=False,
-                max_fraction=0.05, inplace=True):
+                max_fraction=0.05, max_value=None, inplace=True):
     """
     If ``exclude_highly_expressed=True``, very highly expressed genes are
     excluded from the computation of the normalization factor (size factor)
@@ -638,6 +703,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       If ``exclude_highly_expressed=True``, consider cells as highly expressed
       that have more counts than ``max_fraction`` of the original total counts
       in at least one cell.
+    max_value : `float` or `None`, optional (default=`None`)
+        Clip (truncate) to this value after scaling. If `None`, do not clip.
     inplace : `bool` (default=True)
       if False, return new `SingleCellOMICS` with the filtered
       cells applied
@@ -654,11 +721,11 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     """
     omics = self if inplace else self.copy()
 
-    if total_counts_per_cell:
+    if total_counts:
       sc.pp.normalize_total(omics, target_sum=target_sum,
         exclude_highly_expressed=exclude_highly_expressed,
         max_fraction=max_fraction, inplace=True)
-      # since the total count info is "flaten", store the old info
+      # since the total counts is normalized, store the old library size
       omics._total_counts = self._total_counts
       omics._log_counts = self._log_counts
       omics._local_mean = self._local_mean
@@ -671,7 +738,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       omics._name += '_log1p'
 
     if scale:
-      sc.pp.scale(omics, zero_center=True, copy=False)
+      sc.pp.scale(omics, zero_center=True, max_value=max_value,
+                  copy=False)
       omics._name += '_scale'
     return omics
 
@@ -951,9 +1019,21 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         f.write(x)
 
   def __str__(self):
+    all_nonzeros = []
+    for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
+      x = self.X[s:e]
+      ids = np.nonzero(x)
+      all_nonzeros.append(x[ids[0], ids[1]])
+    all_nonzeros = np.concatenate(all_nonzeros)
+
     text = super(SingleCellOMICS, self).__str__()
     text = text.replace('AnnData object', self.name)
     text += '\n    Sparsity: %.2f' % self.sparsity
-    text += '\n    Cell: %s' % describe(self.counts_per_cell, shorten=True)
-    text += '\n    Gene: %s' % describe(self.counts_per_gene, shorten=True)
+    text += '\n    Nonzeros: %s' % describe(all_nonzeros, shorten=True, float_precision=2)
+    text += '\n    Cell    : %s' % describe(self.counts_per_cell, shorten=True, float_precision=2)
+    text += '\n    Gene    : %s' % describe(self.counts_per_gene, shorten=True, float_precision=2)
+    text += '\n    TotalCount: %s' % describe(self.total_counts, shorten=True, float_precision=2)
+    text += '\n    LogCount  : %s' % describe(self.log_counts, shorten=True, float_precision=2)
+    text += '\n    LocalMean : %s' % describe(self.local_mean, shorten=True, float_precision=2)
+    text += '\n    LocalVar  : %s' % describe(self.local_var, shorten=True, float_precision=2)
     return text
