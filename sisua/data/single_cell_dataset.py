@@ -1,24 +1,22 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
 import os
 from copy import deepcopy
-from six import string_types
 
 import numpy as np
+import scanpy as sc
 import scipy as sp
-from scipy.sparse import issparse
 import tensorflow as tf
+from anndata.core.alignedmapping import AxisArrays
+from scipy.sparse import issparse
+from six import string_types
 
 from odin import visual as vs
-from odin.visual import Visualizer, to_axis
 from odin.fuel import MmapArrayWriter
-from odin.utils import ctext, cache_memory, batching, as_tuple
+from odin.stats import describe, sparsity_percentage, train_valid_test_split
+from odin.utils import as_tuple, batching, cache_memory, ctext
 from odin.utils.crypto import md5_checksum
-from odin.stats import (train_valid_test_split, describe,
-                        sparsity_percentage)
-
-import scanpy as sc
-from anndata.core.alignedmapping import AxisArrays
+from odin.visual import Visualizer, to_axis
 from sisua.label_threshold import ProbabilisticEmbedding
 
 # ===========================================================================
@@ -26,11 +24,11 @@ from sisua.label_threshold import ProbabilisticEmbedding
 # ===========================================================================
 _DEFAULT_BATCH_SIZE = 4096
 
+
 # ===========================================================================
 # Helper
 # ===========================================================================
-def apply_artificial_corruption(x, dropout, distribution, copy=False,
-                                seed=8):
+def apply_artificial_corruption(x, dropout, distribution, copy=False, seed=8):
   """
   Parameters
   ----------
@@ -65,8 +63,7 @@ def apply_artificial_corruption(x, dropout, distribution, copy=False,
                      replace=False)
     i, j = i[ix], j[ix]
     corrupted = np.multiply(
-        x[i, j],
-        rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=0.9))
+        x[i, j], rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=0.9))
   # multiply the entry n with a Bin(n, 0.9) random variable.
   elif distribution == "binomial":
     i, j = (k.ravel() for k in np.indices(x.shape))
@@ -85,6 +82,7 @@ def apply_artificial_corruption(x, dropout, distribution, copy=False,
     corrupted = type(corrupted_x)(corrupted)
   corrupted_x[i, j] = corrupted
   return corrupted_x
+
 
 def get_library_size(X, return_log_count=False):
   """ Copyright scVI authors
@@ -111,11 +109,13 @@ def get_library_size(X, return_log_count=False):
   total_counts = X.sum(axis=1)
   assert np.all(total_counts >= 0), "Some cell contains negative-count!"
   log_counts = np.log(total_counts + 1e-8)
-  local_mean = (np.mean(log_counts) * np.ones((X.shape[0], 1))).astype(np.float32)
+  local_mean = (np.mean(log_counts) * np.ones(
+      (X.shape[0], 1))).astype(np.float32)
   local_var = (np.var(log_counts) * np.ones((X.shape[0], 1))).astype(np.float32)
   if not return_log_count:
     return local_mean, local_var
   return np.expand_dims(log_counts, -1), local_mean, local_var
+
 
 # ===========================================================================
 # OMICS
@@ -157,13 +157,22 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       same dimensions as X.
   """
 
-  def __init__(self, X=None, obs=None, var=None,
-               uns=None, obsm=None, varm=None,
-               layers=None, raw=None,
-               dtype='float32', shape=None,
-               filename=None, filemode=None,
+  def __init__(self,
+               X=None,
+               obs=None,
+               var=None,
+               uns=None,
+               obsm=None,
+               varm=None,
+               layers=None,
+               raw=None,
+               dtype='float32',
+               shape=None,
+               filename=None,
+               filemode=None,
                asview=False,
-               oidx=None, vidx=None,
+               oidx=None,
+               vidx=None,
                name="scOMICS"):
     if X is not None:
       if obs is None:
@@ -171,18 +180,29 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       if var is None:
         var = {'colid': ['Col#%d' % i for i in range(X.shape[1])]}
     self._inplace_subset_var
-    super(SingleCellOMICS, self).__init__(X=X, obs=obs, var=var, uns=uns,
-      obsm=obsm, varm=varm, layers=layers, raw=raw,
-      dtype=dtype, shape=shape, filename=filename, filemode=filemode,
-      asview=asview, oidx=oidx, vidx=vidx)
+    super(SingleCellOMICS, self).__init__(X=X,
+                                          obs=obs,
+                                          var=var,
+                                          uns=uns,
+                                          obsm=obsm,
+                                          varm=varm,
+                                          layers=layers,
+                                          raw=raw,
+                                          dtype=dtype,
+                                          shape=shape,
+                                          filename=filename,
+                                          filemode=filemode,
+                                          asview=asview,
+                                          oidx=oidx,
+                                          vidx=vidx)
     self._name = str(name)
     self._indices = np.arange(self.X.shape[0], dtype='int32')
     self._calculate_library_info()
 
   def _calculate_library_info(self):
     total_counts = np.sum(self.X, axis=1, keepdims=True)
-    log_counts, local_mean, local_var = get_library_size(
-      self.X, return_log_count=True)
+    log_counts, local_mean, local_var = get_library_size(self.X,
+                                                         return_log_count=True)
     self._total_counts = total_counts
     self._log_counts = log_counts
     self._local_mean = local_mean
@@ -194,13 +214,15 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     omics = SingleCellOMICS(self, oidx=oidx, vidx=vidx, asview=True)
     # update observation indexing
     omics._obs = self._obs.iloc[oidx]
-    omics._obsm = AxisArrays(
-      omics, 0, vals={i: j[oidx] for i, j in self._obsm.items()})
+    omics._obsm = AxisArrays(omics,
+                             0,
+                             vals={i: j[oidx] for i, j in self._obsm.items()})
     omics._indices = self._indices[oidx]
     # update variable indexing
     omics._var = self._var.iloc[vidx]
-    omics._varm = AxisArrays(
-      omics, 1, vals={i: j[vidx] for i, j in self._varm.items()})
+    omics._varm = AxisArrays(omics,
+                             1,
+                             vals={i: j[vidx] for i, j in self._varm.items()})
     # other meta
     omics._n_obs = omics._obs.shape[0]
     omics._n_vars = omics._var.shape[0]
@@ -232,7 +254,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       self._obs = self._obs.iloc[indices]
       self._n_obs = self._X.shape[0]
       self._obsm = AxisArrays(
-        self, 0, vals={i: j[indices] for i, j in self._obsm.items()})
+          self, 0, vals={i: j[indices] for i, j in self._obsm.items()})
       self._indices = self._indices[indices]
       self._total_counts = self._total_counts[indices]
       self._log_counts = self._log_counts[indices]
@@ -243,7 +265,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       self._var = self._var.iloc[indices]
       self._n_vars = self._X.shape[1]
       self._varm = AxisArrays(
-        self, 1, vals={i: j[indices] for i, j in self._varm.items()})
+          self, 1, vals={i: j[indices] for i, j in self._varm.items()})
     return self
 
   def copy(self, X=None, filename=None, name=None):
@@ -253,20 +275,20 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     from anndata.core.views import DictView
     if not self.isbacked:
       omics = SingleCellOMICS(
-        X if X is not None else (self._X.copy()
-                                 if self._X is not None else
-                                 None),
-        self._obs.copy(),
-        self._var.copy(),
-        # deepcopy on DictView does not work and is unnecessary
-        # as uns was copied already before
-        self._uns.copy() if isinstance(self._uns, DictView) else
-        deepcopy(self._uns),
-        self._obsm.copy(), self._varm.copy(),
-        raw=None if self._raw is None else self._raw.copy(),
-        layers=dict(self.layers),
-        dtype=self._X.dtype.name if self._X is not None else 'float32',
-        name=self.name + '_copy' if name is None else name)
+          X if X is not None else
+          (self._X.copy() if self._X is not None else None),
+          self._obs.copy(),
+          self._var.copy(),
+          # deepcopy on DictView does not work and is unnecessary
+          # as uns was copied already before
+          self._uns.copy()
+          if isinstance(self._uns, DictView) else deepcopy(self._uns),
+          self._obsm.copy(),
+          self._varm.copy(),
+          raw=None if self._raw is None else self._raw.copy(),
+          layers=dict(self.layers),
+          dtype=self._X.dtype.name if self._X is not None else 'float32',
+          name=self.name + '_copy' if name is None else name)
     else:
       if filename is None:
         raise ValueError(
@@ -278,7 +300,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         from shutil import copyfile
         copyfile(self.filename, filename)
       omics = SingleCellOMICS(filename=filename,
-        name=self.name if name is None else name)
+                              name=self.name if name is None else name)
     # other info related to SingleCellOMICS
     omics._indices = self.indices
     omics._total_counts = self._total_counts
@@ -339,15 +361,16 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     return self._log_counts
 
   # ******************** converter ******************** #
-  def as_tensorflow_dataset(self, obs=(), obsm=(), include_x=True):
+  def as_tensorflow_dataset(self, obs=(), obsm=(),
+                            include_x=True) -> tf.data.Dataset:
     data = [self.X] if include_x else []
     for name in as_tuple(obs, t=string_types):
       data.append(self.obs[name].values)
     for name in as_tuple(obsm, t=string_types):
       data.append(self.obsm[name])
     assert len(data) > 0, "No data is given"
-    ds = tf.data.Dataset.from_tensor_slices(
-      data[0] if len(data) == 1 else tuple(data))
+    ds = tf.data.Dataset.from_tensor_slices(data[0] if len(data) ==
+                                            1 else tuple(data))
     return ds
 
   # ******************** transformation ******************** #
@@ -370,33 +393,38 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     test : `SingleCellOMICS`
     """
     assert 0 < train_percent < 1
-    ids = np.random.RandomState(
-      seed=seed).permutation(self.n_obs).astype('int32')
+    ids = np.random.RandomState(seed=seed).permutation(
+        self.n_obs).astype('int32')
     ntrain = int(train_percent * self.n_obs)
 
     train_ids = ids[:ntrain]
     train = SingleCellOMICS(
-      X=self.X[train_ids],
-      obs=self.obs.iloc[train_ids],
-      obsm={i: j[train_ids] for i, j in self.obsm.items()},
-      var=self.var, varm=self.varm,
-      uns=self.uns, # it is tricky to split unstructed annotation
-      name=self.name + '_train')
-    train._indices = train_ids # copy the indices, this is important
+        X=self.X[train_ids],
+        obs=self.obs.iloc[train_ids],
+        obsm={i: j[train_ids] for i, j in self.obsm.items()},
+        var=self.var,
+        varm=self.varm,
+        uns=self.uns,  # it is tricky to split unstructed annotation
+        name=self.name + '_train')
+    train._indices = train_ids  # copy the indices, this is important
 
     test_ids = ids[ntrain:]
     test = SingleCellOMICS(
-      X=self.X[test_ids],
-      obs=self.obs.iloc[test_ids],
-      obsm={i: j[test_ids] for i, j in self.obsm.items()},
-      var=self.var, varm=self.varm,
-      uns=self.uns, # it is tricky to split unstructed annotation
-      name=self.name + '_test')
-    test._indices = test_ids # copy the indices, this is important
+        X=self.X[test_ids],
+        obs=self.obs.iloc[test_ids],
+        obsm={i: j[test_ids] for i, j in self.obsm.items()},
+        var=self.var,
+        varm=self.varm,
+        uns=self.uns,  # it is tricky to split unstructed annotation
+        name=self.name + '_test')
+    test._indices = test_ids  # copy the indices, this is important
     return train, test
 
-  def corrupt(self, corruption_rate=0.25, corruption_dist='binomial',
-              inplace=True, seed=8):
+  def corrupt(self,
+              corruption_rate=0.25,
+              corruption_dist='binomial',
+              inplace=True,
+              seed=8):
     """
     Parameters
     ----------
@@ -413,7 +441,10 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       return self if inplace else self.copy()
 
     data = apply_artificial_corruption(self.X,
-      corruption_rate, corruption_dist, copy=not inplace, seed=seed)
+                                       corruption_rate,
+                                       corruption_dist,
+                                       copy=not inplace,
+                                       seed=seed)
     name = '%s_%s%s' % (self.name, corruption_dist,
                         str(corruption_rate).split('.')[-1])
     if not inplace:
@@ -424,10 +455,14 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     omics._calculate_library_info()
     return omics
 
-  def filter_highly_variable_genes(self, min_disp=0.5, max_disp=np.inf,
-                                   min_mean=0.0125, max_mean=3,
+  def filter_highly_variable_genes(self,
+                                   min_disp=0.5,
+                                   max_disp=np.inf,
+                                   min_mean=0.0125,
+                                   max_mean=3,
                                    n_top_genes=None,
-                                   n_bins=20, flavor='seurat',
+                                   n_bins=20,
+                                   flavor='seurat',
                                    inplace=True):
     """ Annotate highly variable genes [Satija15]_ [Zheng17]_.
 
@@ -498,19 +533,25 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     # so non-logarithmzed data might led to overflow
     omics = self if inplace else self.copy()
     sc.pp.highly_variable_genes(omics,
-                                min_disp=min_disp, max_disp=max_disp,
-                                min_mean=min_mean, max_mean=max_mean,
+                                min_disp=min_disp,
+                                max_disp=max_disp,
+                                min_mean=min_mean,
+                                max_mean=max_mean,
                                 n_top_genes=n_top_genes,
                                 flavor=flavor,
-                                subset=True, inplace=False)
+                                subset=True,
+                                inplace=False)
     omics._name += '_vargene'
     omics._n_vars = omics._X.shape[1]
     # recalculate library info
     omics._calculate_library_info()
     return omics
 
-  def filter_genes(self, min_counts=None, max_counts=None,
-                   min_cells=None, max_cells=None,
+  def filter_genes(self,
+                   min_counts=None,
+                   max_counts=None,
+                   min_cells=None,
+                   max_cells=None,
                    inplace=True):
     """ Filter features (columns) based on number of rows or counts.
 
@@ -549,17 +590,22 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     """
     omics = self if inplace else self.copy()
     sc.pp.filter_genes(omics,
-            min_counts=min_counts, max_counts=max_counts,
-            min_cells=min_cells, max_cells=max_cells,
-            inplace=True)
+                       min_counts=min_counts,
+                       max_counts=max_counts,
+                       min_cells=min_cells,
+                       max_cells=max_cells,
+                       inplace=True)
     omics._name += '_filtergene'
     omics._n_vars = omics._X.shape[1]
     # recalculate library info
     omics._calculate_library_info()
     return omics
 
-  def filter_cells(self, min_counts=None, max_counts=None,
-                   min_genes=None, max_genes=None,
+  def filter_cells(self,
+                   min_counts=None,
+                   max_counts=None,
+                   min_genes=None,
+                   max_genes=None,
                    inplace=True):
     """ Filter examples (rows) based on number of features or counts.
 
@@ -598,17 +644,25 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     """
     # scanpy messed up here, the obs was not updated with the new indices
     cells_subset, number_per_cell = sc.pp.filter_cells(self,
-        min_counts=min_counts, max_counts=max_counts,
-        min_genes=min_genes, max_genes=max_genes,
-        inplace=False)
+                                                       min_counts=min_counts,
+                                                       max_counts=max_counts,
+                                                       min_genes=min_genes,
+                                                       max_genes=max_genes,
+                                                       inplace=False)
     omics = self if inplace else self.copy()
     omics.apply_indices(cells_subset, observation=True)
     omics._name += '_filtercell'
     return omics
 
-  def probabilistic_embedding(self, n_components_per_class=2, positive_component=1,
-                              log_norm=False, clip_quartile=0., remove_zeros=True,
-                              ci_threshold=-0.68, seed=8, pbe=None):
+  def probabilistic_embedding(self,
+                              n_components_per_class=2,
+                              positive_component=1,
+                              log_norm=False,
+                              clip_quartile=0.,
+                              remove_zeros=True,
+                              ci_threshold=-0.68,
+                              seed=8,
+                              pbe=None):
     """ Fit a GMM on each feature column to get the probability or binary
     representation of the features
 
@@ -621,11 +675,13 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     # separately in advance.
     if pbe is None:
       pbe = ProbabilisticEmbedding(
-        n_components_per_class=n_components_per_class,
-        positive_component=positive_component,
-        log_norm=log_norm, clip_quartile=clip_quartile,
-        remove_zeros=remove_zeros,
-        ci_threshold=ci_threshold, random_state=seed)
+          n_components_per_class=n_components_per_class,
+          positive_component=positive_component,
+          log_norm=log_norm,
+          clip_quartile=clip_quartile,
+          remove_zeros=remove_zeros,
+          ci_threshold=ci_threshold,
+          random_state=seed)
       pbe.fit(self.X)
     else:
       assert isinstance(pbe, ProbabilisticEmbedding), \
@@ -648,12 +704,12 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     pca_ = IncrementalPCA(n_components=n_comps)
 
     for chunk, _, _ in self.chunked_X(_DEFAULT_BATCH_SIZE):
-        chunk = chunk.toarray() if issparse(chunk) else chunk
-        pca_.partial_fit(chunk)
+      chunk = chunk.toarray() if issparse(chunk) else chunk
+      pca_.partial_fit(chunk)
 
     for chunk, start, end in self.chunked_X(_DEFAULT_BATCH_SIZE):
-        chunk = chunk.toarray() if issparse(chunk) else chunk
-        X_pca[start:end] = pca_.transform(chunk)
+      chunk = chunk.toarray() if issparse(chunk) else chunk
+      X_pca[start:end] = pca_.transform(chunk)
 
     self.obsm['X_pca'] = X_pca
     self.varm['PCs'] = pca_.components_.T
@@ -665,16 +721,21 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
   def expm1(self, inplace=True):
     omics = self if inplace else self.copy()
     _expm1 = lambda x: (np.expm1(x.data, out=x.data)
-                        if issparse(x) else
-                        np.expm1(x, out=x))
+                        if issparse(x) else np.expm1(x, out=x))
     for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
       omics._X[s:e] = _expm1(omics._X[s:e])
     omics._name += '_expm1'
     return omics
 
-  def normalize(self, total_counts=False, log1p=False, scale=False,
-                target_sum=None, exclude_highly_expressed=False,
-                max_fraction=0.05, max_value=None, inplace=True):
+  def normalize(self,
+                total_counts=False,
+                log1p=False,
+                scale=False,
+                target_sum=None,
+                exclude_highly_expressed=False,
+                max_fraction=0.05,
+                max_value=None,
+                inplace=True):
     """
     If ``exclude_highly_expressed=True``, very highly expressed genes are
     excluded from the computation of the normalization factor (size factor)
@@ -722,9 +783,11 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     omics = self if inplace else self.copy()
 
     if total_counts:
-      sc.pp.normalize_total(omics, target_sum=target_sum,
-        exclude_highly_expressed=exclude_highly_expressed,
-        max_fraction=max_fraction, inplace=True)
+      sc.pp.normalize_total(omics,
+                            target_sum=target_sum,
+                            exclude_highly_expressed=exclude_highly_expressed,
+                            max_fraction=max_fraction,
+                            inplace=True)
       # since the total counts is normalized, store the old library size
       omics._total_counts = self._total_counts
       omics._log_counts = self._log_counts
@@ -733,13 +796,14 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       omics._name += '_countnorm'
 
     if log1p:
-      sc.pp.log1p(omics, chunked=True, chunk_size=_DEFAULT_BATCH_SIZE,
+      sc.pp.log1p(omics,
+                  chunked=True,
+                  chunk_size=_DEFAULT_BATCH_SIZE,
                   copy=False)
       omics._name += '_log1p'
 
     if scale:
-      sc.pp.scale(omics, zero_center=True, max_value=max_value,
-                  copy=False)
+      sc.pp.scale(omics, zero_center=True, max_value=max_value, copy=False)
       omics._name += '_scale'
     return omics
 
@@ -767,8 +831,13 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     return counts
 
   # ******************** metrics ******************** #
-  def neighbors(self, n_neighbors=15, n_pcs=None, use_rep=None,
-                knn=True, method='umap', metric='euclidean',
+  def neighbors(self,
+                n_neighbors=15,
+                n_pcs=None,
+                use_rep=None,
+                knn=True,
+                method='umap',
+                metric='euclidean',
                 seed=8):
     """\
     Compute a neighborhood graph of observations [McInnes18]_.
@@ -820,15 +889,27 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         Instead of decaying weights, this stores distances for each pair of
         neighbors.
     """
-    sc.pp.neighbors(self, n_neighbors=n_neighbors, knn=knn,
-                    method=method, metric=metric,
-                    n_pcs=n_pcs, use_rep=use_rep,
-                    random_state=seed, copy=False)
+    sc.pp.neighbors(self,
+                    n_neighbors=n_neighbors,
+                    knn=knn,
+                    method=method,
+                    metric=metric,
+                    n_pcs=n_pcs,
+                    use_rep=use_rep,
+                    random_state=seed,
+                    copy=False)
     return self
 
-  def louvain(self, resolution=None, restrict_to=None, key_added='louvain',
-              adjacency=None, flavor='vtraag', directed=True,
-              use_weights=False, partition_type=None, partition_kwargs=None,
+  def louvain(self,
+              resolution=None,
+              restrict_to=None,
+              key_added='louvain',
+              adjacency=None,
+              flavor='vtraag',
+              directed=True,
+              use_weights=False,
+              partition_type=None,
+              partition_kwargs=None,
               seed=8):
     """Cluster cells into subgroups [Blondel08]_ [Levine15]_ [Traag17]_.
 
@@ -881,23 +962,28 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     :class:`~anndata.AnnData`
         When ``copy=True`` is set, a copy of ``adata`` with those fields is returned.
     """
-    sc.tl.louvain(self, resolution=resolution,
-      random_state=seed,
-      restrict_to=restrict_to,
-      key_added=key_added,
-      adjacency=adjacency,
-      flavor=flavor,
-      directed=directed,
-      use_weights=use_weights,
-      partition_type=partition_type,
-      partition_kwargs=partition_kwargs,
-      copy=False
-    )
+    sc.tl.louvain(self,
+                  resolution=resolution,
+                  random_state=seed,
+                  restrict_to=restrict_to,
+                  key_added=key_added,
+                  adjacency=adjacency,
+                  flavor=flavor,
+                  directed=directed,
+                  use_weights=use_weights,
+                  partition_type=partition_type,
+                  partition_kwargs=partition_kwargs,
+                  copy=False)
     return self
 
-  def calculate_qc_metrics(self, expr_type='counts', var_type='genes',
-                           qc_vars=(), percent_top=(50, 100, 200, 500),
-                           layer=None, use_raw=False, parallel=None):
+  def calculate_qc_metrics(self,
+                           expr_type='counts',
+                           var_type='genes',
+                           qc_vars=(),
+                           percent_top=(50, 100, 200, 500),
+                           layer=None,
+                           use_raw=False,
+                           parallel=None):
     """\
     Calculate quality control metrics.
 
@@ -958,14 +1044,23 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       appear in.
     """
     sc.pp.calculate_qc_metrics(self,
-        expr_type=expr_type, var_type=var_type,
-        qc_vars=qc_vars, percent_top=percent_top, layer=layer,
-        use_raw=use_raw, parallel=parallel, inplace=True)
+                               expr_type=expr_type,
+                               var_type=var_type,
+                               qc_vars=qc_vars,
+                               percent_top=percent_top,
+                               layer=layer,
+                               use_raw=use_raw,
+                               parallel=parallel,
+                               inplace=True)
     return self
 
   # ******************** plotting helper ******************** #
-  def plot_percentile_histogram(self, n_hist, title=None, outlier=0.001,
-                                non_zeros=False, fig=None):
+  def plot_percentile_histogram(self,
+                                n_hist,
+                                title=None,
+                                outlier=0.001,
+                                non_zeros=False,
+                                fig=None):
     """ Data is chopped into multiple percentile (`n_hist`) and the
     histogram is plotted for each percentile.
 
@@ -980,7 +1075,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     if fig is None:
       fig = vs.plot_figure(nrow=int(n_row * 1.5), ncol=20)
     self.assert_figure(fig)
-    percentile = np.linspace(start=np.min(arr), stop=np.max(arr),
+    percentile = np.linspace(start=np.min(arr),
+                             stop=np.max(arr),
                              num=n_percentiles)
     n_samples = len(arr)
     for i, (p_min, p_max) in enumerate(zip(percentile, percentile[1:])):
@@ -988,12 +1084,14 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       max_mask = arr <= p_max
       mask = np.logical_and(min_mask, max_mask)
       a = arr[mask]
-      _, bins = vs.plot_histogram(a, bins=120, ax=(n_row, n_col, i + 1),
-                             fontsize=8,
-                             color='red' if len(a) / n_samples < outlier else 'blue',
-                             title=("[%s]" % title if i == 0 else "") +
-                             "%d(samples)  Range:[%g, %g]" %
-                             (len(a), p_min, p_max))
+      _, bins = vs.plot_histogram(
+          a,
+          bins=120,
+          ax=(n_row, n_col, i + 1),
+          fontsize=8,
+          color='red' if len(a) / n_samples < outlier else 'blue',
+          title=("[%s]" % title if i == 0 else "") +
+          "%d(samples)  Range:[%g, %g]" % (len(a), p_min, p_max))
       plt.gca().set_xticks(np.linspace(np.min(bins), np.max(bins), num=8))
     plt.tight_layout()
     self.add_figure('percentile_%dhistogram' % n_hist, fig)
@@ -1008,17 +1106,17 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
   # ******************** logging and io ******************** #
   def save_to_mmaparray(self, path, dtype=None):
     """ This only save the data without row names and column names """
-    with MmapArrayWriter(
-      path=path, shape=self.shape,
-      dtype=self.dtype if dtype is None else dtype,
-      remove_exist=True) as f:
+    with MmapArrayWriter(path=path,
+                         shape=self.shape,
+                         dtype=self.dtype if dtype is None else dtype,
+                         remove_exist=True) as f:
       for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=self.n_obs):
         x = self.X[s:e]
         if dtype is not None:
           x = x.astype(dtype)
         f.write(x)
 
-  def __str__(self):
+  def _get_str(self):
     all_nonzeros = []
     for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
       x = self.X[s:e]
@@ -1026,14 +1124,27 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       all_nonzeros.append(x[ids[0], ids[1]])
     all_nonzeros = np.concatenate(all_nonzeros)
 
-    text = super(SingleCellOMICS, self).__str__()
+    text = super(SingleCellOMICS, self).__repr__()
     text = text.replace('AnnData object', self.name)
     text += '\n    Sparsity: %.2f' % self.sparsity
-    text += '\n    Nonzeros: %s' % describe(all_nonzeros, shorten=True, float_precision=2)
-    text += '\n    Cell    : %s' % describe(self.counts_per_cell, shorten=True, float_precision=2)
-    text += '\n    Gene    : %s' % describe(self.counts_per_gene, shorten=True, float_precision=2)
-    text += '\n    TotalCount: %s' % describe(self.total_counts, shorten=True, float_precision=2)
-    text += '\n    LogCount  : %s' % describe(self.log_counts, shorten=True, float_precision=2)
-    text += '\n    LocalMean : %s' % describe(self.local_mean, shorten=True, float_precision=2)
-    text += '\n    LocalVar  : %s' % describe(self.local_var, shorten=True, float_precision=2)
+    text += '\n    Nonzeros: %s' % describe(
+        all_nonzeros, shorten=True, float_precision=2)
+    text += '\n    Cell    : %s' % describe(
+        self.counts_per_cell, shorten=True, float_precision=2)
+    text += '\n    Gene    : %s' % describe(
+        self.counts_per_gene, shorten=True, float_precision=2)
+    text += '\n    TotalCount: %s' % describe(
+        self.total_counts, shorten=True, float_precision=2)
+    text += '\n    LogCount  : %s' % describe(
+        self.log_counts, shorten=True, float_precision=2)
+    text += '\n    LocalMean : %s' % describe(
+        self.local_mean, shorten=True, float_precision=2)
+    text += '\n    LocalVar  : %s' % describe(
+        self.local_var, shorten=True, float_precision=2)
     return text
+
+  def __repr__(self):
+    return self._get_str()
+
+  def __str__(self):
+    return self._get_str()

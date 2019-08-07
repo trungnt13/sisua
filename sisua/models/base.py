@@ -1,216 +1,219 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
-from six import add_metaclass
-from abc import ABCMeta, abstractmethod
+from abc import ABCMeta, abstractmethod, abstractproperty
+from functools import partial
+from typing import Iterable, List, Text, Union
 
+import numpy as np
 import tensorflow as tf
-from tensorflow.python.keras import Model, Sequential
-from tensorflow.python.keras.layers import (
-  Layer, Dense, Dropout, Lambda, BatchNormalization, Activation)
-from tensorflow_probability.python.distributions import (
-  Distribution, Normal, NegativeBinomial, Poisson, MultivariateNormalDiag)
+from six import add_metaclass, string_types
+from tensorflow.python.keras import Model
+from tensorflow.python.keras.callbacks import (Callback, CallbackList,
+                                               LambdaCallback)
 
-from odin.bay.distribution_layers import (
-  GaussianLayer, DistributionLambda, NegativeBinomialLayer, PoissonLayer,
-  MultivariateNormalLayer)
-from odin.bay.distribution_util_layers import (Moments, Sampling)
-from odin.bay.helpers import kl_divergence
+from sisua.data import SingleCellOMICS
 
-__all__ = [
-  'DistributionLayer',
-  'NormalDiagLatent',
-  'DenseNetwork',
-]
 
 # ===========================================================================
-# Latent space
+# Helper
 # ===========================================================================
-class DistributionLayer(Model):
+def _to_sc_omics(x):
+  if isinstance(x, SingleCellOMICS):
+    return x
+  return SingleCellOMICS(x)
 
-  """
-  Parameters
-  ----------
-  n_units : int
-    number of output units.
-
-  posterior : subclass of tensorflow_probability.DistributionLambda
-    posterior distribution, the class is given for later
-    initialization
-
-  prior : None or tensorflow_probability.Distribution
-    prior distribution, used for calculating KL divergence later.
-
-  """
-
-  def __init__(self, n_units,
-               posterior=GaussianLayer, prior=None,
-               use_bias=True, name=None):
-    if name is None:
-      name = "DistributionLayer"
-    super(DistributionLayer, self).__init__(name=name)
-    assert isinstance(posterior, DistributionLambda) or\
-       (isinstance(posterior, type) and issubclass(posterior, DistributionLambda)),\
-         "posterior must be instance or subclass of DistributionLambda"
-    self._n_units = int(n_units)
-    layers = [
-      Dense(posterior.params_size(self.n_units),
-            activation='linear', use_bias=bool(use_bias)),
-      posterior if isinstance(posterior, DistributionLambda) else
-      posterior(self.n_units),
-    ]
-    if isinstance(posterior, DistributionLambda):
-      distribution_type = type(posterior)
-    else:
-      distribution_type = posterior
-    self._distribution = Sequential(
-      layers, name="%s%s" % (name, distribution_type.__name__))
-    self._last_distribution = None
-    # check the prior, this could be given later
-    assert prior is None or isinstance(prior, Distribution), \
-      "prior can be None or instance of tensorflow_probability.Distribution"
-    self.prior = prior
-
-  @property
-  def n_units(self):
-    return self._n_units
-
-  def mean(self, x):
-    dist = self._distribution(x)
-    y = Moments(variance=False)(dist)
-    setattr(y, '_distribution', dist)
-    self._last_distribution = y._distribution
-    return y
-
-  def variance(self, x):
-    dist = self._distribution(x)
-    y = Moments(mean=False)(dist)
-    setattr(y, '_distribution', dist)
-    self._last_distribution = y._distribution
-    return y
-
-  def stddev(self, x):
-    return Lambda(tf.math.sqrt)(self.variance(x))
-
-  def sample(self, x, n_samples=None):
-    if n_samples is None or n_samples <= 0:
-      n_samples = 1
-    dist = self._distribution(x)
-    y = Sampling(n_samples=n_samples)(dist)
-    setattr(y, '_distribution', dist)
-    self._last_distribution = y._distribution
-    return y
-
-  def call(self, x, n_samples=1, training=None):
-    return self.sample(x, n_samples=n_samples)
-
-  def kl_divergence(self, prior=None, analytic_kl=True, n_samples=1):
-    """
-    Parameters
-    ---------
-    prior : instance of tensorflow_probability.Distribution
-      prior distribution of the latent
-
-    analytic_kl : bool
-      using closed form solution for calculating divergence,
-      otherwise, sampling with MCMC
-    """
-    if prior is None:
-      prior = self.prior
-    assert isinstance(prior, Distribution), "prior is not given!"
-    if self._last_distribution is None:
-      raise RuntimeError(
-        "DistributionLayer must be called to create the distribution before "
-        "calculating the kl-divergence.")
-    kl = kl_divergence(q=self._last_distribution, p=prior,
-                       use_analytic_kl=bool(analytic_kl),
-                       q_sample=int(n_samples),
-                       auto_remove_independent=True)
-    return kl
-
-  def log_prob(self, x):
-    assert self.n_units == x.shape[-1], \
-      "Number of features mismatch, n_units=%d  input_shape=%s" % \
-        (self.n_units, str(x.shape))
-    if self._last_distribution is None:
-      raise RuntimeError(
-        "DistributionLayer must be called to create the distribution before "
-        "calculating the log-likelihood.")
-    dist = self._last_distribution
-    return dist.log_prob(x)
-
-# ===========================================================================
-# Latent space
-# ===========================================================================
-class NormalDiagLatent(DistributionLayer):
-  def __init__(self, n_units, use_bias=True, name=None):
-    super(NormalDiagLatent, self).__init__(
-      n_units=n_units,
-      posterior=MultivariateNormalLayer(
-        event_size=n_units, covariance_type='diag', softplus_scale=True),
-      prior=MultivariateNormalDiag(
-        loc=tf.zeros(shape=n_units), scale_identity_multiplier=1),
-      use_bias=use_bias,
-      name="LatentSpace"
-    )
-
-# ===========================================================================
-# Basic networks
-# ===========================================================================
-class DenseNetwork(Model):
-
-  def __init__(self, n_units=128, n_layers=2,
-               activation='relu', batchnorm=True,
-               input_dropout=0., output_dropout=0,
-               seed=8, name=None):
-    super(DenseNetwork, self).__init__(name=name)
-    layers = []
-    if 0. < input_dropout < 1.:
-      layers.append(Dropout(input_dropout, seed=seed))
-    for i in range(int(n_layers)):
-      layers.append(Dense(n_units,
-                          activation='linear' if batchnorm else activation,
-                          use_bias=False if batchnorm else True,
-                          name="DenseLayer%d" % i))
-      if batchnorm:
-        layers.append(BatchNormalization())
-        layers.append(Activation(activation))
-    if 0. < output_dropout < 1.:
-      layers.append(Dropout(output_dropout, seed=seed))
-    self._network = Sequential(layers)
-
-  def call(self, x, training=None):
-    return self._network(x, training=training)
 
 # ===========================================================================
 # SingleCell model
 # ===========================================================================
-_SUPPORT_MODE = {'sample', 'mean', 'stddev', 'all'}
-
 @add_metaclass(ABCMeta)
 class SingleCellModel(Model):
+  """
+  """
 
-  def __init__(self, **kwargs):
-    super(SingleCellModel, self).__init__(**kwargs)
+  def __init__(self,
+               kl_analytic=True,
+               kl_weight=1.,
+               kl_warmup=400,
+               supervised=0.8,
+               seed=8,
+               name=None):
+    super(SingleCellModel, self).__init__(name=name)
+    self._n_epoch = tf.Variable(0, trainable=False, dtype='float32')
+    # parameters for ELBO
+    self._kl_analytic = bool(kl_analytic)
+    self._kl_weight = tf.convert_to_tensor(kl_weight, dtype='float32')
+    self._kl_warmup = tf.convert_to_tensor(kl_warmup, dtype='float32')
+    self._seed = int(seed)
+    self._is_fitting = False
+
+  @abstractproperty
+  def is_semi_supervised(self):
+    raise NotImplementedError
 
   @abstractmethod
-  def get_losses_and_metrics(self, inputs, n_mcmc_samples=1):
-    """ Return training loss and dictionary of metrics """
+  def call(self, inputs, training=None, n_samples=1):
     raise NotImplementedError
 
-  def fit(self, inputs, optimizer='adam',
-          n_mcmc_samples=1, supervised_percent=0.8,
-          corruption_rate=0.25, corruption_dist='binomial',
-          batch_size=None, epochs=1, callbacks=None,
-          validation_split=0., validation_freq=1,
-          shuffle=True, seed=8,
-          verbose=1,
-          **kwargs):
+  @property
+  def is_fitting(self):
+    return self._is_fitting
+
+  @property
+  def n_epoch(self):
+    return int(tf.cast(self._n_epoch, 'int32'))
+
+  @property
+  def kl_analytic(self):
+    return self._kl_analytic
+
+  @property
+  def kl_warmup(self):
+    return self._kl_warmup
+
+  @property
+  def kl_weight(self):
+    warmup_weight = tf.minimum(
+        tf.maximum(self._n_epoch, 1.) / self.kl_warmup, 1.)
+    return warmup_weight * self._kl_weight
+
+  @property
+  def seed(self):
+    return self._seed
+
+  def _to_semisupervised_inputs(self, inputs):
+    """ Preprocessing the inputs for semi-supervised training
+    """
+    # objective mask is provided
+    if not isinstance(inputs, Iterable):
+      inputs = [inputs]
+    n = tf.shape(inputs[0])[0]
+    for i in inputs:
+      tf.assert_equal(tf.shape(i)[0], n)
+
+    # mask is given at the end during training
+    if self.is_fitting:
+      x = inputs[0]
+      y = inputs[1:-1]
+      masks = [inputs[-1]] * len(y)
+    # no mask is provided
+    else:
+      x = inputs[0]
+      y = inputs[1:]
+      masks = [1.] * len(y)
+    return x, y, masks
+
+  def fit(self,
+          inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
+          optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
+          learning_rate=1e-4,
+          n_mcmc_samples=1,
+          supervised_percent=0.8,
+          corruption_rate=0.25,
+          corruption_dist='binomial',
+          batch_size=64,
+          epochs=1,
+          callbacks=None,
+          validation_split=0.1,
+          validation_freq=1,
+          shuffle=True,
+          verbose=1):
     """ This fit function is the combination of both
     `Model.compile` and `Model.fit` """
-    pass
+    assert 0.0 <= supervised_percent <= 1.0
+    if validation_split <= 0:
+      raise ValueError("validation_split must > 0")
+    # prepare optimizer
+    if isinstance(optimizer, string_types):
+      optimizer = tf.optimizers.get(optimizer)
 
-  def get_latents(self, inputs, n_mcmc_samples=1):
-    pass
+    if isinstance(optimizer, tf.optimizers.Optimizer):
+      pass
+    elif issubclass(optimizer, tf.optimizers.Optimizer):
+      optimizer = optimizer(learning_rate=learning_rate)
 
-  def get_outputs(self, inputs, n_mcmc_samples=1):
-    raise NotImplementedError
+    # prepare input data
+    if not isinstance(inputs, Iterable):
+      inputs = [inputs]
+    inputs = [_to_sc_omics(i) for i in inputs]
+
+    # corrupting the data
+    if corruption_rate > 0:
+      inputs = [
+          i.corrupt(corruption_rate=corruption_rate,
+                    corruption_dist=corruption_dist) for i in inputs
+      ]
+    train, valid = [], []
+    for i in inputs:
+      tr, va = i.split(seed=self.seed, train_percent=1 - validation_split)
+      train.append(tr)
+      valid.append(va)
+
+    # generate training mask for semi-supervised learning
+    rand = np.random.RandomState(seed=self.seed)
+    n = train[0].shape[0]
+    train_mask = np.zeros(shape=(n, 1), dtype='float32')
+    train_mask[rand.permutation(n)[:int(supervised_percent * n)]] = 1
+    valid_mask = np.ones(shape=(valid[0].shape[0], 1), dtype='float32')
+
+    # calculate the steps
+    assert len(set(i.shape[0] for i in train)) == 1
+    assert len(set(i.shape[0] for i in valid)) == 1
+    steps_per_epoch = int(np.ceil(train[0].shape[0] / batch_size))
+    validation_steps = int(np.ceil(valid[0].shape[0] / batch_size))
+
+    # create tensorflow dataset, a bit ugly with many if-then-else
+    # but it works!
+    def to_tfdata(sco, mask):
+      all_data = [i.X for i in sco]
+      if self.is_semi_supervised:
+        all_data += [mask]
+      # NOTE: from_tensor_slices accept tuple but not list
+      ds = tf.data.Dataset.from_tensor_slices(all_data[0] if len(all_data) ==
+                                              1 else tuple(all_data))
+      if shuffle:
+        ds = ds.shuffle(1000)
+      ds = ds.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+      ds = ds.repeat(epochs)
+      # just return a tuple with 1 element to trick keras
+      if len(all_data) == 1:
+        ds = ds.map(lambda arg: (arg,))
+      else:
+        ds = ds.map(lambda *args: (args,))
+      return ds
+
+    train = to_tfdata(train, train_mask)
+    valid = to_tfdata(valid, valid_mask)
+
+    # prepare callback
+    update_epoch = LambdaCallback(
+        on_epoch_end=lambda *args, **kwargs: self._n_epoch.assign_add(1))
+    if callbacks is None:
+      callbacks = [update_epoch]
+    elif isinstance(callbacks, Callback):
+      callbacks = [callbacks, update_epoch]
+    else:
+      callbacks = list(callbacks)
+      callbacks.append(update_epoch)
+
+    # start training loop
+    org_fn = self.call
+    self.call = partial(self.call, n_samples=n_mcmc_samples)
+    self._is_fitting = True
+
+    # compile and fit
+    if not self._is_compiled:
+      super(SingleCellModel, self).compile(optimizer)
+    super(SingleCellModel, self).fit(x=train,
+                                     validation_data=valid,
+                                     validation_freq=validation_freq,
+                                     callbacks=callbacks,
+                                     initial_epoch=self.n_epoch,
+                                     steps_per_epoch=steps_per_epoch,
+                                     validation_steps=validation_steps,
+                                     epochs=epochs,
+                                     verbose=verbose)
+
+    # reset to original state
+    self.call = org_fn
+    self._is_fitting = False

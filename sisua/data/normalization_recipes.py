@@ -1,13 +1,14 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
-from enum import Flag, auto
-from six import add_metaclass
 from abc import ABCMeta, abstractmethod
+from enum import Flag, auto
 
 import numpy as np
-
 import scanpy as sc
+from six import add_metaclass
+
 from sisua.data.single_cell_dataset import SingleCellOMICS
+
 
 # ===========================================================================
 # Helpers
@@ -52,12 +53,19 @@ class Methods(Flag):
       if method in self:
         yield method
 
-  def apply(self, X,
-            min_counts_per_gene=1, min_cells_per_gene=None,
-            min_counts_per_cell=1, min_genes_per_cell=None,
-            min_disp=0.5, flavor='seurat', n_top_genes=None,
-            target_sum=None,  max_value=None,
-            gene_subset=None, trained_embedding=None):
+  def apply(self,
+            X,
+            min_counts_per_gene=1,
+            min_cells_per_gene=None,
+            min_counts_per_cell=1,
+            min_genes_per_cell=None,
+            min_disp=0.5,
+            flavor='seurat',
+            n_top_genes=None,
+            target_sum=None,
+            max_value=None,
+            gene_subset=None,
+            trained_embedding=None):
     assert isinstance(X, SingleCellOMICS), \
       "X must be instance of sisua.data.SingleCellOMICS"
     is_logarithmized = False
@@ -75,26 +83,25 @@ class Methods(Flag):
                          min_cells=min_cells_per_gene,
                          inplace=True)
         if method == Methods.TOTAL_COUNTS:
-          X.normalize(total_counts=True, target_sum=target_sum,
-                      inplace=True)
+          X.normalize(total_counts=True, target_sum=target_sum, inplace=True)
         if method == Methods.GENE_DISP:
           # Expects logarithmized data.
           X.normalize(log1p=True, inplace=True)
           is_logarithmized = True
-          X.filter_highly_variable_genes(
-            min_disp=min_disp, n_top_genes=n_top_genes, flavor=flavor,
-            inplace=True)
+          X.filter_highly_variable_genes(min_disp=min_disp,
+                                         n_top_genes=n_top_genes,
+                                         flavor=flavor,
+                                         inplace=True)
       else:
         if method == Methods.TOTAL_COUNTS:
-          X.normalize(total_counts=True, target_sum=target_sum,
-                      inplace=True)
+          X.normalize(total_counts=True, target_sum=target_sum, inplace=True)
         if X.shape[1] > len(gene_subset):
           gene_ids = gene_subset.index.astype('int')
           X.apply_indices(gene_ids, observation=False)
 
       # highly variable genes
       if method == Methods.EXP:
-          X.expm1(inplace=True)
+        X.expm1(inplace=True)
       elif method == Methods.LOG:
         if not is_logarithmized:
           X.normalize(log1p=True, inplace=True)
@@ -111,21 +118,42 @@ class Methods(Flag):
           X._name = X._name[:-3] + 'bin'
     return X
 
+
 # ===========================================================================
 # Recipes
 # ===========================================================================
 class NormalizationRecipe(object):
+  """ Predefined normalization recipe
+  """
 
-  def __init__(self, methods=Methods.RAW,
-               corruption_rate=0.25, corruption_dist='binomial',
-               target_sum=None, max_value=None,
-               min_counts_per_gene=1, min_cells_per_gene=None,
-               min_counts_per_cell=1, min_genes_per_cell=None,
-               min_disp=0.5, flavor='seurat', n_top_genes=None):
+  def __init__(self,
+               methods: Methods = Methods.RAW,
+               corruption_rate=0.25,
+               corruption_dist='binomial',
+               target_sum=None,
+               max_value=None,
+               min_counts_per_gene=1,
+               min_cells_per_gene=None,
+               min_counts_per_cell=1,
+               min_genes_per_cell=None,
+               min_disp=0.5,
+               flavor='seurat',
+               n_top_genes=None):
     super(NormalizationRecipe, self).__init__()
-    kw = dict(locals())
-    del kw['self']
-    self.__dict__.update(kw)
+    # pylint just could not detect self.__dict__.update(locals())
+    # so we assign each argument one-by-one
+    self.methods = methods
+    self.corruption_rate = corruption_rate
+    self.corruption_dist = corruption_dist
+    self.target_sum = target_sum
+    self.max_value = max_value
+    self.min_counts_per_gene = min_counts_per_gene
+    self.min_cells_per_gene = min_cells_per_gene
+    self.min_counts_per_cell = min_counts_per_cell
+    self.min_genes_per_cell = min_genes_per_cell
+    self.min_disp = min_disp
+    self.flavor = flavor
+    self.n_top_genes = n_top_genes
     # validate some important type
     assert isinstance(self.methods, Methods), \
       'methods must be instance of sisua.data.normalization_recipes.Methods'
@@ -161,17 +189,19 @@ class NormalizationRecipe(object):
                 inplace=True)
 
     X = self.methods.apply(X,
-          min_counts_per_gene=self.min_counts_per_gene,
-          min_cells_per_gene=self.min_cells_per_gene,
-          min_counts_per_cell=self.min_counts_per_cell,
-          min_genes_per_cell=self.min_genes_per_cell,
-          min_disp=self.min_disp, flavor=self.flavor,
-          n_top_genes=self.n_top_genes,
-          target_sum=self.target_sum,  max_value=self.max_value,
-          gene_subset=self._gene_subset,
-          trained_embedding=self._trained_embedding)
+                           min_counts_per_gene=self.min_counts_per_gene,
+                           min_cells_per_gene=self.min_cells_per_gene,
+                           min_counts_per_cell=self.min_counts_per_cell,
+                           min_genes_per_cell=self.min_genes_per_cell,
+                           min_disp=self.min_disp,
+                           flavor=self.flavor,
+                           n_top_genes=self.n_top_genes,
+                           target_sum=self.target_sum,
+                           max_value=self.max_value,
+                           gene_subset=self._gene_subset,
+                           trained_embedding=self._trained_embedding)
 
-    if training  and not self.is_trained:
+    if training and not self.is_trained:
       self._is_trained = True
       # assum the first var column is always geneID
       self._gene_subset = X.var.iloc[:, 0]
@@ -182,23 +212,35 @@ class NormalizationRecipe(object):
   def __str__(self):
     return self.name
 
+
 class Seurat(NormalizationRecipe):
   """Normalization and filtering as of Seurat [Satija15]_.
   This uses a particular preprocessing.
   Expects non-logarithmized data.
   """
-  def __init__(self, corruption_rate=0.25, corruption_dist='binomial',
-               min_cells=3, min_genes=200, log=True):
-    super(Seurat, self).__init__(
-        methods=Methods.CELL_COUNT | Methods.GENE_COUNT | Methods.TOTAL_COUNTS |
-                Methods.GENE_DISP | (Methods.LOG if log else Methods.EXP) |
-                Methods.SCALE,
-        target_sum=1e4, max_value=10,
-        min_counts_per_gene=None, min_cells_per_gene=min_cells,
-        min_counts_per_cell=None, min_genes_per_cell=min_genes,
-        min_disp=0.5, flavor='seurat', n_top_genes=None,
-        corruption_rate=corruption_rate, corruption_dist=corruption_dist
-    )
+
+  def __init__(self,
+               corruption_rate=0.25,
+               corruption_dist='binomial',
+               min_cells=3,
+               min_genes=200,
+               log=True):
+    super(Seurat,
+          self).__init__(methods=Methods.CELL_COUNT | Methods.GENE_COUNT |
+                         Methods.TOTAL_COUNTS | Methods.GENE_DISP |
+                         (Methods.LOG if log else Methods.EXP) | Methods.SCALE,
+                         target_sum=1e4,
+                         max_value=10,
+                         min_counts_per_gene=None,
+                         min_cells_per_gene=min_cells,
+                         min_counts_per_cell=None,
+                         min_genes_per_cell=min_genes,
+                         min_disp=0.5,
+                         flavor='seurat',
+                         n_top_genes=None,
+                         corruption_rate=corruption_rate,
+                         corruption_dist=corruption_dist)
+
 
 class CellRanger(NormalizationRecipe):
   """Normalization and filtering as of [Zheng17]_.
@@ -212,16 +254,26 @@ class CellRanger(NormalizationRecipe):
   ----------
   pass
   """
-  def __init__(self, corruption_rate=0.25, corruption_dist='binomial',
-               min_counts=1, n_top_genes=1000, log=True):
-    super(CellRanger, self).__init__(
-        methods=Methods.GENE_COUNT | Methods.TOTAL_COUNTS | Methods.GENE_DISP,
-        target_sum=None, max_value=None,
-        min_counts_per_gene=min_counts, min_cells_per_gene=None,
-        min_counts_per_cell=None, min_genes_per_cell=None,
-        min_disp=None, flavor='cell_ranger', n_top_genes=n_top_genes,
-        corruption_rate=corruption_rate, corruption_dist=corruption_dist
-    )
+
+  def __init__(self,
+               corruption_rate=0.25,
+               corruption_dist='binomial',
+               min_counts=1,
+               n_top_genes=1000,
+               log=True):
+    super(CellRanger, self).__init__(methods=Methods.GENE_COUNT |
+                                     Methods.TOTAL_COUNTS | Methods.GENE_DISP,
+                                     target_sum=None,
+                                     max_value=None,
+                                     min_counts_per_gene=min_counts,
+                                     min_cells_per_gene=None,
+                                     min_counts_per_cell=None,
+                                     min_genes_per_cell=None,
+                                     min_disp=None,
+                                     flavor='cell_ranger',
+                                     n_top_genes=n_top_genes,
+                                     corruption_rate=corruption_rate,
+                                     corruption_dist=corruption_dist)
     self.log = bool(log)
 
   def normalize(self, X, training=False, copy=True):
@@ -233,24 +285,32 @@ class CellRanger(NormalizationRecipe):
     X.normalize(total_counts=True, log1p=self.log, scale=True)
     return X
 
+
 class Sisua(NormalizationRecipe):
   """
   Expects non-logarithmized data.
   """
+
   def __init__(self,
-               min_counts=1, total_counts=True, n_top_genes=1000,
-               corruption_rate=0.25, corruption_dist='binomial'):
-    methods = (
-      Methods.CELL_COUNT | Methods.GENE_COUNT | Methods.TOTAL_COUNTS |
-      (Methods.LOG if n_top_genes is None else Methods.GENE_DISP | Methods.LOG) |
-      Methods.SCALE)
+               min_counts=1,
+               total_counts=True,
+               n_top_genes=1000,
+               corruption_rate=0.25,
+               corruption_dist='binomial'):
+    methods = (Methods.CELL_COUNT | Methods.GENE_COUNT | Methods.TOTAL_COUNTS |
+               (Methods.LOG if n_top_genes is None else Methods.GENE_DISP |
+                Methods.LOG) | Methods.SCALE)
     if not total_counts:
       methods = methods ^ Methods.TOTAL_COUNTS
-    super(Sisua, self).__init__(
-        methods=methods,
-        target_sum=1e4, max_value=None,
-        min_counts_per_gene=min_counts, min_cells_per_gene=None,
-        min_counts_per_cell=min_counts, min_genes_per_cell=None,
-        min_disp=0.5, flavor='cell_ranger', n_top_genes=n_top_genes,
-        corruption_rate=corruption_rate, corruption_dist=corruption_dist
-    )
+    super(Sisua, self).__init__(methods=methods,
+                                target_sum=1e4,
+                                max_value=None,
+                                min_counts_per_gene=min_counts,
+                                min_cells_per_gene=None,
+                                min_counts_per_cell=min_counts,
+                                min_genes_per_cell=None,
+                                min_disp=0.5,
+                                flavor='cell_ranger',
+                                n_top_genes=n_top_genes,
+                                corruption_rate=corruption_rate,
+                                corruption_dist=corruption_dist)
