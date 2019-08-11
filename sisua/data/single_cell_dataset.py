@@ -1,7 +1,9 @@
 from __future__ import absolute_import, division, print_function
 
 import os
+import warnings
 from copy import deepcopy
+from typing import Optional
 
 import numpy as np
 import scanpy as sc
@@ -14,7 +16,8 @@ from six import string_types
 from odin import visual as vs
 from odin.fuel import MmapArrayWriter
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
-from odin.utils import as_tuple, batching, cache_memory, ctext
+from odin.utils import (as_tuple, batching, cache_memory, catch_warnings_ignore,
+                        ctext)
 from odin.utils.crypto import md5_checksum
 from odin.visual import Visualizer, to_axis
 from sisua.label_threshold import ProbabilisticEmbedding
@@ -207,6 +210,24 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     self._log_counts = log_counts
     self._local_mean = local_mean
     self._local_var = local_var
+
+  def as_obsm(self, obsm_name):
+    assert obsm_name in self.obsm
+    omics = SingleCellOMICS(self,
+                            oidx=slice(None, None),
+                            vidx=slice(None, None),
+                            asview=True)
+    X_org = omics._X
+    omics._X = omics.obsm[obsm_name]
+    # already applied obsm at least once
+    if hasattr(self, '_obsm_name'):
+      omics.obsm[self._obsm_name] = X_org
+    else:
+      omics.obsm['X_org'] = X_org
+    # update the tracking information
+    del omics.obsm[obsm_name]
+    omics._obsm_name = obsm_name
+    return omics
 
   def __getitem__(self, index):
     """Returns a sliced view of the object."""
@@ -662,37 +683,45 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
                               remove_zeros=True,
                               ci_threshold=-0.68,
                               seed=8,
-                              pbe=None):
+                              pbe: Optional[ProbabilisticEmbedding] = None):
     """ Fit a GMM on each feature column to get the probability or binary
     representation of the features
 
     Parameters
     ----------
-    pbe : {`ProbabilisticEmbedding`, `None`}
+    pbe : {`sisua.ProbabilisticEmbedding`, `None`}
       pretrained instance of `ProbabilisticEmbedding` if given
     """
     # We turn-off default log_norm here since the data can be normalized
     # separately in advance.
+    if self.shape[1] >= 100:
+      warnings.warn("%d GMM will be trained!" % self.shape[1])
+
     if pbe is None:
-      pbe = ProbabilisticEmbedding(
-          n_components_per_class=n_components_per_class,
-          positive_component=positive_component,
-          log_norm=log_norm,
-          clip_quartile=clip_quartile,
-          remove_zeros=remove_zeros,
-          ci_threshold=ci_threshold,
-          random_state=seed)
-      pbe.fit(self.X)
+      if 'pbe' not in self.uns:
+        pbe = ProbabilisticEmbedding(
+            n_components_per_class=n_components_per_class,
+            positive_component=positive_component,
+            log_norm=log_norm,
+            clip_quartile=clip_quartile,
+            remove_zeros=remove_zeros,
+            ci_threshold=ci_threshold,
+            random_state=seed)
+        from sklearn.exceptions import ConvergenceWarning
+        with catch_warnings_ignore(ConvergenceWarning):
+          pbe.fit(self.X)
+        self.uns['pbe'] = pbe
+      else:
+        pbe = self.uns['pbe']
     else:
       assert isinstance(pbe, ProbabilisticEmbedding), \
-        'pbe, if given, must be instance of ProbabilisticEmbedding'
+        'pbe, if given, must be instance of sisua.ProbabilisticEmbedding'
     self.obsm['X_prob'] = pbe.predict_proba(self._X)
     self.obsm['X_bin'] = pbe.predict(self._X)
-    self.uns['pbe'] = pbe
     self._name += '_pbe'
     return self
 
-  def pca(self, n_comps=50, seed=8):
+  def pca(self, n_comps=50):
     """ Code from `scanpy.pp.pca`, there is bug when `chunked=True` so we
     modify it here. """
     from sklearn.decomposition import IncrementalPCA
