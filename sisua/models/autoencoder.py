@@ -5,12 +5,12 @@ from typing import Iterable
 import tensorflow as tf
 from tensorflow.python.keras.layers import Dense, Layer
 
-from odin.backend import DeterministicDense, Identity, Parallel
 from odin.bay.distribution_layers import (NegativeBinomialLayer, PoissonLayer,
                                           ZeroInflatedNegativeBinomialLayer,
                                           ZeroInflatedPoissonLayer)
 from odin.bay.helpers import Statistic
-from odin.bay.models import DistributionLayer
+from odin.networks import (DeterministicDense, DistributionDense, Identity,
+                           Parallel)
 from sisua.models.base import SingleCellModel
 from sisua.models.networks import DenseNetwork
 
@@ -19,16 +19,16 @@ def _get_loss(loss):
   loss = str(loss).lower()
   is_probabilistic_loss = True
   if loss == 'poisson':
-    output_layer = lambda units: DistributionLayer(units,
+    output_layer = lambda units: DistributionDense(units,
                                                    posterior=PoissonLayer)
   elif loss == 'zipoisson':
-    output_layer = lambda units: DistributionLayer(units,
+    output_layer = lambda units: DistributionDense(units,
                                                    posterior=PoissonLayer)
   elif loss == 'nb':
-    output_layer = lambda units: DistributionLayer(units,
+    output_layer = lambda units: DistributionDense(units,
                                                    posterior=PoissonLayer)
   elif loss == 'zinb':
-    output_layer = lambda units: DistributionLayer(units,
+    output_layer = lambda units: DistributionDense(units,
                                                    posterior=PoissonLayer)
   else:
     is_probabilistic_loss = False
@@ -43,6 +43,9 @@ def _get_loss(loss):
 class DeepCountAutoencoder(SingleCellModel):
   """ Deep Count Autoencoder
 
+  Note
+  ----
+  It is recommend to call `tensorflow.random.set_seed` for reproducible results
   """
 
   def __init__(self,
@@ -58,7 +61,7 @@ class DeepCountAutoencoder(SingleCellModel):
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
-    super(DeepCountAutoencoder, self).__init__(**kwargs)
+    super(DeepCountAutoencoder, self).__init__(parameters=locals(), **kwargs)
     self.encoder = DenseNetwork(n_units=hdim,
                                 n_layers=n_layers,
                                 activation='relu',
@@ -83,36 +86,26 @@ class DeepCountAutoencoder(SingleCellModel):
                                            activation='linear',
                                            name='Latent')
     # loss funciton
-    self.loss_fn, self.output_layer, self._is_probabilistic_loss = _get_loss(
-        loss)
-
-  @property
-  def is_probabilistic_loss(self):
-    return self._is_probabilistic_loss
+    if not isinstance(loss, (tuple, list)):
+      loss = [loss]
+    self.loss_info = [_get_loss(i) for i in loss]
+    self.output_layer = None
 
   @property
   def is_semi_supervised(self):
-    return False
+    return len(self.loss_info) > 1
 
-  def _apply_network(self, inputs, training, n_samples):
-    # initialization
-    units = inputs.shape[1]
-    if not isinstance(self.output_layer, Layer):
-      self.output_layer = self.output_layer(units)
-
-    # applying the layers
-    e = self.encoder(inputs, training=training)
+  def _call(self, x, y, masks, training, n_samples):
+    e = self.encoder(x, training=training)
     z = self.latent_layer(e)
     d = self.decoder(z, training=training)
 
-    if self.is_probabilistic_loss:
-      pred = self.output_layer(d, mode=Statistic.DIST)
-    else:
-      pred = self.output_layer(d)
-    return e, z, d, pred
-
-  def call(self, inputs, training=None, n_samples=None):
-    e, z, d, pred = self._apply_network(inputs, training, n_samples)
+    if self.output_layer is None:
+      self.output_layer = Parallel([
+          layer(i.shape[1]) for i, (_, layer, _) in zip([x] + y, self.loss_info)
+      ],
+                                   name="Outputs")
+    pred = self.output_layer(d, mode=Statistic.DIST)
 
     # NOTE: TensorArray could be used to remove the redundancy of
     # loss computation during prediction, however, Tensorflow Autograph
@@ -122,76 +115,19 @@ class DeepCountAutoencoder(SingleCellModel):
     # self.add_loss(lambda: loss.read(0))
 
     # calculating the losses
-    loss = self.loss_fn(inputs, pred)
-    loss = tf.reduce_mean(loss)
-
-    if training:
-      self.add_loss(lambda: loss)
-
-    return pred, z
-
-
-class MultitaskAutoEncoder(DeepCountAutoencoder):
-  """
-  """
-
-  def __init__(self,
-               loss='mse',
-               loss_y='mse',
-               xdrop=0.3,
-               edrop=0,
-               zdrop=0,
-               ddrop=0,
-               hdim=128,
-               zdim=32,
-               biased_latent=False,
-               n_layers=2,
-               batchnorm=True,
-               linear_decoder=False,
-               **kwargs):
-    kw = dict(locals())
-    del kw['self']
-    del kw['kwargs']
-    del kw['loss_y']
-    del kw['__class__']
-    kw.update(kwargs)
-    super(MultitaskAutoEncoder, self).__init__(**kw)
-    if not isinstance(loss_y, (tuple, list)):
-      loss_y = [loss_y]
-    self.loss_y = [_get_loss(i) for i in loss_y]
-    self.output_layer_y = None
-
-  @property
-  def is_semi_supervised(self):
-    return True
-
-  def call(self, inputs, training=None, n_samples=None):
-    x, y, masks = self._to_semisupervised_inputs(inputs)
-    if len(y) != len(self.loss_y):
-      raise RuntimeError(
-          "given %d inputs for semi-supervised, but %d values for loss function"
-          % (len(y), len(self.loss_y)))
-
-    # initialization
-    e, z, d, pred_x = self._apply_network(x, training, n_samples)
-    if self.output_layer_y is None:
-      self.output_layer_y = Parallel(
-          [j[1](i.shape[1]) for i, j in zip(y, self.loss_y)],
-          name="ParallelOutputs")
-    pred_y = self.output_layer_y(d, mode=Statistic.DIST)
-
-    # calculating the losses
-    loss_x = self.loss_fn(x, pred_x)
+    loss_x = self.loss_info[0][0](x, pred[0])
     # don't forget to apply mask for semi-supervised loss
     loss_y = 0
-    for (fn, _, _), i_true, i_pred, m in zip(self.loss_y, y, pred_y, masks):
+    for (fn, _, _), i_true, i_pred, m in zip(self.loss_info[1:], y, pred[1:],
+                                             masks):
       loss_y += fn(i_true, i_pred) * m
     loss = tf.reduce_mean(loss_x + loss_y)
+
     if training:
       self.add_loss(lambda: loss)
 
-    self.add_metric(loss_x, 'mean', "Xloss")
-    self.add_metric(loss_y, 'mean', "Yloss")
+    self.add_metric(loss_x, 'mean', "loss_x")
+    if self.is_semi_supervised:
+      self.add_metric(loss_y, 'mean', "loss_y")
 
-    outputs = (pred_x,) + tuple(pred_y)
-    return outputs, z
+    return pred if self.is_semi_supervised else pred[0], z

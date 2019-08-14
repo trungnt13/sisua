@@ -5,7 +5,7 @@ from tensorflow.python.keras.layers import (Activation, BatchNormalization,
                                             Dense, Dropout)
 
 
-class DenseNetwork(Model):
+class DenseNetwork(Sequential):
   """
   """
 
@@ -18,7 +18,6 @@ class DenseNetwork(Model):
                output_dropout=0,
                seed=8,
                name=None):
-    super(DenseNetwork, self).__init__(name=name)
     layers = []
     if 0. < input_dropout < 1.:
       layers.append(Dropout(input_dropout, seed=seed))
@@ -33,10 +32,7 @@ class DenseNetwork(Model):
         layers.append(Activation(activation))
     if 0. < output_dropout < 1.:
       layers.append(Dropout(output_dropout, seed=seed))
-    self._network = Sequential(layers)
-
-  def call(self, inputs, training=None):
-    return self._network(inputs, training=training)
+    super(DenseNetwork, self).__init__(layers=layers, name=name)
 
 
 class RecurrentNetwork(Model):

@@ -1,39 +1,40 @@
-from __future__ import print_function, division, absolute_import
-import os
-import time
-import pickle
+from __future__ import absolute_import, division, print_function
+
 import inspect
-from six import string_types
-from collections import defaultdict, OrderedDict
+import os
+import pickle
+import time
+from collections import OrderedDict, defaultdict
 
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from six import string_types
 
-from odin.ml import fast_pca, fast_tsne
 from odin.backend import log_norm
-from odin.utils import (md5_checksum, as_tuple, flatten_list, catch_warnings_ignore,
-                        cache_memory, ctext)
-from odin.visual import (plot_save, plot_figure, to_axis2D, plot_aspect,
-                         plot_scatter_heatmap, plot_scatter,
-                         plot_confusion_matrix, plot_frame)
-
+from odin.ml import fast_pca, fast_tsne
+from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
+                        flatten_list, md5_checksum)
+from odin.visual import (plot_aspect, plot_confusion_matrix, plot_figure,
+                         plot_frame, plot_save, plot_scatter,
+                         plot_scatter_heatmap, to_axis2D)
+from sisua.analysis.base import Posterior
+from sisua.analysis.imputation_benchmarks import (get_correlation_scores,
+                                                  imputation_mean_score,
+                                                  imputation_score,
+                                                  imputation_std_score)
+from sisua.analysis.latent_benchmarks import (clustering_scores,
+                                              plot_distance_heatmap,
+                                              plot_latents_binary,
+                                              plot_latents_multiclasses)
 from sisua.data import get_dataset
 from sisua.data.path import EXP_DIR
-from sisua.inference import Inference
+from sisua.data.utils import standardize_protein_name
 from sisua.label_threshold import ProbabilisticEmbedding
 from sisua.utils import filtering_experiment_path
-from sisua.data.utils import standardize_protein_name
-from sisua.analysis.imputation_benchmarks import (
-    get_correlation_scores,
-    imputation_score, imputation_mean_score, imputation_std_score
-)
-from sisua.analysis.latent_benchmarks import (
-    plot_distance_heatmap, plot_latents_binary, plot_latents_multiclasses,
-    clustering_scores)
-from sisua.analysis.base import Posterior
 from sisua.utils.visualization import save_figures
+
 
 # ===========================================================================
 # Helpers

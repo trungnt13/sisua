@@ -1,10 +1,11 @@
 from __future__ import absolute_import, division, print_function
 
 import tensorflow as tf
+from tensorflow.python.keras.layers import Layer
 
-from odin.backend import Identity
-from odin.bay import DistributionLayer, Statistic, kl_divergence, print_dist
+from odin.bay import Statistic, kl_divergence, print_dist
 from odin.bay.distribution_alias import parse_distribution
+from odin.networks import DistributionDense, Identity
 from sisua.models.base import SingleCellModel
 from sisua.models.latents import get_latent
 from sisua.models.networks import DenseNetwork
@@ -28,7 +29,7 @@ class VariationalAutoEncoder(SingleCellModel):
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
-    super(VariationalAutoEncoder, self).__init__(**kwargs)
+    super(VariationalAutoEncoder, self).__init__(parameters=locals(), **kwargs)
     self.encoder = DenseNetwork(n_units=hdim,
                                 n_layers=n_layers,
                                 activation='relu',
@@ -49,18 +50,26 @@ class VariationalAutoEncoder(SingleCellModel):
                                   seed=self.seed,
                                   name='Decoder')
     self.latent = get_latent(zdist)(units=zdim, name=self.name + 'Latent')
-    self.xdist = parse_distribution(xdist)[0]
+    # multiple inputs could be provided
+    if not isinstance(xdist, (tuple, list)):
+      xdist = [xdist]
+    self.xdist = [parse_distribution(i)[0] for i in xdist]
 
   @property
   def is_semi_supervised(self):
-    return False
+    return len(self.xdist) > 1
 
-  def _apply_network(self, x, training, n_samples):
-    if not isinstance(self.xdist, DistributionLayer):
-      self.xdist = DistributionLayer(x.shape[1],
-                                     posterior=self.xdist,
-                                     use_bias=True,
-                                     name='xdist')
+  def _call(self, x, y, masks, training, n_samples):
+    # initializing the output layers
+    if not isinstance(self.xdist[0], Layer):
+      self.xdist = [
+          DistributionDense(i.shape[1],
+                            posterior=dist,
+                            use_bias=True,
+                            name='Output%d' % idx)
+          for idx, (i, dist) in enumerate(zip([x] + y, self.xdist))
+      ]
+
     # applying encoding
     if 'training' in self.encoder._call_fn_args:
       e = self.encoder(x, training=training)
@@ -80,22 +89,17 @@ class VariationalAutoEncoder(SingleCellModel):
       d = self.decoder(qZ.sample(n_samples))
 
     # output distribution
-    pX = self.xdist(d, mode=Statistic.DIST)
-    return pX, qZ, e, d
-
-  def call(self, inputs, training=None, n_samples=1):
-    # check arguments
-    if n_samples is None:
-      n_samples = 1
-
-    # applying the layers
-    pX, qZ, e, d = self._apply_network(inputs, training, n_samples)
+    pX = [dist(d, mode=Statistic.DIST) for dist in self.xdist]
 
     # calculating the losses
     kl = self.latent.kl_divergence(analytic_kl=self.kl_analytic,
                                    n_samples=n_samples)
-    llk = tf.expand_dims(pX.log_prob(inputs), -1)
-    elbo = llk - kl * self.kl_weight
+    llk_x = tf.expand_dims(pX[0].log_prob(x), -1)
+    llk_y = 0
+    for i, dist in zip(y, pX[1:]):
+      llk_y += tf.expand_dims(dist.log_prob(i), -1)
+
+    elbo = llk_x + llk_y - kl * self.kl_weight
     elbo = tf.reduce_logsumexp(elbo, axis=0)
     loss = tf.reduce_mean(-elbo)
 
@@ -104,5 +108,7 @@ class VariationalAutoEncoder(SingleCellModel):
 
     # NOTE: add_metric should not be in control if-then-else
     self.add_metric(tf.reduce_mean(kl), aggregation='mean', name="KLqp")
-    self.add_metric(tf.reduce_mean(-llk), aggregation='mean', name="NLLK")
+    self.add_metric(tf.reduce_mean(-llk_x), aggregation='mean', name="nllk_x")
+    if self.is_semi_supervised:
+      self.add_metric(tf.reduce_mean(-llk_y), aggregation='mean', name="nllk_y")
     return pX, qZ

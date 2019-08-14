@@ -1,43 +1,46 @@
-from __future__ import print_function, division, absolute_import
-import os
-import time
-import pickle
+from __future__ import absolute_import, division, print_function
+
 import inspect
-from six import string_types
+import os
+import pickle
+import time
+from collections import OrderedDict, defaultdict
 from itertools import product
-from collections import defaultdict, OrderedDict
 
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from six import string_types
 
 from odin.fuel import Dataset
-from odin.ml import fast_tsne, fast_pca
-from odin.utils import (md5_checksum, as_tuple, flatten_list, catch_warnings_ignore,
-                        cache_memory, ctext)
-from odin.visual import (plot_save, plot_figure, to_axis2D, plot_aspect,
-                         plot_scatter_heatmap, plot_scatter,
-                         plot_confusion_matrix, plot_frame)
-
+from odin.ml import fast_pca, fast_tsne
+from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
+                        flatten_list, md5_checksum)
+from odin.visual import (Visualizer, plot_aspect, plot_confusion_matrix,
+                         plot_figure, plot_frame, plot_save, plot_scatter,
+                         plot_scatter_heatmap, to_axis2D)
+from sisua.analysis.imputation_benchmarks import (get_correlation_scores,
+                                                  imputation_mean_score,
+                                                  imputation_score,
+                                                  imputation_std_score)
+from sisua.analysis.latent_benchmarks import (clustering_scores,
+                                              plot_distance_heatmap,
+                                              plot_latents_binary,
+                                              plot_latents_multiclasses,
+                                              streamline_classifier)
+from sisua.data import apply_artificial_corruption, get_dataset
 from sisua.data.path import EXP_DIR
-from sisua.inference import Inference
+from sisua.data.utils import standardize_protein_name
+from sisua.models.base import SingleCellModel
 from sisua.utils import filtering_experiment_path
 from sisua.utils.visualization import save_figures
-from sisua.data.utils import standardize_protein_name
-from sisua.data import (get_dataset, apply_artificial_corruption)
-from sisua.analysis.imputation_benchmarks import (
-    get_correlation_scores,
-    imputation_score, imputation_mean_score, imputation_std_score
-)
-from sisua.analysis.latent_benchmarks import (
-    plot_distance_heatmap, plot_latents_binary, plot_latents_multiclasses,
-    streamline_classifier, clustering_scores)
 
 # ===========================================================================
 # Helper
 # ===========================================================================
 _LOADED_DATASET = {}
+
 
 def _fast_load_dataset(name):
   if name not in _LOADED_DATASET:
@@ -45,7 +48,11 @@ def _fast_load_dataset(name):
     _LOADED_DATASET[name] = ds
   return _LOADED_DATASET[name]
 
-def get_all_posteriors(path_or_dataset, incl=[], excl=[], fn_filter=None,
+
+def get_all_posteriors(path_or_dataset,
+                       incl=[],
+                       excl=[],
+                       fn_filter=None,
                        show_progress=True):
   if os.path.exists(path_or_dataset):
     exp_path = os.path.dirname(path_or_dataset)
@@ -53,19 +60,18 @@ def get_all_posteriors(path_or_dataset, incl=[], excl=[], fn_filter=None,
   else:
     exp_path = ''
     ds_name = path_or_dataset
-  all_exp = filtering_experiment_path(
-      ds_name=ds_name,
-      exp_path=exp_path,
-      incl_keywords=incl, excl_keywords=excl,
-      fn_filter=fn_filter,
-      return_dataset=False,
-      print_log=False)
+  all_exp = filtering_experiment_path(ds_name=ds_name,
+                                      exp_path=exp_path,
+                                      incl_keywords=incl,
+                                      excl_keywords=excl,
+                                      fn_filter=fn_filter,
+                                      return_dataset=False,
+                                      print_log=False)
   all_posteriors = []
   if show_progress:
     print("Loading %s posteriors for dataset '%s' at path '%s'..." %
-      (ctext(len(all_exp), 'lightyellow'),
-       ctext(ds_name, 'lightyellow'),
-       ctext(exp_path, 'lightyellow')))
+          (ctext(len(all_exp), 'lightyellow'), ctext(
+              ds_name, 'lightyellow'), ctext(exp_path, 'lightyellow')))
   with catch_warnings_ignore(Warning):
     for i in all_exp:
       start_time = time.time()
@@ -73,22 +79,21 @@ def get_all_posteriors(path_or_dataset, incl=[], excl=[], fn_filter=None,
       all_posteriors.append(pos)
       if show_progress:
         print("  Loaded %s for %.2f(s)" %
-          (ctext(pos.id, 'lightcyan'), time.time() - start_time))
+              (ctext(pos.id, 'lightcyan'), time.time() - start_time))
   return all_posteriors
+
 
 # ===========================================================================
 # The Posterior
 # ===========================================================================
-class Posterior(object):
+class Posterior(Visualizer):
   """ Posterior
 
   Parameters
   ----------
-  path_or_infer : {sisua.inference.Inference, string}
+  scm : {`sisua.models.SingleCellModel`, string}
 
-  ds : {string, odin.fuel.Dataset}
-
-  n_mcmc_samples : int
+  n_samples : int
     number of MCMC samples for evaluation
 
   verbose : bool
@@ -96,137 +101,26 @@ class Posterior(object):
 
   """
 
-  def __init__(self, path_or_infer, ds=None,
-               n_mcmc_samples=100, verbose=False):
+  def __init__(self, scm: SingleCellModel, n_samples=100, verbose=False):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
-    # ====== load inference class from path ====== #
-    if isinstance(path_or_infer, string_types):
-      if not os.path.exists(path_or_infer):
-        path_or_infer = os.path.join(EXP_DIR, path_or_infer)
-      if os.path.isfile(path_or_infer):
-        model_path = path_or_infer
-      else:
-        model_path = os.path.join(path_or_infer, 'model.pkl')
-      with open(model_path, 'rb') as f:
-        infer = pickle.load(f)
-    elif isinstance(path_or_infer, Inference):
-      infer = path_or_infer
+    self.n_samples = int(n_samples)
+    if isinstance(scm, string_types):
+      pass
     else:
-      raise ValueError(
-          "No support for `path_or_infer` type: %s" % str(type(path_or_infer)))
-    # ====== validate infer ====== #
-    assert isinstance(infer, Inference), \
-    "`infer` must be instance of sisua.inference.Inference, " +\
-    "but given: %s" % str(type(infer))
-    self._infer = infer
-    assert self._infer.is_fitted, \
-    "Only fitted model can create a Posterior"
-    # ====== dataset name ====== #
-    if ds is None:
-      ds = self._infer.configs.get('dataset', None)
-    if isinstance(ds, string_types):
-      self._ds, gene_ds, prot_ds = _fast_load_dataset(ds)
-      X_train_org = gene_ds.get_data(data_type='train')
-      X_test_org = gene_ds.get_data(data_type='test')
-      y_train = prot_ds.get_data(data_type='train')
-      y_test = prot_ds.get_data(data_type='test')
-      gene_name = gene_ds.col_name
-      prot_name = prot_ds.col_name
-    elif isinstance(ds, (Dataset, dict)):
-      self._ds = ds
-      X = ds.get('X', None)
-      X_train_org = ds.get('X_train', None)
-      X_test_org = ds.get('X_test', None)
-
-      y = ds.get('y', None)
-      y_train = ds.get('y_train', None)
-      y_test = ds.get('y_test', None)
-
-      if X_train_org is None or X_test_org is None:
-        if X is None:
-          raise ValueError(
-              "X_train, X_test must be provide if full data X isn't given")
-        X_train_org = X[:]
-        X_test_org = X_train_org
-        if y is not None:
-          y_train = y
-          y_test = y
-
-      gene_name = np.array([str(i) for i in ds['X_col']])\
-      if 'X_col' in ds else \
-      ['Gene#%d' % i for i in range(X_train_org.shape[1])]
-
-      if y_train is not None:
-        prot_name = np.array([str(i) for i in ds['y_col']])\
-        if 'y_col' in ds else \
-        ['Prot#%d' % i for i in range(y_train.shape[1])]
-      else:
-        prot_name = None
-    else:
-      raise ValueError("ds_name must be string_types, " +
-        "ds must be instance of odin.fuel.Dataset or dictionary")
-
-    # prepare the corrupted data
-    X_train = apply_artificial_corruption(X_train_org,
-        dropout=self.infer.corruption_rate,
-        distribution=self.infer.corruption_dist)
-    X_test = apply_artificial_corruption(X_test_org,
-        dropout=self.infer.corruption_rate,
-        distribution=self.infer.corruption_dist)
-
-    # validate the dimension
-    assert (self.infer.gene_dim ==
-            X_train.shape[1] == X_test.shape[1] ==
-            len(gene_name)),\
-    "Number of gene expression between trained inference and " + \
-    "given dataset mismatch"
-
-    # everything must be numpy array not memmap
-    self._X_train = np.asarray(X_train)
-    self._X_train_org = np.asarray(X_train_org)
-    self._X_test = np.asarray(X_test)
-    self._X_test_org = np.asarray(X_test_org)
-    self._y_train = np.asarray(y_train)
-    self._y_test = np.asarray(y_test)
-
-    # gene and protein name
-    self._gene_name = gene_name
-    self._prot_name = [standardize_protein_name(i)
-                       for i in prot_name]
-
-    # ====== MCMC ====== #
-    self._n_mcmc_samples = int(n_mcmc_samples)
-
-  def new_figure(self, nrow=8, ncol=8, name=None):
-    fig = plot_figure(nrow=nrow, ncol=ncol)
-    if name is not None:
-      self.figures[str(name)] = fig
-    return self
-
-  def add_figure(self, name, fig):
-    if fig is None:
-      return self
-    for k, v in self.figures.items():
-      if v == fig:
-        return
-    self.figures[name] = fig
-    return self
-
-  def save_plots(self, path, dpi=None, separate_files=True):
-    save_figures(self.figures, path, dpi, separate_files,
-                clear_figures=True)
-    return self
+      pass
 
   def save_scores(self, path):
     assert '.html' in path.lower(), "Only save scores to html file"
     text = ''
-    for name, (train, test) in (('scores', self.scores),
-                                ('pearson', self.scores_pearson),
-                                ('spearman', self.scores_spearman),
-                                ('classifier', self.scores_classifier),
-                                ('cluster', self.scores_clustering),
-                                ('imputation', self.scores_imputation),):
+    for name, (train, test) in (
+        ('scores', self.scores),
+        ('pearson', self.scores_pearson),
+        ('spearman', self.scores_spearman),
+        ('classifier', self.scores_classifier),
+        ('cluster', self.scores_clustering),
+        ('imputation', self.scores_imputation),
+    ):
       text += '<h4>Score type: "%s"<h4>' % name
       df = pd.DataFrame(data=[train, test], index=['train', 'test'])
       text += df.to_html(float_format='%.3f') + '\n'
@@ -246,14 +140,15 @@ class Posterior(object):
       z, y = self.Z_train, self.y_train
     title = ("[test]%s" if test else "[train]%s") % self.short_id
 
-    fig = plot_latents_multiclasses(
-        Z=z, y=y, labels_name=self.labels,
-        title=title, use_PCA=bool(pca),
-        show_colorbar=bool(legend))
+    fig = plot_latents_multiclasses(Z=z,
+                                    y=y,
+                                    labels_name=self.labels,
+                                    title=title,
+                                    use_PCA=bool(pca),
+                                    show_colorbar=bool(legend))
 
     if fig is not None:
-      self.add_figure('latents_pairs_%s' % ('test' if test else 'train'),
-                      fig)
+      self.add_figure('latents_pairs_%s' % ('test' if test else 'train'), fig)
     return self
 
   def plot_latents_distance_heatmap(self, test=True, legend=True, ax=None):
@@ -268,19 +163,26 @@ class Posterior(object):
       from sisua.label_threshold import ProbabilisticEmbedding
       y = ProbabilisticEmbedding().fit_transform(y, return_probabilities=True)
 
-    plot_distance_heatmap(
-        z, labels=y, labels_name=self.labels,
-        legend_enable=bool(legend),
-        ax=ax, fontsize=8, legend_ncol=2,
-        title=title)
+    plot_distance_heatmap(z,
+                          labels=y,
+                          labels_name=self.labels,
+                          legend_enable=bool(legend),
+                          ax=ax,
+                          fontsize=8,
+                          legend_ncol=2,
+                          title=title)
 
-    self.add_figure('latents_distance_heatmap_%s' %
-                    ('test' if test else 'train'),
-                    ax.get_figure())
+    self.add_figure(
+        'latents_distance_heatmap_%s' % ('test' if test else 'train'),
+        ax.get_figure())
     return self
 
-  def plot_latents_binary_scatter(self, test=True, legend=True, pca=False,
-                                  size=8, ax=None):
+  def plot_latents_binary_scatter(self,
+                                  test=True,
+                                  legend=True,
+                                  pca=False,
+                                  size=8,
+                                  ax=None):
     """
     test : if True, plotting latent space of test set, otherwise, use training set
     """
@@ -290,11 +192,17 @@ class Posterior(object):
     else:
       z, y = self.Z_train, self.y_train
     title = ("[test]%s" if test else "[train]%s") % self.short_id_lines
-    plot_latents_binary(
-        Z=z, y=y, title=title,
-        show_legend=bool(legend), size=8, fontsize=8,
-        ax=ax, labels_name=self.labels, use_PCA=pca,
-        enable_argmax=True, enable_separated=False)
+    plot_latents_binary(Z=z,
+                        y=y,
+                        title=title,
+                        show_legend=bool(legend),
+                        size=8,
+                        fontsize=8,
+                        ax=ax,
+                        labels_name=self.labels,
+                        use_PCA=pca,
+                        enable_argmax=True,
+                        enable_separated=False)
     self.add_figure('latents_scatter_%s' % ('test' if test else 'train'),
                     ax.get_figure())
     return self
@@ -307,11 +215,15 @@ class Posterior(object):
     if mode == 'ovo':
       return self
 
-    (train, test), (fig_train, fig_test) = streamline_classifier(
-        self.Z_train, self.y_train, self.Z_test, self.y_test,
-        train_results=True,
-        labels_name=self.labels,
-        show_plot=True, return_figure=True)
+    (train, test), (fig_train,
+                    fig_test) = streamline_classifier(self.Z_train,
+                                                      self.y_train,
+                                                      self.Z_test,
+                                                      self.y_test,
+                                                      train_results=True,
+                                                      labels_name=self.labels,
+                                                      show_plot=True,
+                                                      return_figure=True)
     if self.X_train.shape == self.X_test.shape and \
     np.allclose(self.X_train, self.X_test):
       self.add_figure('streamline_f1_%s' % 'test', fig_test)
@@ -333,7 +245,10 @@ class Posterior(object):
     sorted_ids = np.argsort(cell_size)
 
     ax.plot(cell_size[sorted_ids], linewidth=1, label="Original")
-    ax.plot(mean[sorted_ids], linestyle='--', alpha=0.66, linewidth=1,
+    ax.plot(mean[sorted_ids],
+            linestyle='--',
+            alpha=0.66,
+            linewidth=1,
             label='Prediction')
 
     ax.set_title('[%s]%s' % ('Test' if test else 'Train', self.short_id),
@@ -346,9 +261,14 @@ class Posterior(object):
                     ax.get_figure())
     return self
 
-  def plot_correlation_top_pairs(self, test=True, data_type='V',
-                                 n=8, proteins=None, top=True,
-                                 fontsize=10, fig=None):
+  def plot_correlation_top_pairs(self,
+                                 test=True,
+                                 data_type='V',
+                                 n=8,
+                                 proteins=None,
+                                 top=True,
+                                 fontsize=10,
+                                 fig=None):
     """
     Parameters
     ----------
@@ -360,8 +280,8 @@ class Posterior(object):
       v, x, w, y = self.V_test, self.X_test_org, self.W_test, self.y_test
     else:
       v, x, w, y = self.V_train, self.X_train_org, self.W_train, self.y_train
-    correlations = self.get_correlation_all_pairs(
-        data_type=data_type, test=test)
+    correlations = self.get_correlation_all_pairs(data_type=data_type,
+                                                  test=test)
 
     if data_type == 'V':
       ydata = v
@@ -374,16 +294,20 @@ class Posterior(object):
       data_type_name = "Reconstructed"
 
     n = int(n)
-    if isinstance(proteins, string_types) and proteins.lower().strip() == 'marker':
+    if isinstance(proteins,
+                  string_types) and proteins.lower().strip() == 'marker':
       from sisua.data.const import MARKER_GENES
-      proteins = [i for i in self.labels
-                  if standardize_protein_name(i) in MARKER_GENES]
+      proteins = [
+          i for i in self.labels if standardize_protein_name(i) in MARKER_GENES
+      ]
     elif proteins is None:
       proteins = self.labels
     proteins = as_tuple(proteins, t=string_types)
 
-    labels = {standardize_protein_name(j).lower(): i
-              for i, j in enumerate(self.labels)}
+    labels = {
+        standardize_protein_name(j).lower(): i
+        for i, j in enumerate(self.labels)
+    }
     prot_ids = []
     for i in proteins:
       i = standardize_protein_name(i).lower()
@@ -396,8 +320,9 @@ class Posterior(object):
     for gene_id, prot_id, pearson, spearman in correlations:
       if prot_id in prot_ids:
         correlations_map[prot_id].append((gene_id, pearson, spearman))
-    correlations_map = {i: j[:n] if top else j[-n:][::-1]
-                        for i, j in correlations_map.items()}
+    correlations_map = {
+        i: j[:n] if top else j[-n:][::-1] for i, j in correlations_map.items()
+    }
 
     # ====== create figure ====== #
     nrow = len(correlations_map)
@@ -413,7 +338,8 @@ class Posterior(object):
 
         title = 'Pearson:%.2f Spearman:%.2f' % (pearson, spearman)
         ax.set_title(title, fontsize=fontsize)
-        ax.set_ylabel('Protein:%s Gene:%s' % (prot, gene), fontsize=fontsize + 2)
+        ax.set_ylabel('Protein:%s Gene:%s' % (prot, gene),
+                      fontsize=fontsize + 2)
 
     # ====== store the figure ====== #
     plt.suptitle('[set: %s][data_type: %s]%s%d' %
@@ -423,10 +349,8 @@ class Posterior(object):
     with catch_warnings_ignore(UserWarning):
       plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     self.add_figure(
-        'correlation_%s_%s%s%d' % ('test' if test else 'train',
-                                   data_type,
-                                   'top' if top else 'bottom',
-                                   n),
+        'correlation_%s_%s%s%d' %
+        ('test' if test else 'train', data_type, 'top' if top else 'bottom', n),
         plt.gcf())
     return self
 
@@ -436,12 +360,16 @@ class Posterior(object):
       v, x, y = self.V_test, self.X_test_org, self.y_test
     else:
       v, x, y = self.V_train, self.X_train_org, self.y_train
-    original_series = get_correlation_scores(
-        X=x, y=y, gene_name=self.gene_name, protein_name=self.labels,
-        return_series=True)
-    imputed_series = get_correlation_scores(
-        X=v, y=y, gene_name=self.gene_name, protein_name=self.labels,
-        return_series=True)
+    original_series = get_correlation_scores(X=x,
+                                             y=y,
+                                             gene_name=self.gene_name,
+                                             protein_name=self.labels,
+                                             return_series=True)
+    imputed_series = get_correlation_scores(X=v,
+                                            y=y,
+                                            gene_name=self.gene_name,
+                                            protein_name=self.labels,
+                                            return_series=True)
     assert len(original_series) == len(imputed_series)
     n_pair = len(imputed_series)
 
@@ -460,14 +388,12 @@ class Posterior(object):
       assert np.all(prot1 == prot2)
       y = prot1
 
-      for j, (name, series) in enumerate((("Original", original_gene),
-                                          ("Imputed", imputed_gene))):
-        ax = fig.add_subplot(
-            grids[idx, width * j: (width * j + width - 1)])
+      for j, (name, series) in enumerate(
+          (("Original", original_gene), ("Imputed", imputed_gene))):
+        ax = fig.add_subplot(grids[idx, width * j:(width * j + width - 1)])
 
         # plot the points
-        ax.scatter(y, series,
-                   s=25, alpha=0.6, linewidths=0)
+        ax.scatter(y, series, s=25, alpha=0.6, linewidths=0)
         plot_aspect('auto', 'box', ax)
 
         # annotations
@@ -475,20 +401,20 @@ class Posterior(object):
             name,
             pearsonr(series, y)[0],
             spearmanr(series, y).correlation,
-        ), fontsize=fontsize)
+        ),
+                     fontsize=fontsize)
         ax.set_xlabel('[Protein] %s' % prot_name, fontsize=fontsize)
         ax.set_ylabel('[Gene] %s' % gene_name, fontsize=fontsize)
 
         # box plot for the distribution
-        ax = fig.add_subplot(
-            grids[idx, (width * j + width - 1): (width * j + width)])
+        ax = fig.add_subplot(grids[idx, (width * j + width - 1):(width * j +
+                                                                 width)])
         ax.boxplot(series)
         ax.set_xticks(())
         ax.set_xlabel(name, fontsize=fontsize)
 
     data_type = ('test' if test else 'train')
-    plt.suptitle('[%s]%s' % (data_type, self.short_id),
-                 fontsize=fontsize + 2)
+    plt.suptitle('[%s]%s' % (data_type, self.short_id), fontsize=fontsize + 2)
     with catch_warnings_ignore(UserWarning):
       plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     self.add_figure('correlation_%s' % data_type, plt.gcf())
@@ -501,8 +427,8 @@ class Posterior(object):
     assert X.ndim == 2, "Only support 2-D tensor, given X.shape=%s" % X.shape
 
     f_pred = None
-    n_mcmc = (self.n_mcmc_samples if n_mcmc_samples is None else
-              int(n_mcmc_samples))
+    n_mcmc = (self.n_mcmc_samples
+              if n_mcmc_samples is None else int(n_mcmc_samples))
     md5 = md5_checksum(X)
     name = str(name).strip().lower()
     is_semi = self.infer.is_semi_supervised
@@ -579,19 +505,23 @@ class Posterior(object):
 
   @property
   def scores_clustering(self):
-    train = clustering_scores(latent=self.Z_train, labels=self.y_train,
+    train = clustering_scores(latent=self.Z_train,
+                              labels=self.y_train,
                               n_labels=len(self.labels))
-    test = clustering_scores(latent=self.Z_test, labels=self.y_test,
+    test = clustering_scores(latent=self.Z_test,
+                             labels=self.y_test,
                              n_labels=len(self.labels))
     return train, test
 
   @property
   def scores_classifier(self):
-    train, test = streamline_classifier(
-        self.Z_train, self.y_train, self.Z_test, self.y_test,
-        train_results=True,
-        labels_name=self.labels,
-        show_plot=False)
+    train, test = streamline_classifier(self.Z_train,
+                                        self.y_train,
+                                        self.Z_test,
+                                        self.y_test,
+                                        train_results=True,
+                                        labels_name=self.labels,
+                                        show_plot=False)
     return train, test
 
   # ******************** learning curves and metrics ******************** #
@@ -618,15 +548,11 @@ class Posterior(object):
     line_styles = dict(linewidth=1.8)
     point_styles = dict(alpha=0.6, s=80, linewidths=0)
 
-    ax.plot(train, label='train', color='blue',
-            linestyle='-', **line_styles)
-    ax.scatter(np.argmin(train), np.min(train),
-               c='blue', **point_styles)
+    ax.plot(train, label='train', color='blue', linestyle='-', **line_styles)
+    ax.scatter(np.argmin(train), np.min(train), c='blue', **point_styles)
 
-    ax.plot(valid, label='valid', color='orange',
-            linestyle='--', **line_styles)
-    ax.scatter(np.argmin(valid), np.min(valid),
-               c='orange', **point_styles)
+    ax.plot(valid, label='valid', color='orange', linestyle='--', **line_styles)
+    ax.scatter(np.argmin(valid), np.min(valid), c='orange', **point_styles)
 
     ax.set_ylabel("Loss")
     ax.set_xlabel("#Epoch")
@@ -651,13 +577,11 @@ class Posterior(object):
 
     for n, series in self.train_history.items():
       if any(i in n for i in name):
-        ax.plot(series, label='[train]%s' % n,
-                linestyle='-', **line_styles)
+        ax.plot(series, label='[train]%s' % n, linestyle='-', **line_styles)
         found_any_metric = True
     for n, series in self.valid_history.items():
       if any(i in n for i in name):
-        ax.plot(series, label='[valid]%s' % n,
-                linestyle='--', **line_styles)
+        ax.plot(series, label='[valid]%s' % n, linestyle='--', **line_styles)
 
     if found_any_metric:
       ax.set_ylabel("Metrics: %s" % ', '.join(name))
@@ -874,8 +798,11 @@ class Posterior(object):
     self.get_correlation_marker_pairs(score_type='pearson', test=False, is_original=False), \
     self.get_correlation_marker_pairs(score_type='pearson', test=True, is_original=False)
 
-  def get_correlation_marker_pairs(self, data_type='X', score_type='spearman',
-                                  test=True, is_original=False):
+  def get_correlation_marker_pairs(self,
+                                   data_type='X',
+                                   score_type='spearman',
+                                   test=True,
+                                   is_original=False):
     """
     Parameters
     ----------
@@ -903,19 +830,22 @@ class Posterior(object):
     assert score_type in ('spearman', 'pearson')
     assert data_type in ('X', 'V', 'W')
     y = self.y_test if test is True else self.y_train
-    X = getattr(self, '%s_%s%s' % (data_type,
-                                  'test' if test else 'train',
-                                  '_org' if is_original else ''))
-    corr = get_correlation_scores(
-        X=X, y=y,
-        gene_name=self.gene_name, protein_name=self.labels,
-        return_series=False)
+    X = getattr(
+        self, '%s_%s%s' %
+        (data_type, 'test' if test else 'train', '_org' if is_original else ''))
+    corr = get_correlation_scores(X=X,
+                                  y=y,
+                                  gene_name=self.gene_name,
+                                  protein_name=self.labels,
+                                  return_series=False)
     score_idx = 0 if score_type == 'spearman' else 1
     return OrderedDict([(i, j[score_idx]) for i, j in corr.items()])
 
   @cache_memory
-  def get_correlation_all_pairs(self, data_type='X',
-                               test=True, is_original=False):
+  def get_correlation_all_pairs(self,
+                                data_type='X',
+                                test=True,
+                                is_original=False):
     """
     Parameters
     ----------
@@ -959,22 +889,27 @@ class Posterior(object):
         g = data[:, gene_idx]
         p = y[:, prot_idx]
         with catch_warnings_ignore(RuntimeWarning):
-          yield (gene_idx, prot_idx,
-                 pearsonr(g, p)[0], spearmanr(g, p).correlation)
+          yield (gene_idx, prot_idx, pearsonr(g,
+                                              p)[0], spearmanr(g,
+                                                               p).correlation)
 
     jobs = list(product(range(n_genes), range(n_proteins)))
 
     # ====== multiprocessing ====== #
     from odin.utils.mpi import MPI
     mpi = MPI(jobs, func=_corr, ncpu=3, batch=len(jobs) // 3)
-    all_correlations = sorted(
-        [i for i in mpi],
-        key=lambda scores: (scores[-2] + scores[-1]) / 2)[::-1]
+    all_correlations = sorted([i for i in mpi],
+                              key=lambda scores:
+                              (scores[-2] + scores[-1]) / 2)[::-1]
     return all_correlations
 
   # ******************** Protein analysis ******************** #
-  def plot_protein_predicted_series(self, test=True, fontsize=10,
-                          y_true_new=None, y_pred_new=None, labels_new=None):
+  def plot_protein_predicted_series(self,
+                                    test=True,
+                                    fontsize=10,
+                                    y_true_new=None,
+                                    y_pred_new=None,
+                                    labels_new=None):
     from odin.backend import log_norm
 
     if not self.is_semi_supervised:
@@ -1003,12 +938,14 @@ class Posterior(object):
       y_true = np.argmax(y_true, axis=-1)
       y_pred = np.argmax(y_pred, axis=-1)
       plot_confusion_matrix(cm=confusion_matrix(y_true, y_pred),
-        labels=labels, colorbar=True,
-        fontsize=fontsize)
+                            labels=labels,
+                            colorbar=True,
+                            fontsize=fontsize)
     #######
     else:
       fig = plt.figure(figsize=(12, n_protein * 4))
-      for cidx, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):
+      for cidx, (name, pred, true) in enumerate(zip(labels, y_pred.T,
+                                                    y_true.T)):
         assert pred.shape == true.shape
         ids = np.argsort(true)
 
@@ -1019,11 +956,16 @@ class Posterior(object):
 
         ax = plt.subplot(n_protein, 1, cidx + 1)
 
-        ax.plot(true[ids], linewidth=2, color=colors[0],
+        ax.plot(true[ids],
+                linewidth=2,
+                color=colors[0],
                 label="[True]%s" % name)
         ax.plot(true[ids][0],
-                linestyle='--', alpha=0.88, linewidth=1.2,
-                color=colors[1], label="[Pred]%s" % name)
+                linestyle='--',
+                alpha=0.88,
+                linewidth=1.2,
+                color=colors[1],
+                label="[Pred]%s" % name)
         ax.set_ylabel("Log-normalized true protein level", color=colors[0])
         ax.set_xlabel("Cell in sorted order of protein level")
         ax.tick_params(axis='y', colors=colors[0], labelcolor=colors[0])
@@ -1031,8 +973,12 @@ class Posterior(object):
         ax.legend()
 
         ax = ax.twinx()
-        ax.plot(pred[ids], linestyle='--', alpha=0.88, linewidth=1.2,
-                color=colors[1], label="[Pred]%s" % name)
+        ax.plot(pred[ids],
+                linestyle='--',
+                alpha=0.88,
+                linewidth=1.2,
+                color=colors[1],
+                label="[Pred]%s" % name)
         ax.set_ylabel("Predicted protein response", color=colors[1])
         ax.tick_params(axis='y', colors=colors[1], labelcolor=colors[1])
 
@@ -1042,9 +988,14 @@ class Posterior(object):
     self.add_figure('protein_series_%s' % ('test' if test else 'train'), fig)
     return self
 
-  def plot_protein_scatter(self, test=True, pca=False, protein_name='CD4',
+  def plot_protein_scatter(self,
+                           test=True,
+                           pca=False,
+                           protein_name='CD4',
                            fig=None,
-                           y_true_new=None, y_pred_new=None, labels_new=None):
+                           y_true_new=None,
+                           y_pred_new=None,
+                           labels_new=None):
     if not self.is_semi_supervised:
       return self
 
@@ -1080,21 +1031,45 @@ class Posterior(object):
       "fig must be instance of matplotlib.Figure"
 
       x = fn_dim(Z)
-      ax = plot_scatter_heatmap(x, val=y_true, ax=321, grid=False, colorbar=True)
+      ax = plot_scatter_heatmap(x,
+                                val=y_true,
+                                ax=321,
+                                grid=False,
+                                colorbar=True)
       ax.set_xlabel('Latent/ProteinOriginal')
-      ax = plot_scatter_heatmap(x, val=y_pred, ax=322, grid=False, colorbar=True)
+      ax = plot_scatter_heatmap(x,
+                                val=y_pred,
+                                ax=322,
+                                grid=False,
+                                colorbar=True)
       ax.set_xlabel('Latent/ProteinPredicted')
 
       x = fn_dim(V)
-      ax = plot_scatter_heatmap(x, val=y_true, ax=323, grid=False, colorbar=True)
+      ax = plot_scatter_heatmap(x,
+                                val=y_true,
+                                ax=323,
+                                grid=False,
+                                colorbar=True)
       ax.set_xlabel('InputImputed/ProteinOriginal')
-      ax = plot_scatter_heatmap(x, val=y_pred, ax=324, grid=False, colorbar=True)
+      ax = plot_scatter_heatmap(x,
+                                val=y_pred,
+                                ax=324,
+                                grid=False,
+                                colorbar=True)
       ax.set_xlabel('InputImputed/ProteinPredicted')
 
       x = fn_dim(X)
-      ax = plot_scatter_heatmap(x, val=y_true, ax=325, grid=False, colorbar=True)
+      ax = plot_scatter_heatmap(x,
+                                val=y_true,
+                                ax=325,
+                                grid=False,
+                                colorbar=True)
       ax.set_xlabel('InputOriginal/ProteinOriginal')
-      ax = plot_scatter_heatmap(x, val=y_pred, ax=326, grid=False, colorbar=True)
+      ax = plot_scatter_heatmap(x,
+                                val=y_pred,
+                                ax=326,
+                                grid=False,
+                                colorbar=True)
       ax.set_xlabel('InputOriginal/ProteinPredicted')
 
       fig.suptitle('[%s]%s' % (data_type, protein_name))
@@ -1108,8 +1083,11 @@ class Posterior(object):
     self._n_mcmc_samples = int(n)
     return self
 
-  def set_labels(self, y_train=None, y_test=None,
-                 y_train_pred=None, y_test_pred=None,
+  def set_labels(self,
+                 y_train=None,
+                 y_test=None,
+                 y_train_pred=None,
+                 y_test_pred=None,
                  labels=None):
     """ This can override the provided protein labels, helpful
     when running the trained model on different dataset for
@@ -1156,16 +1134,15 @@ class Posterior(object):
       semi = i[6]
     else:
       semi = 'unsupervised'
-    return '_'.join([corruption,
-                     '_'.join(i[:2]),
-                     '_'.join(i[2:5]).replace('_', ''),
-                     semi])
+    return '_'.join(
+        [corruption, '_'.join(i[:2]), '_'.join(i[2:5]).replace('_', ''), semi])
 
   @property
   def short_id_lines(self):
     """same as short_id but divided into 3 lines"""
     short_id = self.short_id.split('_')
-    return '\n'.join(['_'.join(short_id[:2]), '_'.join(short_id[2:-1]), short_id[-1]])
+    return '\n'.join(
+        ['_'.join(short_id[:2]), '_'.join(short_id[2:-1]), short_id[-1]])
 
   @property
   def model_name(self):

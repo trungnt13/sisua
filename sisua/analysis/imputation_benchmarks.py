@@ -1,24 +1,23 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
-from six import string_types
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict, defaultdict
 
 import numpy as np
-from scipy.stats import kde
-
 import pandas as pd
-from matplotlib import pyplot as plt
 import seaborn
+from matplotlib import pyplot as plt
+from scipy.stats import kde
+from six import string_types
 from sklearn.neighbors import KernelDensity
 
-from odin.visual import to_axis, plot_figure
-from odin.utils import catch_warnings_ignore, cache_memory, as_tuple
-from odin import backend as K, visual
-
+from odin import backend as K
+from odin import visual
+from odin.utils import as_tuple, cache_memory, catch_warnings_ignore
+from odin.visual import plot_figure, to_axis
 from sisua.data import get_dataset
-from sisua.inference import Inference
 from sisua.data.const import MARKER_GENES
 from sisua.data.utils import standardize_protein_name
+
 
 # ===========================================================================
 # Helpers
@@ -31,8 +30,8 @@ def get_imputed_indices(x_org, x_imp):
       ids.append(i)
   return np.array(ids)
 
-def get_correlation_scores(X, y, gene_name, protein_name,
-                           return_series=False):
+
+def get_correlation_scores(X, y, gene_name, protein_name, return_series=False):
   """ Spearman and Pearson correlation scores
 
   return_series : bool
@@ -67,14 +66,12 @@ def get_correlation_scores(X, y, gene_name, protein_name,
   prot2gene = {}
   for prot, gene in MARKER_GENES.items():
     if prot in protein_name:
-      index = [i
-               for i, name in enumerate(gene_name)
-               if gene == name]
-      if len(index) == 0: # still not found anything
-        index = [i
-                 for i, name in enumerate(gene_name)
-                 if gene == name.split('_')[-1]]
-      if len(index) == 1: # found
+      index = [i for i, name in enumerate(gene_name) if gene == name]
+      if len(index) == 0:  # still not found anything
+        index = [
+            i for i, name in enumerate(gene_name) if gene == name.split('_')[-1]
+        ]
+      if len(index) == 1:  # found
         prot2gene[protein_name.index(prot)] = index[0]
       elif len(index) >= 2:
         raise RuntimeError("Found multiple gene index with the same name")
@@ -89,15 +86,17 @@ def get_correlation_scores(X, y, gene_name, protein_name,
       name = protein_name[prot] + '/' + gene_name[gene]
       series[name] = (x_, y_)
       if not return_series:
-        scores[name] = (spearmanr(x_, y_).correlation,
-                        pearsonr(x_, y_)[0])
+        scores[name] = (spearmanr(x_, y_).correlation, pearsonr(x_, y_)[0])
 
   if return_series:
-    series = OrderedDict(sorted(series.items(), key=lambda x: x[0].split('/')[0]))
+    series = OrderedDict(
+        sorted(series.items(), key=lambda x: x[0].split('/')[0]))
     return series
   else:
-    scores = OrderedDict(sorted(scores.items(), key=lambda x: x[0].split('/')[0]))
+    scores = OrderedDict(
+        sorted(scores.items(), key=lambda x: x[0].split('/')[0]))
     return scores
+
 
 # ===========================================================================
 # Metrics
@@ -106,8 +105,9 @@ def imputation_score(original, imputed):
   # Median of medians for all distances
   assert original.shape == imputed.shape
   nonzeros = np.nonzero(original)
-  d = np.abs(original - imputed) # [nonzeros]
+  d = np.abs(original - imputed)  # [nonzeros]
   return np.median(d)
+
 
 def imputation_mean_score(original, corrupted, imputed):
   # Mean of medians for each cell imputation score
@@ -115,9 +115,9 @@ def imputation_mean_score(original, corrupted, imputed):
   imputation_cells = []
   for cell_org, cell_crt, cell_imp in zip(original, corrupted, imputed):
     if np.sum(cell_org) != np.sum(cell_crt):
-      imputation_cells.append(
-          np.median(np.abs(cell_org - cell_imp)))
+      imputation_cells.append(np.median(np.abs(cell_org - cell_imp)))
   return np.mean(imputation_cells) if len(imputation_cells) > 0 else 0
+
 
 def imputation_std_score(original, corrupted, imputed):
   # Standard deviation of medians for each cell imputation score
@@ -125,9 +125,9 @@ def imputation_std_score(original, corrupted, imputed):
   imputation_cells = []
   for cell_org, cell_crt, cell_imp in zip(original, corrupted, imputed):
     if np.sum(cell_org) != np.sum(cell_crt):
-      imputation_cells.append(
-          np.median(np.abs(cell_org - cell_imp)))
+      imputation_cells.append(np.median(np.abs(cell_org - cell_imp)))
   return np.std(imputation_cells) if len(imputation_cells) > 0 else 0
+
 
 # ===========================================================================
 # Imputation analysis
@@ -135,18 +135,22 @@ def imputation_std_score(original, corrupted, imputed):
 def plot_imputation_series(original, imputed, title="Imputation"):
   original = K.log_norm(original, axis=0)
   imputed = K.log_norm(imputed, axis=0)
-  max_val = max(np.max(original),
-                np.max(imputed))
+  max_val = max(np.max(original), np.max(imputed))
 
   with catch_warnings_ignore(FutureWarning):
-    grid = seaborn.pairplot(data=pd.DataFrame({'Original Value': original,
-                                               'Imputed Value': imputed}),
-        height=4, aspect=1,
-        kind='reg',
-        diag_kws={'bins': 180},
-        plot_kws={'scatter_kws': dict(s=2, alpha=0.6),
-                  'line_kws': dict(color='red', alpha=0.8),
-                  'color': 'g'})
+    grid = seaborn.pairplot(data=pd.DataFrame({
+        'Original Value': original,
+        'Imputed Value': imputed
+    }),
+                            height=4,
+                            aspect=1,
+                            kind='reg',
+                            diag_kws={'bins': 180},
+                            plot_kws={
+                                'scatter_kws': dict(s=2, alpha=0.6),
+                                'line_kws': dict(color='red', alpha=0.8),
+                                'color': 'g'
+                            })
     ids = np.linspace(0, max_val)
     grid.axes[0, 1].set_xlim((0, max_val))
     grid.axes[0, 1].set_ylim((0, max_val))
@@ -156,8 +160,12 @@ def plot_imputation_series(original, imputed, title="Imputation"):
     grid.axes[1, 0].set_ylim((0, max_val))
     grid.axes[1, 0].plot(ids, ids, linestyle='--', linewidth=1, color='black')
 
-def plot_imputation(original, imputed, corrupted=None,
-                    kde_kernel='gaussian', ax=None,
+
+def plot_imputation(original,
+                    imputed,
+                    corrupted=None,
+                    kde_kernel='gaussian',
+                    ax=None,
                     title="Imputation"):
   """ Original code: scVI
       Modified by: SISUA
@@ -179,7 +187,7 @@ def plot_imputation(original, imputed, corrupted=None,
     x = x[mask]
     y = y[mask]
 
-  ymax = 25 # increasing ymax for more data points
+  ymax = 25  # increasing ymax for more data points
   #
   mask = x < ymax
   x = x[mask]

@@ -6,11 +6,11 @@ import tensorflow as tf
 from tensorflow_probability.python.distributions import (MultivariateNormalDiag,
                                                          Normal)
 
-from odin.bay import DistributionLayer
 from odin.bay.distribution_layers import MultivariateNormalLayer, NormalLayer
+from odin.networks import DistributionDense
 
 
-class NormalDiagLatent(DistributionLayer):
+class NormalDiagLatent(DistributionDense):
 
   def __init__(self, units, use_bias=True, name="LatentSpace"):
     super(NormalDiagLatent, self).__init__(
@@ -24,7 +24,7 @@ class NormalDiagLatent(DistributionLayer):
         name=name)
 
 
-class NormalLatent(DistributionLayer):
+class NormalLatent(DistributionDense):
 
   def __init__(self, units, use_bias=True, name="LatentSpace"):
     super(NormalLatent,
@@ -37,11 +37,11 @@ class NormalLatent(DistributionLayer):
                          name=name)
 
 
-class MixedNormalLatent(DistributionLayer):
+class MixedNormalLatent(DistributionDense):
   pass
 
 
-class DirichletLatent(DistributionLayer):
+class DirichletLatent(DistributionDense):
   pass
 
 

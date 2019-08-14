@@ -9,14 +9,19 @@ from typing import Iterable, List, Text, Union
 import numpy as np
 import tensorflow as tf
 from six import add_metaclass, string_types
-from tensorflow.python.keras import Model
 from tensorflow.python.keras.callbacks import (Callback, CallbackList,
                                                LambdaCallback)
+from tensorflow.python.keras.engine import base_layer_utils
+from tensorflow.python.keras.layers import Layer
 from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
+from odin.bay.distributions import stack_distributions
+from odin.networks import AdvanceModel, DeterministicDense, DistributionDense
 from odin.utils import classproperty
 from sisua.data import SingleCellOMICS
+from sisua.models import latents as sisua_latents
+from sisua.models import networks as sisua_networks
 
 try:
   from hyperopt import hp, fmin, tpe, Trials, STATUS_OK, STATUS_FAIL
@@ -33,10 +38,10 @@ def _to_sc_omics(x):
   return SingleCellOMICS(x)
 
 
-def _to_tfdata(sco: SingleCellOMICS, mask: np.ndarray, is_semi_supervised,
-               batch_size, shuffle, epochs):
+def _to_tfdata(sco: SingleCellOMICS, mask: Union[np.ndarray, None],
+               is_semi_supervised, batch_size, shuffle, epochs):
   all_data = [i.X for i in sco]
-  if is_semi_supervised:
+  if is_semi_supervised and mask is not None:
     all_data += [mask]
   # NOTE: from_tensor_slices accept tuple but not list
   ds = tf.data.Dataset.from_tensor_slices(all_data[0] if len(all_data) ==
@@ -57,11 +62,12 @@ def _to_tfdata(sco: SingleCellOMICS, mask: np.ndarray, is_semi_supervised,
 # SingleCell model
 # ===========================================================================
 @add_metaclass(ABCMeta)
-class SingleCellModel(Model):
+class SingleCellModel(AdvanceModel):
   """
   """
 
   def __init__(self,
+               parameters,
                kl_analytic=True,
                kl_weight=1.,
                kl_warmup=400,
@@ -69,18 +75,40 @@ class SingleCellModel(Model):
                name=None):
     if name is None:
       name = self.__class__.__name__
-    super(SingleCellModel, self).__init__(name=name)
-    self._n_epoch = tf.Variable(0, trainable=False, dtype='float32')
+    parameters.update(locals())
+    super(SingleCellModel, self).__init__(parameters=parameters, name=name)
+    self._n_epoch = tf.Variable(0,
+                                trainable=False,
+                                dtype='float32',
+                                name="epoch")
     # parameters for ELBO
     self._kl_analytic = bool(kl_analytic)
     self._kl_weight = tf.convert_to_tensor(kl_weight, dtype='float32')
     self._kl_warmup = tf.convert_to_tensor(kl_warmup, dtype='float32')
     self._seed = int(seed)
     self._is_fitting = False
+    self._corruption_rate = None
+    self._corruption_dist = None
+
+  @property
+  def custom_objects(self):
+    return [sisua_latents, sisua_networks]
 
   @abstractproperty
   def is_semi_supervised(self):
     raise NotImplementedError
+
+  @abstractmethod
+  def _call(self, x, y, masks, training=None, n_samples=None):
+    raise NotImplementedError
+
+  @property
+  def corruption_rate(self):
+    return self._corruption_rate
+
+  @property
+  def corruption_dist(self):
+    return self._corruption_dist
 
   @property
   def is_fitting(self):
@@ -108,6 +136,10 @@ class SingleCellModel(Model):
   def seed(self):
     return self._seed
 
+  @property
+  def parameters(self):
+    return self._parameters
+
   def _to_semisupervised_inputs(self, inputs):
     """ Preprocessing the inputs for semi-supervised training
     """
@@ -130,48 +162,87 @@ class SingleCellModel(Model):
       masks = [1.] * len(y)
     return x, y, masks
 
-  def predict(self,
-              inputs,
-              n_mcmc_samples=1,
-              batch_size=64,
-              verbose=0,
-              steps=None,
-              callbacks=None,
-              max_queue_size=10,
-              workers=1,
-              use_multiprocessing=False):
+  def call(self, inputs, training=None, n_samples=None):
+    # check arguments
+    if n_samples is None:
+      n_samples = 1
+
+    if isinstance(inputs, (tuple, list)) and not self.is_semi_supervised:
+      raise RuntimeError(
+          "Multiple inputs is given for non semi-supervised model")
+
+    if self.is_semi_supervised:
+      x, y, masks = self._to_semisupervised_inputs(inputs)
+    else:
+      x = inputs
+      y = []
+      masks = []
+    return self._call(x, y, masks, training, n_samples)
+
+  def evaluate(self, inputs, n_samples=1, batch_size=128, verbose=1):
+    raise Exception(
+        "This method is not support, please use sisua.analysis.Posterior")
+
+  def predict(self, inputs, n_samples=1, batch_size=128, verbose=1):
+    """
+    Return
+    ------
+    X : `Distribution` or tuple of `Distribution`
+      output distribution, multiple distribution is return in case of
+      multiple outputs
+    Z : `Distribution` or tuple of `Distribution`
+      latent distribution, multiple distribution is return in case of
+      multiple latents
+    """
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
-    n_samples = inputs[0].shape[0]
+    n = inputs[0].shape[0]
     data = _to_tfdata(inputs,
-                      np.ones(shape=(n_samples, 1)),
+                      None,
                       self.is_semi_supervised,
                       batch_size,
                       shuffle=False,
                       epochs=1)
 
-    kw = {'n_samples': int(n_mcmc_samples)}
+    kw = {'n_samples': int(n_samples)}
     if 'n_samples' not in self._call_fn_args:
       del kw['n_samples']
 
     X, Z = [], []
-    import time
     for inputs in tqdm(data,
                        desc="Predicting",
-                       total=int(np.ceil(n_samples / batch_size)),
+                       total=int(np.ceil(n / batch_size)),
                        disable=not bool(verbose)):
+      # the _to_tfddata will return (x, y) tuple for `fit` methods,
+      # y=None and we only need x here.
       x, z = self(inputs[0], training=False, **kw)
       X.append(x)
       Z.append(z)
-    print(X)
-    exit()
+
+    # multiple outputs
+    if isinstance(X[0], (tuple, list)):
+      X = tuple([
+          stack_distributions([x[idx] for x in X]) for idx in range(len(X[0]))
+      ])
+    else:
+      X = stack_distributions(X)
+
+    # multiple latents
+    if isinstance(Z[0], (tuple, list)):
+      Z = tuple([
+          stack_distributions([z[idx] for z in Z]) for idx in range(len(Z[0]))
+      ])
+    else:
+      Z = stack_distributions(Z)
+
+    return X, Z
 
   def fit(self,
           inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
           optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
           learning_rate=1e-4,
-          n_mcmc_samples=1,
+          n_samples=1,
           semi_percent=0.8,
           semi_weight=1,
           corruption_rate=0.25,
@@ -276,7 +347,7 @@ class SingleCellModel(Model):
     # start training loop
     org_fn = self.call
     if 'n_samples' in self._call_fn_args:
-      self.call = partial(self.call, n_samples=n_mcmc_samples)
+      self.call = partial(self.call, n_samples=n_samples)
     self._is_fitting = True
 
     # compile and fit
@@ -299,6 +370,8 @@ class SingleCellModel(Model):
     # reset to original state
     self.call = org_fn
     self._is_fitting = False
+    self._corruption_dist = corruption_dist
+    self._corruption_rate = corruption_rate
 
   def __repr__(self):
     return self.__str__()
@@ -356,5 +429,4 @@ class SingleCellModel(Model):
                    algo=tpe.suggest,
                    max_evals=int(max_evals),
                    trials=trials)
-    print(trials)
-    print(results)
+    return trials, results
