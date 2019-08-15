@@ -11,7 +11,7 @@ class DenseNetwork(Sequential):
 
   def __init__(self,
                n_units=128,
-               n_layers=2,
+               nlayers=2,
                activation='relu',
                batchnorm=True,
                input_dropout=0.,
@@ -21,7 +21,7 @@ class DenseNetwork(Sequential):
     layers = []
     if 0. < input_dropout < 1.:
       layers.append(Dropout(input_dropout, seed=seed))
-    for i in range(int(n_layers)):
+    for i in range(int(nlayers)):
       layers.append(
           Dense(n_units,
                 activation='linear' if batchnorm else activation,

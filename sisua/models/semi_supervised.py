@@ -27,7 +27,7 @@ class MultitaskAutoEncoder(DeepCountAutoencoder):
                hdim=128,
                zdim=32,
                biased_latent=False,
-               n_layers=2,
+               nlayers=2,
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
@@ -53,7 +53,7 @@ class MultiTaskVAE(VariationalAutoEncoder):
                ddrop=0,
                hdim=128,
                zdim=32,
-               n_layers=2,
+               nlayers=2,
                batchnorm=True,
                linear_decoder=False,
                **kwargs):

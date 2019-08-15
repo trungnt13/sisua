@@ -12,7 +12,7 @@ from sisua.models.networks import DenseNetwork
 
 
 class VariationalAutoEncoder(SingleCellModel):
-  """
+  """ Variational Auto Encoder
   """
 
   def __init__(self,
@@ -25,13 +25,13 @@ class VariationalAutoEncoder(SingleCellModel):
                ddrop=0,
                hdim=128,
                zdim=32,
-               n_layers=2,
+               nlayers=2,
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
     super(VariationalAutoEncoder, self).__init__(parameters=locals(), **kwargs)
     self.encoder = DenseNetwork(n_units=hdim,
-                                n_layers=n_layers,
+                                nlayers=nlayers,
                                 activation='relu',
                                 batchnorm=batchnorm,
                                 input_dropout=xdrop,
@@ -42,7 +42,7 @@ class VariationalAutoEncoder(SingleCellModel):
       self.decoder = Identity(name='LinearDecoder')
     else:
       self.decoder = DenseNetwork(n_units=hdim,
-                                  n_layers=n_layers,
+                                  nlayers=nlayers,
                                   activation='relu',
                                   batchnorm=batchnorm,
                                   input_dropout=zdrop,

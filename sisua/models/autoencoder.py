@@ -43,9 +43,6 @@ def _get_loss(loss):
 class DeepCountAutoencoder(SingleCellModel):
   """ Deep Count Autoencoder
 
-  Note
-  ----
-  It is recommend to call `tensorflow.random.set_seed` for reproducible results
   """
 
   def __init__(self,
@@ -57,13 +54,13 @@ class DeepCountAutoencoder(SingleCellModel):
                hdim=128,
                zdim=32,
                biased_latent=False,
-               n_layers=2,
+               nlayers=2,
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
     super(DeepCountAutoencoder, self).__init__(parameters=locals(), **kwargs)
     self.encoder = DenseNetwork(n_units=hdim,
-                                n_layers=n_layers,
+                                nlayers=nlayers,
                                 activation='relu',
                                 batchnorm=batchnorm,
                                 input_dropout=xdrop,
@@ -74,7 +71,7 @@ class DeepCountAutoencoder(SingleCellModel):
       self.decoder = Identity(name="Decoder")
     else:
       self.decoder = DenseNetwork(n_units=hdim,
-                                  n_layers=n_layers,
+                                  nlayers=nlayers,
                                   activation='relu',
                                   batchnorm=batchnorm,
                                   input_dropout=zdrop,

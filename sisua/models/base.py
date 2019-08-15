@@ -2,10 +2,13 @@ from __future__ import absolute_import, division, print_function
 
 import inspect
 import multiprocessing as mpi
+import os
+import string
 from abc import ABCMeta, abstractmethod, abstractproperty
 from functools import partial
 from typing import Iterable, List, Text, Union
 
+import dill
 import numpy as np
 import tensorflow as tf
 from six import add_metaclass, string_types
@@ -13,6 +16,7 @@ from tensorflow.python.keras.callbacks import (Callback, CallbackList,
                                                LambdaCallback)
 from tensorflow.python.keras.engine import base_layer_utils
 from tensorflow.python.keras.layers import Layer
+from tensorflow.python.platform import tf_logging as logging
 from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
@@ -58,12 +62,38 @@ def _to_tfdata(sco: SingleCellOMICS, mask: Union[np.ndarray, None],
   return ds
 
 
+def _to_semisupervised_inputs(inputs, is_fitting):
+  """ Preprocessing the inputs for semi-supervised training """
+  # objective mask is provided
+  if not isinstance(inputs, Iterable):
+    inputs = [inputs]
+  n = tf.shape(inputs[0])[0]
+  for i in inputs:
+    tf.assert_equal(tf.shape(i)[0], n)
+
+  # mask is given at the end during training
+  if is_fitting:
+    x = inputs[0]
+    y = inputs[1:-1]
+    masks = [inputs[-1]] * len(y)
+  # no mask is provided
+  else:
+    x = inputs[0]
+    y = inputs[1:]
+    masks = [1.] * len(y)
+  return x, y, masks
+
+
 # ===========================================================================
 # SingleCell model
 # ===========================================================================
 @add_metaclass(ABCMeta)
 class SingleCellModel(AdvanceModel):
   """
+
+  Note
+  ----
+  It is recommend to call `tensorflow.random.set_seed` for reproducible results
   """
 
   def __init__(self,
@@ -111,10 +141,6 @@ class SingleCellModel(AdvanceModel):
     return self._corruption_dist
 
   @property
-  def is_fitting(self):
-    return self._is_fitting
-
-  @property
   def n_epoch(self):
     return int(tf.cast(self._n_epoch, 'int32'))
 
@@ -140,28 +166,6 @@ class SingleCellModel(AdvanceModel):
   def parameters(self):
     return self._parameters
 
-  def _to_semisupervised_inputs(self, inputs):
-    """ Preprocessing the inputs for semi-supervised training
-    """
-    # objective mask is provided
-    if not isinstance(inputs, Iterable):
-      inputs = [inputs]
-    n = tf.shape(inputs[0])[0]
-    for i in inputs:
-      tf.assert_equal(tf.shape(i)[0], n)
-
-    # mask is given at the end during training
-    if self.is_fitting:
-      x = inputs[0]
-      y = inputs[1:-1]
-      masks = [inputs[-1]] * len(y)
-    # no mask is provided
-    else:
-      x = inputs[0]
-      y = inputs[1:]
-      masks = [1.] * len(y)
-    return x, y, masks
-
   def call(self, inputs, training=None, n_samples=None):
     # check arguments
     if n_samples is None:
@@ -172,7 +176,7 @@ class SingleCellModel(AdvanceModel):
           "Multiple inputs is given for non semi-supervised model")
 
     if self.is_semi_supervised:
-      x, y, masks = self._to_semisupervised_inputs(inputs)
+      x, y, masks = _to_semisupervised_inputs(inputs, self._is_fitting)
     else:
       x = inputs
       y = []
@@ -328,10 +332,10 @@ class SingleCellModel(AdvanceModel):
     #     ds = ds.map(lambda *args: (args,))
     #   return ds
 
-    train = _to_tfdata(train, train_mask, self.is_semi_supervised, batch_size,
-                       shuffle, epochs)
-    valid = _to_tfdata(valid, valid_mask, self.is_semi_supervised, batch_size,
-                       shuffle, epochs)
+    train_data = _to_tfdata(train, train_mask, self.is_semi_supervised,
+                            batch_size, shuffle, epochs)
+    valid_data = _to_tfdata(valid, valid_mask, self.is_semi_supervised,
+                            batch_size, shuffle, epochs)
 
     # prepare callback
     update_epoch = LambdaCallback(
@@ -343,6 +347,12 @@ class SingleCellModel(AdvanceModel):
     else:
       callbacks = list(callbacks)
       callbacks.append(update_epoch)
+    # automatically set inputs as validation set for missing inputs
+    # metrical callbacks
+    from sisua.analysis.singlecell_metrics import SingleCellMetric
+    for cb in callbacks:
+      if isinstance(cb, SingleCellMetric) and cb.inputs is None:
+        cb.inputs = valid
 
     # start training loop
     org_fn = self.call
@@ -351,13 +361,12 @@ class SingleCellModel(AdvanceModel):
     self._is_fitting = True
 
     # compile and fit
-    from tensorflow.python.platform import tf_logging as logging
     curr_log = logging.get_verbosity()
     logging.set_verbosity(logging.ERROR)
     if not self._is_compiled:
       super(SingleCellModel, self).compile(optimizer)
-    super(SingleCellModel, self).fit(x=train,
-                                     validation_data=valid,
+    super(SingleCellModel, self).fit(x=train_data,
+                                     validation_data=valid_data,
                                      validation_freq=validation_freq,
                                      callbacks=callbacks,
                                      initial_epoch=self.n_epoch,
@@ -396,18 +405,18 @@ class SingleCellModel(AdvanceModel):
       inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
       n_processes=1,
       params={
-          'n_layers': hp.quniform('n_layers', 1, 10, 1),
-          'hdim': hp.quniform('hdim', 16, 1024, 32),
-          'zdim': hp.quniform('zdim', 16, 1024, 32),
-          'xdrop': hp.uniform('xdrop', 0.0, 0.9),
-          'linear_decoder': hp.choice('linear_decoder', (True, False))
+          'nlayers': hp.quniform('nlayers', 1, 4, 1),
+          'hdim': hp.quniform('hdim', 16, 1024, 64),
+          'zdim': hp.quniform('zdim', 16, 1024, 64),
       },
-      loss_name='val_loss',
+      loss_name='loss',
       max_evals=100,
       fit_kwargs={
           'epochs': 64,
           'batch_size': 128
-      }):
+      },
+      save_path='/tmp/{model:s}_{data:s}_{loss:s}_{params:s}.hp',
+      override=True):
     # force to turn of keras verbose, it is a big mess to show
     # 2 progress bar at once
     fit_kwargs.update({'verbose': 0})
@@ -416,12 +425,34 @@ class SingleCellModel(AdvanceModel):
     args = inspect.getfullargspec(cls.__init__)
     params = {i: j for i, j in params.items() if i in args.args}
 
+    # processing save_path
+    fmt = {}
+    for (_, key, spec, _) in string.Formatter().parse(save_path):
+      if spec is not None:
+        fmt[key] = None
+    if isinstance(inputs, (tuple, list)):
+      dsname = inputs[0].name if hasattr(inputs[0],
+                                         'name') else 'x%d' % len(inputs)
+    else:
+      dsname = inputs.name if hasattr(inputs, 'name') else 'x'
+    kw = {
+        'model': cls.id,
+        'data': dsname.replace('_', ''),
+        'loss': loss_name.replace('_', ''),
+        'params': '_'.join(sorted([i.replace('_', '') for i in params.keys()]))
+    }
+    kw = {i: j for i, j in kw.items() if i in fmt}
+    save_path = save_path.format(**kw)
+    if os.path.exists(save_path) and not override:
+      raise RuntimeError("Cannot override path: %s" % save_path)
+
     def fit_and_evaluate(*args):
       kwargs = args[0]
       obj = cls(**kwargs)
       obj.fit(inputs, **fit_kwargs)
       history = obj.history.history
-      return np.min(history[loss_name])
+      key = loss_name if 'val_' in loss_name else 'val_' + loss_name
+      return np.min(history[key])
 
     trials = Trials()
     results = fmin(fit_and_evaluate,
@@ -429,4 +460,6 @@ class SingleCellModel(AdvanceModel):
                    algo=tpe.suggest,
                    max_evals=int(max_evals),
                    trials=trials)
-    return trials, results
+    with open(save_path, 'wb') as f:
+      dill.dump((results, trials), f)
+    return results, trials
