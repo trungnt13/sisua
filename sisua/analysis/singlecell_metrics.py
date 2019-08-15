@@ -1,21 +1,43 @@
 from __future__ import absolute_import, division, print_function
 
 from abc import ABCMeta, abstractmethod
+from numbers import Number
 from typing import List, Union
 
 import numpy as np
 import tensorflow as tf
 from six import add_metaclass
 from tensorflow.python.keras.callbacks import Callback
+from tensorflow_probability.python import distributions as tfd
 from tensorflow_probability.python.distributions import Distribution
 
+from odin.bay.distributions import ZeroInflated
+from sisua.analysis.imputation_benchmarks import (correlation_scores,
+                                                  imputation_mean_score,
+                                                  imputation_score,
+                                                  imputation_std_score)
 from sisua.data import SingleCellOMICS
 from sisua.models import SingleCellModel
 from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
 
-__all__ = ['SingleCellMetric', 'NegativeLogLikelihood']
+__all__ = [
+    'SingleCellMetric', 'NegativeLogLikelihood', 'ImputationError',
+    'Correlation'
+]
 
 
+def _preprocess_output_distribution(y_pred):
+  if isinstance(y_pred, tfd.Independent) and \
+    isinstance(y_pred.distribution, ZeroInflated):
+    y_pred = tfd.Independent(
+        y_pred.distribution.count_distribution,
+        reinterpreted_batch_ndims=y_pred.reinterpreted_batch_ndims)
+  return y_pred
+
+
+# ===========================================================================
+# Base class
+# ===========================================================================
 @add_metaclass(ABCMeta)
 class SingleCellMetric(Callback):
 
@@ -47,9 +69,8 @@ class SingleCellMetric(Callback):
     return self
 
   @abstractmethod
-  def call(self, y_true: List[Distribution], y_pred: List[SingleCellOMICS],
-           latents: List[Distribution], extras, corruption_rate,
-           corruption_dist):
+  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+           y_pred: List[Distribution], latents: List[Distribution], extras):
     raise NotImplementedError
 
   def __call__(self, inputs=None, n_samples=None):
@@ -59,35 +80,45 @@ class SingleCellMetric(Callback):
       n_samples = self.n_samples
     model = self.model
 
-    outputs, latents = model.predict(inputs,
+    if not isinstance(inputs, (tuple, list)):
+      inputs = [inputs]
+    inputs = [_to_sc_omics(i) for i in inputs]
+    if model.corruption_rate is not None:
+      inputs_corrupt = [
+          data.corrupt(corruption_rate=model.corruption_rate,
+                       corruption_dist=model.corruption_dist,
+                       inplace=False) if idx == 0 else data
+          for idx, data in enumerate(inputs)
+      ]
+    else:
+      inputs_corrupt = inputs
+
+    outputs, latents = model.predict(inputs_corrupt,
                                      n_samples=self.n_samples,
                                      batch_size=self.batch_size,
-                                     verbose=self.verbose)
+                                     verbose=self.verbose,
+                                     apply_corruption=False)
     if not isinstance(outputs, (tuple, list)):
       outputs = [outputs]
     if not isinstance(latents, (tuple, list)):
       latents = [latents]
 
-    if model.is_semi_supervised:
-      x, y, _ = _to_semisupervised_inputs(inputs, False)
-      y_true = [x] + y
-    else:
-      x = inputs
-      y = []
-      y_true = [x] if not isinstance(x, (tuple, list)) else x
-
-    metrics = self.call(y_true=[_to_sc_omics(i) for i in y_true],
+    metrics = self.call(y_true=inputs,
                         y_pred=outputs,
+                        y_crpt=inputs_corrupt,
                         latents=latents,
-                        corruption_rate=model.corruption_rate,
-                        corruption_dist=model.corruption_dist,
                         extras=self.extras)
     if metrics is None:
       metrics = {}
-    elif tf.is_tensor(metrics) or isinstance(metrics, np.ndarray):
+    elif tf.is_tensor(metrics) or \
+      isinstance(metrics, np.ndarray) or \
+        isinstance(metrics, Number):
       metrics = {self.name: metrics}
     assert isinstance(metrics, dict), \
       "Return metrics must be a dictionary mapping metric name to scalar value"
+    metrics = {
+        i: j.numpy() if tf.is_tensor(j) else j for i, j in metrics.items()
+    }
     return metrics
 
   def on_epoch_end(self, epoch, logs=None):
@@ -106,13 +137,73 @@ class SingleCellMetric(Callback):
     logs.update(metrics)
 
 
+# ===========================================================================
+# Losses
+# ===========================================================================
 class NegativeLogLikelihood(SingleCellMetric):
   """ Log likelihood metric """
 
-  def call(self, y_true: List[Distribution], y_pred: List[SingleCellOMICS],
-           latents: List[Distribution], extras, corruption_rate,
-           corruption_dist):
-    llk = 0
-    for t, p in zip(y_true, y_pred):
-      llk += tf.reduce_mean(p.log_prob(t.X))
-    return -llk
+  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+           y_pred: List[Distribution], latents: List[Distribution], extras):
+    nllk = {}
+    for idx, (t, p) in enumerate(zip(y_true, y_pred)):
+      nllk['nllk%d' % idx] = -tf.reduce_mean(p.log_prob(t.X))
+    return nllk
+
+
+class ImputationError(SingleCellMetric):
+
+  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+           y_pred: List[Distribution], latents: List[Distribution], extras):
+    # only care about the first data input
+    y_true = y_true[0]
+    y_crpt = y_crpt[0]
+    y_pred = y_pred[0]
+
+    y_pred = _preprocess_output_distribution(y_pred)
+    y_pred = y_pred.mean()
+    if y_pred.shape.ndims == 3:
+      y_pred = tf.reduce_mean(y_pred, axis=0)
+    return {
+        'imp_med':
+            imputation_score(original=y_true.X, imputed=y_pred),
+        'imp_mean':
+            imputation_mean_score(original=y_true.X,
+                                  corrupted=y_crpt.X,
+                                  imputed=y_pred)
+    }
+
+
+class Correlation(SingleCellMetric):
+
+  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+           y_pred: List[Distribution], latents: List[Distribution], extras):
+    y_true = y_true[0]
+    y_crpt = y_crpt[0]
+    y_pred = y_pred[0]
+    assert isinstance(extras, SingleCellOMICS), \
+      "protein data must be provided as extras in form of SingleCellOMICS"
+    protein = extras[y_true.indices]
+    assert np.all(protein.obs['cellid'] == y_true.obs['cellid'])
+
+    y_pred = _preprocess_output_distribution(y_pred)
+    y_pred = y_pred.mean()
+    if y_pred.shape.ndims == 3:
+      y_pred = tf.reduce_mean(y_pred, axis=0)
+
+    scores = correlation_scores(X=y_pred,
+                                y=protein.X,
+                                gene_name=y_true.var['geneid'],
+                                protein_name=protein.var['protid'],
+                                return_series=False)
+    spearman = []
+    pearson = []
+    for _, (s, p) in scores.items():
+      spearman.append(s)
+      pearson.append(p)
+    return {
+        'pearson_mean': np.mean(pearson),
+        'spearman_mean': np.mean(spearman),
+        'pearson_med': np.median(pearson),
+        'spearman_med': np.median(spearman),
+    }

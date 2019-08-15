@@ -20,7 +20,7 @@ from odin.visual import (plot_aspect, plot_confusion_matrix, plot_figure,
                          plot_frame, plot_save, plot_scatter,
                          plot_scatter_heatmap, to_axis2D)
 from sisua.analysis.base import Posterior
-from sisua.analysis.imputation_benchmarks import (get_correlation_scores,
+from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
                                                   imputation_std_score)
@@ -404,11 +404,11 @@ class ResultsSheet(object):
       else:
         v, x, y = pos.V_train, pos.X_train_org, pos.y_train
       if original_series is None:
-        original_series = get_correlation_scores(
+        original_series = correlation_scores(
             X=x, y=y, gene_name=pos.gene_name, protein_name=pos.labels,
             return_series=True)
       imputed_series.append(
-          get_correlation_scores(
+          correlation_scores(
               X=v, y=y, gene_name=pos.gene_name, protein_name=pos.labels,
           return_series=True))
 

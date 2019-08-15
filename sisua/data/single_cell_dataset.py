@@ -412,6 +412,17 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     -------
     train : `SingleCellOMICS`
     test : `SingleCellOMICS`
+
+    Example
+    -------
+    >>> x_train, x_test = x.split()
+    >>> y_train, y_test = y.split()
+    >>> assert np.all(x_train.obs['cellid'] == y_train.obs['cellid'])
+    >>> assert np.all(x_test.obs['cellid'] == y_test.obs['cellid'])
+    >>> #
+    >>> x_train_train, x_train_test = x_train.split()
+    >>> assert np.all(x_train_train.obs['cellid'] ==
+    >>>               y_train[x_train_train.indices].obs['cellid'])
     """
     assert 0 < train_percent < 1
     ids = np.random.RandomState(seed=seed).permutation(

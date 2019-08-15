@@ -96,8 +96,8 @@ class VariationalAutoEncoder(SingleCellModel):
                                    n_samples=n_samples)
     llk_x = tf.expand_dims(pX[0].log_prob(x), -1)
     llk_y = 0
-    for i, dist in zip(y, pX[1:]):
-      llk_y += tf.expand_dims(dist.log_prob(i), -1)
+    for i, m, dist in zip(y, masks, pX[1:]):
+      llk_y += tf.expand_dims(dist.log_prob(i), -1) * m
 
     elbo = llk_x + llk_y - kl * self.kl_weight
     elbo = tf.reduce_logsumexp(elbo, axis=0)

@@ -28,9 +28,13 @@ from sisua.models import latents as sisua_latents
 from sisua.models import networks as sisua_networks
 
 try:
-  from hyperopt import hp, fmin, tpe, Trials, STATUS_OK, STATUS_FAIL
-except ImportError:
-  raise RuntimeError("Cannot import hyperopt for hyper-parameters tuning")
+  from hyperopt import hp, fmin, Trials, STATUS_OK, STATUS_FAIL
+  from hyperopt.tpe import suggest as tpe_suggest
+  from hyperopt.rand import suggest as rand_suggest
+  from hyperopt.pyll import scope
+except ImportError as e:
+  raise RuntimeError(
+      "Cannot import hyperopt for hyper-parameters tuning, error: %s" % str(e))
 
 
 # ===========================================================================
@@ -65,21 +69,17 @@ def _to_tfdata(sco: SingleCellOMICS, mask: Union[np.ndarray, None],
 def _to_semisupervised_inputs(inputs, is_fitting):
   """ Preprocessing the inputs for semi-supervised training """
   # objective mask is provided
-  if not isinstance(inputs, Iterable):
-    inputs = [inputs]
-  n = tf.shape(inputs[0])[0]
-  for i in inputs:
-    tf.assert_equal(tf.shape(i)[0], n)
+  assert isinstance(inputs, (tuple, list))
 
   # mask is given at the end during training
   if is_fitting:
     x = inputs[0]
-    y = inputs[1:-1]
+    y = list(inputs[1:-1])
     masks = [inputs[-1]] * len(y)
   # no mask is provided
   else:
     x = inputs[0]
-    y = inputs[1:]
+    y = list(inputs[1:])
     masks = [1.] * len(y)
   return x, y, masks
 
@@ -100,7 +100,7 @@ class SingleCellModel(AdvanceModel):
                parameters,
                kl_analytic=True,
                kl_weight=1.,
-               kl_warmup=400,
+               kl_warmup=200,
                seed=8,
                name=None):
     if name is None:
@@ -187,8 +187,19 @@ class SingleCellModel(AdvanceModel):
     raise Exception(
         "This method is not support, please use sisua.analysis.Posterior")
 
-  def predict(self, inputs, n_samples=1, batch_size=128, verbose=1):
+  def predict(self,
+              inputs,
+              n_samples=1,
+              batch_size=128,
+              apply_corruption=False,
+              verbose=1):
     """
+    Parameters
+    ----------
+    apply_corruption : `bool` (default=`False`)
+      if `True` applying corruption on data before prediction to match the
+      condition during fitting.
+
     Return
     ------
     X : `Distribution` or tuple of `Distribution`
@@ -201,6 +212,13 @@ class SingleCellModel(AdvanceModel):
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
+    if apply_corruption and self.corruption_rate is not None:
+      inputs = [
+          data.corrupt(corruption_rate=self.corruption_rate,
+                       corruption_dist=self.corruption_dist,
+                       inplace=False) if idx == 0 else data
+          for idx, data in enumerate(inputs)
+      ]
     n = inputs[0].shape[0]
     data = _to_tfdata(inputs,
                       None,
@@ -248,7 +266,7 @@ class SingleCellModel(AdvanceModel):
           learning_rate=1e-4,
           n_samples=1,
           semi_percent=0.8,
-          semi_weight=1,
+          semi_weight=25,
           corruption_rate=0.25,
           corruption_dist='binomial',
           batch_size=64,
@@ -281,16 +299,21 @@ class SingleCellModel(AdvanceModel):
     elif issubclass(optimizer, tf.optimizers.Optimizer):
       optimizer = optimizer(learning_rate=learning_rate)
 
+    self._corruption_dist = corruption_dist
+    self._corruption_rate = corruption_rate
     # prepare input data
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
 
-    # corrupting the data
+    # corrupting the data (only the main data, the semi supervised data
+    # remain clean)
     if corruption_rate > 0:
       inputs = [
-          i.corrupt(corruption_rate=corruption_rate,
-                    corruption_dist=corruption_dist) for i in inputs
+          data.corrupt(corruption_rate=corruption_rate,
+                       corruption_dist=corruption_dist,
+                       inplace=False) if idx == 0 else data
+          for idx, data in enumerate(inputs)
       ]
     train, valid = [], []
     for i in inputs:
@@ -379,8 +402,6 @@ class SingleCellModel(AdvanceModel):
     # reset to original state
     self.call = org_fn
     self._is_fitting = False
-    self._corruption_dist = corruption_dist
-    self._corruption_rate = corruption_rate
 
   def __repr__(self):
     return self.__str__()
@@ -403,20 +424,48 @@ class SingleCellModel(AdvanceModel):
   def fit_hyper(
       cls,
       inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
-      n_processes=1,
-      params={
-          'nlayers': hp.quniform('nlayers', 1, 4, 1),
-          'hdim': hp.quniform('hdim', 16, 1024, 64),
-          'zdim': hp.quniform('zdim', 16, 1024, 64),
+      params: dict = {
+          'nlayers': scope.int(hp.quniform('nlayers', 1, 4, 1)),
+          'hdim': scope.int(hp.quniform('hdim', 32, 512, 1)),
+          'zdim': scope.int(hp.quniform('zdim', 32, 512, 1)),
       },
-      loss_name='loss',
-      max_evals=100,
-      fit_kwargs={
+      loss_name: Text = 'val_loss',
+      max_evals: int = 100,
+      kwargs: dict = {},
+      fit_kwargs: dict = {
           'epochs': 64,
           'batch_size': 128
       },
-      save_path='/tmp/{model:s}_{data:s}_{loss:s}_{params:s}.hp',
-      override=True):
+      algorithm: Text = 'bayes',
+      seed: int = 8,
+      save_path: Text = '/tmp/{model:s}_{data:s}_{loss:s}_{params:s}.hp',
+      override: bool = True):
+    """ Hyper-parameters optimization for given SingleCellModel
+    Parameters
+    ----------
+    kwargs : `dict`
+      keyword arguments for model construction
+    fit_kwargs : `dict`
+      keyword arguments for `fit` method
+
+    Example
+    -------
+    >>> nllk = NegativeLogLikelihood(name='nllk')
+    >>> i, j = DeepCountAutoencoder.fit_hyper(x_train,
+    >>>                                       kwargs={'loss': 'zinb'},
+    >>>                                       fit_kwargs={
+    >>>                                           'callbacks': nllk,
+    >>>                                           'epochs': 64,
+    >>>                                           'batch_size': 128
+    >>>                                       },
+    >>>                                       loss_name='nllk',
+    >>>                                       algorithm='bayes',
+    >>>                                       max_evals=100,
+    >>>                                       seed=8)
+    """
+    algorithm = str(algorithm.lower())
+    assert algorithm in ('rand', 'grid', 'bayes'), \
+      "Only support 3 algorithm: rand, grid and bayes; given %s" % algorithm
     # force to turn of keras verbose, it is a big mess to show
     # 2 progress bar at once
     fit_kwargs.update({'verbose': 0})
@@ -438,7 +487,7 @@ class SingleCellModel(AdvanceModel):
     kw = {
         'model': cls.id,
         'data': dsname.replace('_', ''),
-        'loss': loss_name.replace('_', ''),
+        'loss': loss_name.replace('val_', '').replace('_', ''),
         'params': '_'.join(sorted([i.replace('_', '') for i in params.keys()]))
     }
     kw = {i: j for i, j in kw.items() if i in fmt}
@@ -447,19 +496,38 @@ class SingleCellModel(AdvanceModel):
       raise RuntimeError("Cannot override path: %s" % save_path)
 
     def fit_and_evaluate(*args):
-      kwargs = args[0]
-      obj = cls(**kwargs)
+      kw = args[0]
+      kw.update(kwargs)
+      obj = cls(**kw)
       obj.fit(inputs, **fit_kwargs)
       history = obj.history.history
-      key = loss_name if 'val_' in loss_name else 'val_' + loss_name
-      return np.min(history[key])
+      loss = history[loss_name]
+      # first epoch doesn't count
+      return {
+          'loss': np.mean(loss[1:]),
+          'loss_variance': np.var(loss[1:]),
+          'history': obj.history.history,
+          'status': STATUS_OK,
+      }
 
     trials = Trials()
     results = fmin(fit_and_evaluate,
                    space=params,
-                   algo=tpe.suggest,
+                   algo=tpe_suggest if algorithm == 'bayes' else rand_suggest,
                    max_evals=int(max_evals),
-                   trials=trials)
+                   trials=trials,
+                   rstate=np.random.RandomState(seed))
+    history = []
+    for t in trials:
+      r = t['result']
+      if r['status'] == STATUS_OK:
+        history.append({
+            'loss': r['loss'],
+            'loss_variance': r['loss_variance'],
+            'params': {i: j[0] for i, j in t['misc']['vals'].items()},
+            'history': r['history']
+        })
     with open(save_path, 'wb') as f:
-      dill.dump((results, trials), f)
-    return results, trials
+      print("Saving hyperopt results to: %s" % save_path)
+      dill.dump((results, history), f)
+    return results, history

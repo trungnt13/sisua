@@ -31,7 +31,7 @@ def get_imputed_indices(x_org, x_imp):
   return np.array(ids)
 
 
-def get_correlation_scores(X, y, gene_name, protein_name, return_series=False):
+def correlation_scores(X, y, gene_name, protein_name, return_series=False):
   """ Spearman and Pearson correlation scores
 
   return_series : bool
@@ -102,7 +102,7 @@ def get_correlation_scores(X, y, gene_name, protein_name, return_series=False):
 # Metrics
 # ===========================================================================
 def imputation_score(original, imputed):
-  # Median of medians for all distances
+  """ Median of medians for all distances """
   assert original.shape == imputed.shape
   nonzeros = np.nonzero(original)
   d = np.abs(original - imputed)  # [nonzeros]
@@ -110,7 +110,7 @@ def imputation_score(original, imputed):
 
 
 def imputation_mean_score(original, corrupted, imputed):
-  # Mean of medians for each cell imputation score
+  """ Mean of medians for each cell imputation score """
   assert original.shape == corrupted.shape == imputed.shape
   imputation_cells = []
   for cell_org, cell_crt, cell_imp in zip(original, corrupted, imputed):

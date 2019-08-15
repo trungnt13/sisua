@@ -20,7 +20,7 @@ from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
 from odin.visual import (Visualizer, plot_aspect, plot_confusion_matrix,
                          plot_figure, plot_frame, plot_save, plot_scatter,
                          plot_scatter_heatmap, to_axis2D)
-from sisua.analysis.imputation_benchmarks import (get_correlation_scores,
+from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
                                                   imputation_std_score)
@@ -360,12 +360,12 @@ class Posterior(Visualizer):
       v, x, y = self.V_test, self.X_test_org, self.y_test
     else:
       v, x, y = self.V_train, self.X_train_org, self.y_train
-    original_series = get_correlation_scores(X=x,
+    original_series = correlation_scores(X=x,
                                              y=y,
                                              gene_name=self.gene_name,
                                              protein_name=self.labels,
                                              return_series=True)
-    imputed_series = get_correlation_scores(X=v,
+    imputed_series = correlation_scores(X=v,
                                             y=y,
                                             gene_name=self.gene_name,
                                             protein_name=self.labels,
@@ -833,7 +833,7 @@ class Posterior(Visualizer):
     X = getattr(
         self, '%s_%s%s' %
         (data_type, 'test' if test else 'train', '_org' if is_original else ''))
-    corr = get_correlation_scores(X=X,
+    corr = correlation_scores(X=X,
                                   y=y,
                                   gene_name=self.gene_name,
                                   protein_name=self.labels,
