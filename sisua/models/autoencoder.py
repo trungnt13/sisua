@@ -46,7 +46,7 @@ class DeepCountAutoencoder(SingleCellModel):
   """
 
   def __init__(self,
-               loss='mse',
+               loss='zinb',
                xdrop=0.3,
                edrop=0,
                zdrop=0,

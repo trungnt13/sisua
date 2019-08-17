@@ -5,6 +5,7 @@ import multiprocessing as mpi
 import os
 import string
 from abc import ABCMeta, abstractmethod, abstractproperty
+from collections import OrderedDict, defaultdict
 from functools import partial
 from typing import Iterable, List, Text, Union
 
@@ -22,7 +23,7 @@ from tqdm import tqdm
 
 from odin.bay.distributions import stack_distributions
 from odin.networks import AdvanceModel, DeterministicDense, DistributionDense
-from odin.utils import classproperty
+from odin.utils import cache_memory, classproperty
 from sisua.data import SingleCellOMICS
 from sisua.models import latents as sisua_latents
 from sisua.models import networks as sisua_networks
@@ -84,6 +85,10 @@ def _to_semisupervised_inputs(inputs, is_fitting):
   return x, y, masks
 
 
+_CACHE_PREDICT = defaultdict(dict)
+_MAXIMUM_CACHE_SIZE = 2
+
+
 # ===========================================================================
 # SingleCell model
 # ===========================================================================
@@ -107,10 +112,10 @@ class SingleCellModel(AdvanceModel):
       name = self.__class__.__name__
     parameters.update(locals())
     super(SingleCellModel, self).__init__(parameters=parameters, name=name)
-    self._n_epoch = tf.Variable(0,
-                                trainable=False,
-                                dtype='float32',
-                                name="epoch")
+    self._epochs = tf.Variable(0,
+                               trainable=False,
+                               dtype='float32',
+                               name="epoch")
     # parameters for ELBO
     self._kl_analytic = bool(kl_analytic)
     self._kl_weight = tf.convert_to_tensor(kl_weight, dtype='float32')
@@ -141,8 +146,8 @@ class SingleCellModel(AdvanceModel):
     return self._corruption_dist
 
   @property
-  def n_epoch(self):
-    return int(tf.cast(self._n_epoch, 'int32'))
+  def epochs(self):
+    return int(tf.cast(self._epochs, 'int32'))
 
   @property
   def kl_analytic(self):
@@ -155,7 +160,7 @@ class SingleCellModel(AdvanceModel):
   @property
   def kl_weight(self):
     warmup_weight = tf.minimum(
-        tf.maximum(self._n_epoch, 1.) / self.kl_warmup, 1.)
+        tf.maximum(self._epochs, 1.) / self.kl_warmup, 1.)
     return warmup_weight * self._kl_weight
 
   @property
@@ -212,6 +217,13 @@ class SingleCellModel(AdvanceModel):
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
+    # checking the cache
+    self_id = id(self)
+    footprint = ''.join([str(id(i)) for i in inputs]) + \
+      str(n_samples) + str(apply_corruption) + str(self.epochs)
+    if footprint in _CACHE_PREDICT[id(self)]:
+      return _CACHE_PREDICT[self_id][footprint]
+    # applying corruption for testing
     if apply_corruption and self.corruption_rate is not None:
       inputs = [
           data.corrupt(corruption_rate=self.corruption_rate,
@@ -242,22 +254,32 @@ class SingleCellModel(AdvanceModel):
       X.append(x)
       Z.append(z)
 
+    merging_axis = 0 if x.batch_shape.ndims == 1 else 1
     # multiple outputs
     if isinstance(X[0], (tuple, list)):
       X = tuple([
-          stack_distributions([x[idx] for x in X]) for idx in range(len(X[0]))
+          stack_distributions([x[idx]
+                               for x in X])
+          for idx in range(len(X[0]), axis=merging_axis)
       ])
     else:
-      X = stack_distributions(X)
+      X = stack_distributions(X, axis=merging_axis)
 
     # multiple latents
     if isinstance(Z[0], (tuple, list)):
       Z = tuple([
-          stack_distributions([z[idx] for z in Z]) for idx in range(len(Z[0]))
+          stack_distributions([z[idx]
+                               for z in Z])
+          for idx in range(len(Z[0]), axis=0)
       ])
     else:
-      Z = stack_distributions(Z)
-
+      Z = stack_distributions(Z, axis=0)
+    # cache and return
+    _CACHE_PREDICT[self_id][footprint] = (X, Z)
+    # LIFO
+    if len(_CACHE_PREDICT[self_id]) > _MAXIMUM_CACHE_SIZE:
+      key = list(_CACHE_PREDICT[self_id].keys())[0]
+      del _CACHE_PREDICT[self_id][key]
     return X, Z
 
   def fit(self,
@@ -362,7 +384,7 @@ class SingleCellModel(AdvanceModel):
 
     # prepare callback
     update_epoch = LambdaCallback(
-        on_epoch_end=lambda *args, **kwargs: self._n_epoch.assign_add(1))
+        oepochs_end=lambda *args, **kwargs: self._epochs.assign_add(1))
     if callbacks is None:
       callbacks = [update_epoch]
     elif isinstance(callbacks, Callback):
@@ -372,10 +394,19 @@ class SingleCellModel(AdvanceModel):
       callbacks.append(update_epoch)
     # automatically set inputs as validation set for missing inputs
     # metrical callbacks
-    from sisua.analysis.singlecell_metrics import SingleCellMetric
+    from sisua.analysis.sc_metrics import SingleCellMetric
+    from sisua.analysis.sc_monitor import SingleCellMonitor
     for cb in callbacks:
-      if isinstance(cb, SingleCellMetric) and cb.inputs is None:
+      if isinstance(cb, (SingleCellMetric, SingleCellMonitor)) and \
+        cb.inputs is None:
         cb.inputs = valid
+    # reorganize so the SingleCellMonitor is at the end, hence, all the
+    # metrics are computed before the monitor start plotting
+    cb_others = [
+        cb for cb in callbacks if not isinstance(cb, SingleCellMonitor)
+    ]
+    cb_monitor = [cb for cb in callbacks if isinstance(cb, SingleCellMonitor)]
+    callbacks = cb_others + cb_monitor
 
     # start training loop
     org_fn = self.call
@@ -392,7 +423,7 @@ class SingleCellModel(AdvanceModel):
                                      validation_data=valid_data,
                                      validation_freq=validation_freq,
                                      callbacks=callbacks,
-                                     initial_epoch=self.n_epoch,
+                                     initial_epoch=self.epochs,
                                      steps_per_epoch=steps_per_epoch,
                                      validation_steps=validation_steps,
                                      epochs=epochs,
@@ -408,7 +439,7 @@ class SingleCellModel(AdvanceModel):
 
   def __str__(self):
     return "<[%s]%s fitted:%s epoch:%s semi:%s>" % (
-        self.__class__.__name__, self.name, self._is_compiled, self.n_epoch,
+        self.__class__.__name__, self.name, self._is_compiled, self.epochs,
         self.is_semi_supervised)
 
   @classproperty
@@ -450,15 +481,19 @@ class SingleCellModel(AdvanceModel):
 
     Example
     -------
-    >>> nllk = NegativeLogLikelihood(name='nllk')
+    >>> callbacks = [
+    >>>     # NegativeLogLikelihood(),
+    >>>     # ImputationError(),
+    >>>     CorrelationScores(extras=y_train)
+    >>> ]
     >>> i, j = DeepCountAutoencoder.fit_hyper(x_train,
     >>>                                       kwargs={'loss': 'zinb'},
     >>>                                       fit_kwargs={
-    >>>                                           'callbacks': nllk,
+    >>>                                           'callbacks': callbacks,
     >>>                                           'epochs': 64,
     >>>                                           'batch_size': 128
     >>>                                       },
-    >>>                                       loss_name='nllk',
+    >>>                                       loss_name='pearson_mean',
     >>>                                       algorithm='bayes',
     >>>                                       max_evals=100,
     >>>                                       seed=8)

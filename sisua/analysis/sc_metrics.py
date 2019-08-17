@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 from abc import ABCMeta, abstractmethod
+from collections import defaultdict
 from numbers import Number
 from typing import List, Union
 
@@ -16,13 +17,14 @@ from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
                                                   imputation_std_score)
+from sisua.analysis.latent_benchmarks import clustering_scores
 from sisua.data import SingleCellOMICS
 from sisua.models import SingleCellModel
 from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
 
 __all__ = [
     'SingleCellMetric', 'NegativeLogLikelihood', 'ImputationError',
-    'Correlation'
+    'CorrelationScores', 'ClusteringScores'
 ]
 
 
@@ -40,6 +42,19 @@ def _preprocess_output_distribution(y_pred):
 # ===========================================================================
 @add_metaclass(ABCMeta)
 class SingleCellMetric(Callback):
+  """ Single cell metrics for evaluating the imputation and latent space
+  during training
+
+  Parameters
+  ----------
+  inputs : None
+  extras : None
+  n_samples :
+  batch_size :
+  freq : `int` (default=`1`)
+    frequency of evaluating the metric, some metrics are very computational
+    intensive and could slow down the training progress significantly
+  """
 
   def __init__(self,
                inputs: Union[SingleCellOMICS, List[SingleCellOMICS], np.
@@ -47,7 +62,7 @@ class SingleCellMetric(Callback):
                extras=None,
                n_samples=1,
                batch_size=128,
-               verbose=0,
+               freq=3,
                name=None,
                **kwargs):
     super(SingleCellMetric, self).__init__(**kwargs)
@@ -55,8 +70,9 @@ class SingleCellMetric(Callback):
     self.batch_size = batch_size
     self.inputs = inputs
     self.extras = extras
-    self.verbose = verbose
+    self.freq = int(freq)
     self._name = name
+    assert self.freq > 0
 
   @property
   def name(self):
@@ -96,7 +112,7 @@ class SingleCellMetric(Callback):
     outputs, latents = model.predict(inputs_corrupt,
                                      n_samples=self.n_samples,
                                      batch_size=self.batch_size,
-                                     verbose=self.verbose,
+                                     verbose=0,
                                      apply_corruption=False)
     if not isinstance(outputs, (tuple, list)):
       outputs = [outputs]
@@ -133,8 +149,9 @@ class SingleCellMetric(Callback):
           validation epoch if validation is performed. Validation result keys
           are prefixed with `val_`.
     """
-    metrics = self()
-    logs.update(metrics)
+    if epoch % self.freq == 0 and logs is not None:
+      metrics = self()
+      logs.update(metrics)
 
 
 # ===========================================================================
@@ -174,7 +191,9 @@ class ImputationError(SingleCellMetric):
     }
 
 
-class Correlation(SingleCellMetric):
+class CorrelationScores(SingleCellMetric):
+  """ Return (1-correlation_coefficients) to represent the loss
+  """
 
   def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
            y_pred: List[Distribution], latents: List[Distribution], extras):
@@ -184,7 +203,7 @@ class Correlation(SingleCellMetric):
     assert isinstance(extras, SingleCellOMICS), \
       "protein data must be provided as extras in form of SingleCellOMICS"
     protein = extras[y_true.indices]
-    assert np.all(protein.obs['cellid'] == y_true.obs['cellid'])
+    y_true.assert_matching_cells(protein)
 
     y_pred = _preprocess_output_distribution(y_pred)
     y_pred = y_pred.mean()
@@ -199,11 +218,50 @@ class Correlation(SingleCellMetric):
     spearman = []
     pearson = []
     for _, (s, p) in scores.items():
-      spearman.append(s)
-      pearson.append(p)
+      spearman.append(-s)
+      pearson.append(-p)
     return {
         'pearson_mean': np.mean(pearson),
         'spearman_mean': np.mean(spearman),
         'pearson_med': np.median(pearson),
         'spearman_med': np.median(spearman),
     }
+
+
+class ClusteringScores(SingleCellMetric):
+
+  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+           y_pred: List[Distribution], latents: List[Distribution], extras):
+    y_true = y_true[0]
+    y_crpt = y_crpt[0]
+    y_pred = y_pred[0]
+    assert isinstance(extras, SingleCellOMICS), \
+      "protein data must be provided as extras in form of SingleCellOMICS"
+    protein = extras[y_true.indices]
+    y_true.assert_matching_cells(protein)
+
+    labels = protein.X
+    if 'X_prob' in protein.obsm:
+      labels = protein.obsm['X_prob']
+    elif 'X_bin' in protein.obsm:
+      labels = protein.obsm['X_bin']
+    if labels.ndim == 2:
+      labels = np.argmax(labels, axis=1)
+    elif labels.ndim > 2:
+      raise RuntimeError("protein labels has %d dimensions, no support" %
+                         labels.ndim)
+
+    scores = {}
+    scores_avg = defaultdict(list)
+    # support multiple latents also
+    for idx, z in enumerate(latents):
+      for key, val in clustering_scores(latent=z.mean().numpy(),
+                                        labels=labels,
+                                        n_labels=protein.var.shape[0]).items():
+        # since all score higher is better, we want them as loss value
+        val = -val
+        scores['%s_%d' % (key, idx)] = val
+        scores_avg[key].append(val)
+    # average scores
+    scores.update({i: np.mean(j) for i, j in scores_avg.items()})
+    return scores

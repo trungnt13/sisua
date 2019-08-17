@@ -202,6 +202,17 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     self._indices = np.arange(self.X.shape[0], dtype='int32')
     self._calculate_library_info()
 
+  def assert_matching_cells(self, sco) -> 'SingleCellOMICS':
+    assert isinstance(sco, SingleCellOMICS), \
+      "sco must be instance of SingleCellOMICS"
+    assert sco.shape[0] == self.shape[0], \
+      "Number of cell mismatch %d and %d" % (self.shape[0], sco.shape[0])
+    if 'cellid' in sco.obs and 'cellid' in self.obs:
+      assert np.all(sco.obs['cellid'] == self.obs['cellid'])
+    else: # just check matching first column
+      assert np.all(sco.obs.iloc[:, 0] == self.obs.iloc[:, 0])
+    return self
+
   def _calculate_library_info(self):
     total_counts = np.sum(self.X, axis=1, keepdims=True)
     log_counts, local_mean, local_var = get_library_size(self.X,
@@ -492,9 +503,9 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
                                    max_disp=np.inf,
                                    min_mean=0.0125,
                                    max_mean=3,
-                                   n_top_genes=None,
+                                   n_top_genes=1000,
                                    n_bins=20,
-                                   flavor='seurat',
+                                   flavor='cell_ranger',
                                    inplace=True):
     """ Annotate highly variable genes [Satija15]_ [Zheng17]_.
 
