@@ -37,6 +37,9 @@ def _preprocess_output_distribution(y_pred):
   return y_pred
 
 
+_CORRUPTED_INPUTS = {}
+
+
 # ===========================================================================
 # Base class
 # ===========================================================================
@@ -72,6 +75,8 @@ class SingleCellMetric(Callback):
     self.extras = extras
     self.freq = int(freq)
     self._name = name
+    # store the last epoch that the metric was calculated
+    self._last_epoch = None
     assert self.freq > 0
 
   @property
@@ -100,12 +105,18 @@ class SingleCellMetric(Callback):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
     if model.corruption_rate is not None:
+      corruption_text = str(model.corruption_dist) + str(model.corruption_rate)
       inputs_corrupt = [
-          data.corrupt(corruption_rate=model.corruption_rate,
-                       corruption_dist=model.corruption_dist,
-                       inplace=False) if idx == 0 else data
+          (data.corrupt(corruption_rate=model.corruption_rate,
+                        corruption_dist=model.corruption_dist,
+                        inplace=False) \
+           if str(id(data)) + corruption_text not in _CORRUPTED_INPUTS else
+           _CORRUPTED_INPUTS[str(id(data)) + corruption_text]) \
+             if idx == 0 else data
           for idx, data in enumerate(inputs)
       ]
+      _CORRUPTED_INPUTS[str(id(inputs[0])) +
+                        corruption_text] = inputs_corrupt[0]
     else:
       inputs_corrupt = inputs
 
@@ -151,7 +162,20 @@ class SingleCellMetric(Callback):
     """
     if epoch % self.freq == 0 and logs is not None:
       metrics = self()
-      logs.update(metrics)
+      self._last_epoch = epoch
+      for key, val in metrics.items():
+        logs[key] = val
+        logs[key + '_epoch'] = epoch
+
+  def on_train_end(self, logs=None):
+    if self.model.epochs != self._last_epoch:
+      self._last_epoch = self.model.epochs
+      metrics = self()
+      history = self.model.history.history
+      for key, val in metrics.items():
+        if key in history:
+          history[key].append(val)
+          history[key + '_epoch'].append(self._last_epoch)
 
 
 # ===========================================================================

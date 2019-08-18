@@ -32,45 +32,24 @@ __all__ = ['SingleCellMonitor', 'LearningCurves', 'LatentScatter']
 @add_metaclass(ABCMeta)
 class SingleCellMonitor(SingleCellMetric, Visualizer):
 
-  def __init__(self,
-               path='/tmp/{model:s}_{name:s}.pdf',
-               dpi=80,
-               name=None,
-               **kwargs):
+  def __init__(self, path, dpi=80, **kwargs):
     super(SingleCellMonitor, self).__init__(**kwargs)
-    self._name = name
-    self._org_path = path
-    self._path = None
-    self.extras = extras
-    self.freq = int(freq)
+    self._path = str(path)
     self.dpi = int(dpi)
-    self.inputs = None
-    assert self.freq > 0
 
   @property
   def path(self):
     return self._path
 
-  @property
-  def name(self):
-    return self.__class__.__name__.lower() if self._name is None else self._name
-
-  def set_model(self, model: SingleCellModel):
-    kw = {'name': self.name, 'model': model.__class__.id}
-    fmt = {}
-    for (_, key, spec, _) in string.Formatter().parse(self._org_path):
-      if spec is not None:
-        fmt[key] = ''
-    if len(fmt) > 0:
-      fmt = {i: kw[i] if i in kw else j for i, j in fmt.items()}
-      self._path = self._org_path.format(**fmt)
-    return super(SingleCellMonitor, self).set_model(model)
-
   def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
            y_pred: List[Distribution], latents: List[Distribution], extras):
-    self.plot(y_true, y_crpt, y_pred, latents, history, extras)
+    self.plot(y_true, y_crpt, y_pred, latents, self.model.history.history,
+              extras)
     if len(self.get_figures()) > 0:
-      self.save_figures(path=self.path, dpi=self.dpi, separate_files=False)
+      self.save_figures(path=self.path,
+                        dpi=self.dpi,
+                        separate_files=False,
+                        clear_figures=True)
 
   @abstractmethod
   def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
@@ -80,6 +59,7 @@ class SingleCellMonitor(SingleCellMetric, Visualizer):
 
 
 class LearningCurves(SingleCellMonitor):
+  """ Additional key in the loss dictionary could be given by `extras` """
 
   def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
            y_pred: List[Distribution], latents: List[Distribution], history,
@@ -94,11 +74,20 @@ class LearningCurves(SingleCellMonitor):
     if len(key) == 0:
       return
     key = sorted([i for i in key if i in history])
+    if len(key) == 0:
+      return
 
-    fig = plt.figure()
-    for i in key:
-      plt.plot(history[i], label=i)
+    fig = plt.figure(figsize=(8, 3))
+    for k in key:
+      val = history[k]
+      if k + '_epoch' in history:
+        ids = history[k + '_epoch']
+      else:
+        ids = np.arange(len(val), dtype='int32')
+      plt.plot(ids, val, label=k)
+      plt.xticks(ids)
     plt.legend()
+    plt.grid(True)
     self.add_figure('_'.join(key), fig)
 
 

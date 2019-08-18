@@ -126,6 +126,10 @@ class SingleCellModel(AdvanceModel):
     self._corruption_dist = None
 
   @property
+  def epoch_history(self):
+    return self.history.history
+
+  @property
   def custom_objects(self):
     return [sisua_latents, sisua_networks]
 
@@ -147,7 +151,7 @@ class SingleCellModel(AdvanceModel):
 
   @property
   def epochs(self):
-    return int(tf.cast(self._epochs, 'int32'))
+    return int(self._epochs.numpy())
 
   @property
   def kl_analytic(self):
@@ -217,9 +221,10 @@ class SingleCellModel(AdvanceModel):
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
-    # checking the cache
+    # checking the cache, this mechanism will significantly improve speed
+    # during monitoring of fitting process
     self_id = id(self)
-    footprint = ''.join([str(id(i)) for i in inputs]) + \
+    footprint = ''.join([str(id(i.X)) for i in inputs]) + \
       str(n_samples) + str(apply_corruption) + str(self.epochs)
     if footprint in _CACHE_PREDICT[id(self)]:
       return _CACHE_PREDICT[self_id][footprint]
@@ -384,7 +389,7 @@ class SingleCellModel(AdvanceModel):
 
     # prepare callback
     update_epoch = LambdaCallback(
-        oepochs_end=lambda *args, **kwargs: self._epochs.assign_add(1))
+        on_epoch_end=lambda *args, **kwargs: self._epochs.assign_add(1))
     if callbacks is None:
       callbacks = [update_epoch]
     elif isinstance(callbacks, Callback):
