@@ -1,29 +1,26 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
 import os
 from collections import OrderedDict
 
 import numpy as np
-import tensorflow as tf
 import pandas as pd
 import seaborn as sbn
+import tensorflow as tf
+from sklearn.metrics import (confusion_matrix, explained_variance_score,
+                             f1_score, mean_absolute_error, mean_squared_error,
+                             r2_score)
 
-from odin.utils import ctext, catch_warnings_ignore, one_hot
 from odin import backend as K
-from odin.utils import async_mpi
-from odin.ml import fast_tsne, fast_pca
+from odin.ml import fast_pca, fast_tsne
+from odin.utils import async_mpi, catch_warnings_ignore, ctext, one_hot
 from odin.visual import (generate_random_colors, generate_random_marker,
-                         plot_gridSubplot, plot_gridSpec, subplot,
-                         plot_scatter, plot_scatter_layers, plot_figure,
-                         plot_scatter_heatmap, plot_confusion_matrix,
-                         plot_histogram, plot_save,
-                         plot_series_statistics)
-
-from sklearn.metrics import (confusion_matrix, f1_score,
-                             r2_score, explained_variance_score,
-                             mean_squared_error, mean_absolute_error)
-
+                         plot_confusion_matrix, plot_figure, plot_gridSpec,
+                         plot_gridSubplot, plot_histogram, plot_save,
+                         plot_scatter, plot_scatter_heatmap,
+                         plot_scatter_layers, plot_series_statistics, subplot)
 from sisua.utils.others import anything2image
+
 
 # ===========================================================================
 # Some helper

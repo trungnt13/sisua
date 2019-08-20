@@ -461,6 +461,7 @@ def plot_latents_binary(Z,
                         show_legend=True,
                         size=12,
                         fontsize=12,
+                        show_scores=True,
                         enable_argmax=True,
                         enable_separated=False):
   from matplotlib import pyplot as plt
@@ -487,15 +488,16 @@ def plot_latents_binary(Z,
     else:
       Z = fast_pca(Z, n_components=2, random_state=87654321)
   # ====== clustering metrics ====== #
-  scores = clustering_scores(latent=Z,
-                             labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
-                             n_labels=num_classes)
-  title += '\n'
-  for k, v in sorted(scores.items(), key=lambda x: x[0]):
-    title += '%s:%.2f ' % (k, v)
+  if show_scores:
+    scores = clustering_scores(latent=Z,
+                               labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
+                               n_labels=num_classes)
+    title += '\n'
+    for k, v in sorted(scores.items(), key=lambda x: x[0]):
+      title += '%s:%.2f ' % (k, v)
   # ====== plotting ====== #
   if enable_argmax:
-    y_argmax = np.argmax(y, axis=-1)
+    y_argmax = np.argmax(y, axis=-1) if y.ndim == 2 else y
     fast_scatter(x=Z,
                  y=y_argmax,
                  labels=labels_name,

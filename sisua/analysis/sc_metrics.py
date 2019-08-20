@@ -13,6 +13,7 @@ from tensorflow_probability.python import distributions as tfd
 from tensorflow_probability.python.distributions import Distribution
 
 from odin.bay.distributions import ZeroInflated
+from odin.utils import catch_warnings_ignore
 from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
@@ -29,12 +30,28 @@ __all__ = [
 
 
 def _preprocess_output_distribution(y_pred):
+  """ In case of zero inflated distribution, extract the underlying count
+  distribution """
   if isinstance(y_pred, tfd.Independent) and \
     isinstance(y_pred.distribution, ZeroInflated):
     y_pred = tfd.Independent(
         y_pred.distribution.count_distribution,
         reinterpreted_batch_ndims=y_pred.reinterpreted_batch_ndims)
   return y_pred
+
+
+def _to_binary(protein):
+  labels = protein.X
+  if 'X_prob' in protein.obsm:
+    labels = protein.obsm['X_prob']
+  elif 'X_bin' in protein.obsm:
+    labels = protein.obsm['X_bin']
+  if labels.ndim == 2:
+    labels = np.argmax(labels, axis=1)
+  elif labels.ndim > 2:
+    raise RuntimeError("protein labels has %d dimensions, no support" %
+                       labels.ndim)
+  return labels
 
 
 _CORRUPTED_INPUTS = {}
@@ -76,7 +93,7 @@ class SingleCellMetric(Callback):
     self.freq = int(freq)
     self._name = name
     # store the last epoch that the metric was calculated
-    self._last_epoch = None
+    self._last_epoch = 0
     assert self.freq > 0
 
   @property
@@ -161,8 +178,8 @@ class SingleCellMetric(Callback):
           are prefixed with `val_`.
     """
     if epoch % self.freq == 0 and logs is not None:
-      metrics = self()
       self._last_epoch = epoch
+      metrics = self()
       for key, val in metrics.items():
         logs[key] = val
         logs[key + '_epoch'] = epoch
@@ -239,6 +256,8 @@ class CorrelationScores(SingleCellMetric):
                                 gene_name=y_true.var['geneid'],
                                 protein_name=protein.var['protid'],
                                 return_series=False)
+    if len(scores) == 0:
+      return {}
     spearman = []
     pearson = []
     for _, (s, p) in scores.items():
@@ -263,17 +282,7 @@ class ClusteringScores(SingleCellMetric):
       "protein data must be provided as extras in form of SingleCellOMICS"
     protein = extras[y_true.indices]
     y_true.assert_matching_cells(protein)
-
-    labels = protein.X
-    if 'X_prob' in protein.obsm:
-      labels = protein.obsm['X_prob']
-    elif 'X_bin' in protein.obsm:
-      labels = protein.obsm['X_bin']
-    if labels.ndim == 2:
-      labels = np.argmax(labels, axis=1)
-    elif labels.ndim > 2:
-      raise RuntimeError("protein labels has %d dimensions, no support" %
-                         labels.ndim)
+    labels = _to_binary(protein)
 
     scores = {}
     scores_avg = defaultdict(list)

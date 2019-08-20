@@ -1,5 +1,6 @@
 from __future__ import absolute_import, division, print_function
 
+import os
 import string
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
@@ -17,13 +18,17 @@ from tensorflow_probability.python.distributions import Distribution
 
 from odin.bay.distributions import ZeroInflated
 from odin.visual import Visualizer
+from sisua.analysis.latent_benchmarks import (plot_distance_heatmap,
+                                              plot_latents_binary)
 from sisua.analysis.sc_metrics import (SingleCellMetric,
-                                       _preprocess_output_distribution)
+                                       _preprocess_output_distribution,
+                                       _to_binary)
 from sisua.data import SingleCellOMICS
+from sisua.data.utils import standardize_protein_name
 from sisua.models import SingleCellModel
 from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
 
-__all__ = ['SingleCellMonitor', 'LearningCurves', 'LatentScatter']
+__all__ = ['SingleCellMonitor', 'LearningCurves', 'ScatterPlot', 'HeatmapPlot']
 
 
 # ===========================================================================
@@ -46,7 +51,9 @@ class SingleCellMonitor(SingleCellMetric, Visualizer):
     self.plot(y_true, y_crpt, y_pred, latents, self.model.history.history,
               extras)
     if len(self.get_figures()) > 0:
-      self.save_figures(path=self.path,
+      base, ext = os.path.splitext(self.path)
+      path = base + '.%d' % (self._last_epoch + 1) + ext
+      self.save_figures(path=path,
                         dpi=self.dpi,
                         separate_files=False,
                         clear_figures=True)
@@ -77,7 +84,7 @@ class LearningCurves(SingleCellMonitor):
     if len(key) == 0:
       return
 
-    fig = plt.figure(figsize=(8, 3))
+    fig = plt.figure(figsize=(16, 4))
     for k in key:
       val = history[k]
       if k + '_epoch' in history:
@@ -91,22 +98,86 @@ class LearningCurves(SingleCellMonitor):
     self.add_figure('_'.join(key), fig)
 
 
-class LatentScatter(SingleCellMonitor):
+class ScatterPlot(SingleCellMonitor):
+
+  def __init__(self, path, data='latent', use_pca=True, dpi=80, **kwargs):
+    super(ScatterPlot, self).__init__(path=path, dpi=dpi, **kwargs)
+    self.use_pca = bool(use_pca)
+    data = str(data.lower())
+    assert data in ("latent", "imputation"), \
+      "Only support three data types: latent, imputation and corrupt"
+    self.data = data
+
+  def _preprocess(self, y_true, y_pred, latents, extras):
+    y_true = y_true[0]
+    y_pred = [_preprocess_output_distribution(i) for i in y_pred]
+    assert isinstance(extras, SingleCellOMICS), \
+      "protein data must be provided as extras in form of SingleCellOMICS"
+    protein = extras[y_true.indices]
+    y_true.assert_matching_cells(protein)
+    labels = _to_binary(protein)
+    labels_name = [standardize_protein_name(i) for i in protein.var.iloc[:, 0]]
+
+    if self.data == 'latent':
+      data = latents
+    elif self.data == 'imputation':
+      data = y_pred
+    else:
+      raise NotImplementedError()
+    return y_true, data, labels, labels_name
 
   def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
            y_pred: List[Distribution], latents: List[Distribution], history,
            extras):
-    assert isinstance(extras, SingleCellOMICS), \
-      "protein data must be provided as extras in form of SingleCellOMICS"
+    y_true, data, labels, labels_name = self._preprocess(
+        y_true, y_pred, latents, extras)
 
-    labels = protein.X
-    if 'X_prob' in protein.obsm:
-      labels = protein.obsm['X_prob']
-    elif 'X_bin' in protein.obsm:
-      labels = protein.obsm['X_bin']
-    if labels.ndim == 2:
-      labels = np.argmax(labels, axis=1)
-    elif labels.ndim > 2:
-      raise RuntimeError("protein labels has %d dimensions, no support" %
-                         labels.ndim)
-    exit()
+    n = len(data)
+    for idx, x in enumerate(data):
+      distribution = x.__class__.__name__ \
+        if not isinstance(x, tfd.Independent) else \
+          x.distribution.__class__.__name__
+      x = x.mean().numpy()
+      fig = plt.figure(figsize=(8, 8))
+      plot_latents_binary(Z=x,
+                          y=labels,
+                          labels_name=labels_name,
+                          title="[#%d]%s" % (idx, distribution),
+                          use_PCA=self.use_pca,
+                          ax=None,
+                          show_legend=True,
+                          size=12,
+                          fontsize=12,
+                          show_scores=False)
+      self.add_figure("%s%d" % (self.data, idx), fig)
+
+
+class HeatmapPlot(ScatterPlot):
+
+  def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+           y_pred: List[Distribution], latents: List[Distribution], history,
+           extras):
+    y_true, data, labels, labels_name = self._preprocess(
+        y_true, y_pred, latents, extras)
+
+    n = len(data)
+    for idx, x in enumerate(data):
+      distribution = x.__class__.__name__ \
+        if not isinstance(x, tfd.Independent) else \
+          x.distribution.__class__.__name__
+      x = x.mean().numpy()
+      fig = plt.figure(figsize=(8, 8))
+      plot_distance_heatmap(X=x,
+                            labels=labels,
+                            labels_name=labels_name,
+                            lognorm=True,
+                            colormap='hot',
+                            ax=None,
+                            legend_enable=True,
+                            legend_loc='upper center',
+                            legend_ncol=3,
+                            legend_colspace=0.2,
+                            fontsize=10,
+                            show_colorbar=True,
+                            title="[#%d]%s" % (idx, distribution))
+      self.add_figure("%s%d" % (self.data, idx), fig)

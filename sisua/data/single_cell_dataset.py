@@ -347,6 +347,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
 
   @property
   def is_binary(self):
+    """ return True if the data is binary """
     return sorted(np.unique(self.X.astype('float32'))) == [0., 1.]
 
   @property

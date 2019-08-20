@@ -5,9 +5,11 @@ from typing import Iterable
 import tensorflow as tf
 from tensorflow.python.keras.layers import Dense, Layer
 
-from odin.bay.distribution_layers import (NegativeBinomialLayer, PoissonLayer,
-                                          ZeroInflatedNegativeBinomialLayer,
-                                          ZeroInflatedPoissonLayer)
+from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
+                                          NegativeBinomialLayer, PoissonLayer,
+                                          ZINegativeBinomialDispLayer,
+                                          ZINegativeBinomialLayer,
+                                          ZIPoissonLayer)
 from odin.bay.helpers import Statistic
 from odin.networks import (DeterministicDense, DistributionDense, Identity,
                            Parallel)
@@ -18,18 +20,28 @@ from sisua.models.networks import DenseNetwork
 def _get_loss(loss):
   loss = str(loss).lower()
   is_probabilistic_loss = True
+  # ====== Poisson ====== #
   if loss == 'poisson':
     output_layer = lambda units: DistributionDense(units,
                                                    posterior=PoissonLayer)
   elif loss == 'zipoisson':
     output_layer = lambda units: DistributionDense(units,
-                                                   posterior=PoissonLayer)
+                                                   posterior=ZIPoissonLayer)
+  # ====== NB ====== #
   elif loss == 'nb':
-    output_layer = lambda units: DistributionDense(units,
-                                                   posterior=PoissonLayer)
+    output_layer = lambda units: DistributionDense(
+        units, posterior=NegativeBinomialLayer)
   elif loss == 'zinb':
-    output_layer = lambda units: DistributionDense(units,
-                                                   posterior=PoissonLayer)
+    output_layer = lambda units: DistributionDense(
+        units, posterior=ZINegativeBinomialLayer)
+  # ====== alternate parameterization for NB ====== #
+  elif loss == 'nbd':
+    output_layer = lambda units: DistributionDense(
+        units, posterior=NegativeBinomialDispLayer)
+  elif loss == 'zinbd':
+    output_layer = lambda units: DistributionDense(
+        units, posterior=ZINegativeBinomialDispLayer)
+  # ====== deterministic loss function ====== #
   else:
     is_probabilistic_loss = False
     output_layer = lambda units: DeterministicDense(units, activation='relu')
@@ -121,7 +133,7 @@ class DeepCountAutoencoder(SingleCellModel):
     loss = tf.reduce_mean(loss_x + loss_y)
 
     if training:
-      self.add_loss(lambda: loss)
+      self.add_loss(loss)
 
     self.add_metric(loss_x, 'mean', "loss_x")
     if self.is_semi_supervised:

@@ -361,15 +361,15 @@ class Posterior(Visualizer):
     else:
       v, x, y = self.V_train, self.X_train_org, self.y_train
     original_series = correlation_scores(X=x,
-                                             y=y,
-                                             gene_name=self.gene_name,
-                                             protein_name=self.labels,
-                                             return_series=True)
+                                         y=y,
+                                         gene_name=self.gene_name,
+                                         protein_name=self.labels,
+                                         return_series=True)
     imputed_series = correlation_scores(X=v,
-                                            y=y,
-                                            gene_name=self.gene_name,
-                                            protein_name=self.labels,
-                                            return_series=True)
+                                        y=y,
+                                        gene_name=self.gene_name,
+                                        protein_name=self.labels,
+                                        return_series=True)
     assert len(original_series) == len(imputed_series)
     n_pair = len(imputed_series)
 
@@ -834,10 +834,10 @@ class Posterior(Visualizer):
         self, '%s_%s%s' %
         (data_type, 'test' if test else 'train', '_org' if is_original else ''))
     corr = correlation_scores(X=X,
-                                  y=y,
-                                  gene_name=self.gene_name,
-                                  protein_name=self.labels,
-                                  return_series=False)
+                              y=y,
+                              gene_name=self.gene_name,
+                              protein_name=self.labels,
+                              return_series=False)
     score_idx = 0 if score_type == 'spearman' else 1
     return OrderedDict([(i, j[score_idx]) for i, j in corr.items()])
 
