@@ -1,5 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
+import inspect
+
 import tensorflow as tf
 from tensorflow.python.keras.layers import Layer
 
@@ -16,7 +18,7 @@ class VariationalAutoEncoder(SingleCellModel):
   """
 
   def __init__(self,
-               dispersion='gene-cell',
+               dispersion='full',
                xdist='zinb',
                zdist='normal',
                xdrop=0.3,
@@ -54,6 +56,7 @@ class VariationalAutoEncoder(SingleCellModel):
     if not isinstance(xdist, (tuple, list)):
       xdist = [xdist]
     self.xdist = [parse_distribution(i)[0] for i in xdist]
+    self.dispersion = dispersion
 
   @property
   def is_semi_supervised(self):
@@ -62,13 +65,19 @@ class VariationalAutoEncoder(SingleCellModel):
   def _call(self, x, y, masks, training, n_samples):
     # initializing the output layers
     if not isinstance(self.xdist[0], Layer):
-      self.xdist = [
-          DistributionDense(i.shape[1],
-                            posterior=dist,
-                            use_bias=True,
-                            name='Output%d' % idx)
-          for idx, (i, dist) in enumerate(zip([x] + y, self.xdist))
-      ]
+      dist = []
+      for idx, (i, d) in enumerate(zip([x] + y, self.xdist)):
+        if 'dispersion' in inspect.getfullargspec(d.__init__).args:
+          post = d(i.shape[1], dispersion=self.dispersion)
+        else:
+          post = d(i.shape[1])
+        dist.append(
+            DistributionDense(i.shape[1],
+                              posterior=post,
+                              activation='linear',
+                              use_bias=True,
+                              name='Output%d' % idx))
+      self.xdist = dist
 
     # applying encoding
     if 'training' in self.encoder._call_fn_args:
@@ -111,4 +120,4 @@ class VariationalAutoEncoder(SingleCellModel):
     self.add_metric(tf.reduce_mean(-llk_x), aggregation='mean', name="nllk_x")
     if self.is_semi_supervised:
       self.add_metric(tf.reduce_mean(-llk_y), aggregation='mean', name="nllk_y")
-    return pX, qZ
+    return pX if self.is_semi_supervised else pX[0], qZ

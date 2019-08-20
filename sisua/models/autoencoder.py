@@ -17,7 +17,7 @@ from sisua.models.base import SingleCellModel
 from sisua.models.networks import DenseNetwork
 
 
-def _get_loss(loss):
+def _get_loss(loss, dispersion=None):
   loss = str(loss).lower()
   is_probabilistic_loss = True
   # ====== Poisson ====== #
@@ -30,17 +30,25 @@ def _get_loss(loss):
   # ====== NB ====== #
   elif loss == 'nb':
     output_layer = lambda units: DistributionDense(
-        units, posterior=NegativeBinomialLayer)
+        units,
+        posterior=lambda units: NegativeBinomialLayer(units,
+                                                      dispersion=dispersion))
   elif loss == 'zinb':
     output_layer = lambda units: DistributionDense(
-        units, posterior=ZINegativeBinomialLayer)
+        units,
+        posterior=lambda units: ZINegativeBinomialLayer(units,
+                                                        dispersion=dispersion))
   # ====== alternate parameterization for NB ====== #
   elif loss == 'nbd':
     output_layer = lambda units: DistributionDense(
-        units, posterior=NegativeBinomialDispLayer)
+        units,
+        posterior=lambda units: NegativeBinomialDispLayer(
+            units, dispersion=dispersion))
   elif loss == 'zinbd':
     output_layer = lambda units: DistributionDense(
-        units, posterior=ZINegativeBinomialDispLayer)
+        units,
+        posterior=lambda units: ZINegativeBinomialDispLayer(
+            units, dispersion=dispersion))
   # ====== deterministic loss function ====== #
   else:
     is_probabilistic_loss = False
@@ -58,6 +66,7 @@ class DeepCountAutoencoder(SingleCellModel):
   """
 
   def __init__(self,
+               dispersion='full',
                loss='zinb',
                xdrop=0.3,
                edrop=0,
@@ -97,7 +106,7 @@ class DeepCountAutoencoder(SingleCellModel):
     # loss funciton
     if not isinstance(loss, (tuple, list)):
       loss = [loss]
-    self.loss_info = [_get_loss(i) for i in loss]
+    self.loss_info = [_get_loss(i, dispersion=dispersion) for i in loss]
     self.output_layer = None
 
   @property

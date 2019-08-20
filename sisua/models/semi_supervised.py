@@ -19,6 +19,7 @@ class MultitaskAutoEncoder(DeepCountAutoencoder):
   """
 
   def __init__(self,
+               dispersion='full',
                loss=['zinb', 'nb'],
                xdrop=0.3,
                edrop=0,
@@ -44,7 +45,7 @@ class MultiTaskVAE(VariationalAutoEncoder):
   """
 
   def __init__(self,
-               dispersion='gene-cell',
+               dispersion='full',
                xdist=['zinb', 'nb'],
                zdist='normal',
                xdrop=0.3,

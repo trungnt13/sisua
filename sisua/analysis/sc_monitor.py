@@ -138,6 +138,8 @@ class ScatterPlot(SingleCellMonitor):
         if not isinstance(x, tfd.Independent) else \
           x.distribution.__class__.__name__
       x = x.mean().numpy()
+      if x.ndim == 3:  # in case MCMC sampling is used
+        x = np.squeeze(x, axis=0)
       fig = plt.figure(figsize=(8, 8))
       plot_latents_binary(Z=x,
                           y=labels,
@@ -166,6 +168,8 @@ class HeatmapPlot(ScatterPlot):
         if not isinstance(x, tfd.Independent) else \
           x.distribution.__class__.__name__
       x = x.mean().numpy()
+      if x.ndim == 3:  # in case MCMC sampling is used
+        x = np.squeeze(x, axis=0)
       fig = plt.figure(figsize=(8, 8))
       plot_distance_heatmap(X=x,
                             labels=labels,
