@@ -15,21 +15,25 @@ class DenseNetwork(Sequential):
                activation='relu',
                batchnorm=True,
                input_dropout=0.,
-               output_dropout=0,
+               output_dropout=0.,
+               layer_dropout=0.,
                seed=8,
                name=None):
+    nlayers = int(nlayers)
     layers = []
     if 0. < input_dropout < 1.:
       layers.append(Dropout(input_dropout, seed=seed))
-    for i in range(int(nlayers)):
+    for i in range(nlayers):
       layers.append(
           Dense(n_units,
-                activation='linear' if batchnorm else activation,
+                activation='linear',
                 use_bias=False if batchnorm else True,
                 name="DenseLayer%d" % i))
       if batchnorm:
         layers.append(BatchNormalization())
-        layers.append(Activation(activation))
+      layers.append(Activation(activation))
+      if layer_dropout > 0 and i != nlayers - 1:
+        layers.append(Dropout(rate=layer_dropout))
     if 0. < output_dropout < 1.:
       layers.append(Dropout(output_dropout, seed=seed))
     super(DenseNetwork, self).__init__(layers=layers, name=name)

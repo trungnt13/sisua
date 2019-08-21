@@ -14,7 +14,7 @@ import numpy as np
 import tensorflow as tf
 from six import add_metaclass, string_types
 from tensorflow.python.keras.callbacks import (Callback, CallbackList,
-                                               LambdaCallback)
+                                               EarlyStopping, LambdaCallback)
 from tensorflow.python.keras.engine import base_layer_utils
 from tensorflow.python.keras.layers import Layer
 from tensorflow.python.platform import tf_logging as logging
@@ -180,10 +180,6 @@ class SingleCellModel(AdvanceModel):
     if n_samples is None:
       n_samples = 1
 
-    if isinstance(inputs, (tuple, list)) and not self.is_semi_supervised:
-      raise RuntimeError(
-          "Multiple inputs is given for non semi-supervised model")
-
     if self.is_semi_supervised:
       x, y, masks = _to_semisupervised_inputs(inputs, self._is_fitting)
     else:
@@ -291,22 +287,27 @@ class SingleCellModel(AdvanceModel):
       del _CACHE_PREDICT[self_id][key]
     return X, Z
 
-  def fit(self,
-          inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
-          optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
-          learning_rate=1e-4,
-          n_samples=1,
-          semi_percent=0.8,
-          semi_weight=25,
-          corruption_rate=0.25,
-          corruption_dist='binomial',
-          batch_size=64,
-          epochs=2,
-          callbacks=None,
-          validation_split=0.1,
-          validation_freq=1,
-          shuffle=True,
-          verbose=1):
+  def fit(
+      self,
+      inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
+      optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
+      learning_rate=1e-3,
+      clipnorm=100,
+      n_samples=1,
+      semi_percent=0.8,
+      semi_weight=25,
+      corruption_rate=0.25,
+      corruption_dist='binomial',
+      batch_size=64,
+      epochs=2,
+      callbacks=None,
+      validation_split=0.1,
+      validation_freq=1,
+      min_delta=3,  # for early stopping
+      patience=12,  # for early stopping
+      allow_rollback=False, # for early stopping
+      shuffle=True,
+      verbose=1):
     """ This fit function is the combination of both
     `Model.compile` and `Model.fit` """
     # check signature of `call` function
@@ -321,14 +322,22 @@ class SingleCellModel(AdvanceModel):
     assert 0.0 <= semi_percent <= 1.0
     if validation_split <= 0:
       raise ValueError("validation_split must > 0")
+
     # prepare optimizer
     if isinstance(optimizer, string_types):
-      optimizer = tf.optimizers.get(optimizer)
-
-    if isinstance(optimizer, tf.optimizers.Optimizer):
+      config = dict(learning_rate=learning_rate)
+      if clipnorm is not None:
+        config['clipnorm'] = clipnorm
+      optimizer = tf.optimizers.get({'class_name': optimizer, 'config': config})
+    elif isinstance(optimizer, tf.optimizers.Optimizer):
       pass
-    elif issubclass(optimizer, tf.optimizers.Optimizer):
-      optimizer = optimizer(learning_rate=learning_rate)
+    elif isinstance(optimizer, type) and issubclass(optimizer,
+                                                    tf.optimizers.Optimizer):
+      optimizer = optimizer(learning_rate=learning_rate) \
+        if clipnorm is None else \
+        optimizer(learning_rate=learning_rate, clipnorm=clipnorm)
+    else:
+      raise ValueError("No support for optimizer: %s" % str(optimizer))
 
     self._corruption_dist = corruption_dist
     self._corruption_rate = corruption_rate
@@ -401,6 +410,16 @@ class SingleCellModel(AdvanceModel):
     else:
       callbacks = list(callbacks)
       callbacks.append(update_epoch)
+    # add early stopping
+    if patience >= 0:
+      callbacks.append(
+          EarlyStopping(monitor='val_loss',
+                        min_delta=min_delta,
+                        patience=patience,
+                        verbose=0,
+                        mode='min',
+                        baseline=None,
+                        restore_best_weights=bool(allow_rollback)))
     # automatically set inputs as validation set for missing inputs
     # metrical callbacks
     from sisua.analysis.sc_metrics import SingleCellMetric

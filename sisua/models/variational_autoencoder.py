@@ -80,22 +80,14 @@ class VariationalAutoEncoder(SingleCellModel):
       self.xdist = dist
 
     # applying encoding
-    if 'training' in self.encoder._call_fn_args:
-      e = self.encoder(x, training=training)
-    else:
-      e = self.encoder(x)
-
+    e = self.encoder(x, training=training)
     # latent distribution
     qZ = self.latent(e,
                      training=training,
                      n_samples=n_samples,
                      mode=Statistic.DIST)
-
     # decoding the latent
-    if 'training' in self.decoder._call_fn_args:
-      d = self.decoder(qZ.sample(n_samples), training=training)
-    else:
-      d = self.decoder(qZ.sample(n_samples))
+    d = self.decoder(qZ.sample(n_samples), training=training)
 
     # output distribution
     pX = [dist(d, mode=Statistic.DIST) for dist in self.xdist]
@@ -113,7 +105,7 @@ class VariationalAutoEncoder(SingleCellModel):
     loss = tf.reduce_mean(-elbo)
 
     if training:
-      self.add_loss(lambda: loss)
+      self.add_loss(loss)
 
     # NOTE: add_metric should not be in control if-then-else
     self.add_metric(tf.reduce_mean(kl), aggregation='mean', name="KLqp")

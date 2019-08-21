@@ -182,7 +182,6 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         obs = {'rowid': ['Row#%d' % i for i in range(X.shape[0])]}
       if var is None:
         var = {'colid': ['Col#%d' % i for i in range(X.shape[1])]}
-    self._inplace_subset_var
     super(SingleCellOMICS, self).__init__(X=X,
                                           obs=obs,
                                           var=var,
@@ -202,6 +201,14 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     self._indices = np.arange(self.X.shape[0], dtype='int32')
     self._calculate_library_info()
 
+  @property
+  def X(self):
+    with catch_warnings_ignore(FutureWarning):
+      X = super(SingleCellOMICS, self).X
+    if X.ndim == 1:
+      X = np.expand_dims(X, axis=1)
+    return X
+
   def assert_matching_cells(self, sco) -> 'SingleCellOMICS':
     assert isinstance(sco, SingleCellOMICS), \
       "sco must be instance of SingleCellOMICS"
@@ -209,7 +216,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       "Number of cell mismatch %d and %d" % (self.shape[0], sco.shape[0])
     if 'cellid' in sco.obs and 'cellid' in self.obs:
       assert np.all(sco.obs['cellid'] == self.obs['cellid'])
-    else: # just check matching first column
+    else:  # just check matching first column
       assert np.all(sco.obs.iloc[:, 0] == self.obs.iloc[:, 0])
     return self
 

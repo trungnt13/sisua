@@ -3,10 +3,12 @@ from __future__ import absolute_import, division, print_function
 from typing import Type
 
 import tensorflow as tf
-from tensorflow_probability.python.distributions import (MultivariateNormalDiag,
+from tensorflow_probability.python.distributions import (LogNormal,
+                                                         MultivariateNormalDiag,
                                                          Normal)
 
-from odin.bay.distribution_layers import MultivariateNormalLayer, NormalLayer
+from odin.bay.distribution_layers import (LogNormalLayer,
+                                          MultivariateNormalLayer, NormalLayer)
 from odin.networks import DistributionDense
 
 
@@ -37,6 +39,19 @@ class NormalLatent(DistributionDense):
                          name=name)
 
 
+class LogNormalLatent(DistributionDense):
+
+  def __init__(self, units, use_bias=True, name="LatentSpace"):
+    super(LogNormalLatent,
+          self).__init__(units=units,
+                         posterior=LogNormalLayer(event_shape=units,
+                                                  softplus_scale=True),
+                         prior=LogNormal(loc=tf.zeros(shape=units),
+                                         scale=tf.ones(shape=units)),
+                         use_bias=use_bias,
+                         name=name)
+
+
 class MixedNormalLatent(DistributionDense):
   pass
 
@@ -52,7 +67,8 @@ _latent_map = {
     'normal': NormalLatent,
     'diag': NormalDiagLatent,
     'mixed': MixedNormalLatent,
-    'diri': DirichletLatent
+    'diri': DirichletLatent,
+    'lognormal': LogNormalLatent
 }
 
 
