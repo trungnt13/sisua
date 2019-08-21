@@ -259,14 +259,18 @@ class SingleCellModel(AdvanceModel):
       X.append(x)
       Z.append(z)
 
-    merging_axis = 0 if x.batch_shape.ndims == 1 else 1
+    if isinstance(x, (tuple, list)):
+      merging_axis = 0 if x[0].batch_shape.ndims == 1 else 1
+    else:
+      merging_axis = 0 if x.batch_shape.ndims == 1 else 1
     # multiple outputs
     if isinstance(X[0], (tuple, list)):
       X = tuple([
           stack_distributions([x[idx]
-                               for x in X])
-          for idx in range(len(X[0]), axis=merging_axis)
+                               for x in X], axis=merging_axis)
+          for idx in range(len(X[0]))
       ])
+    # single output
     else:
       X = stack_distributions(X, axis=merging_axis)
 
