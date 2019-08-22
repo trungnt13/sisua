@@ -1,17 +1,16 @@
-import os
-import shutil
-import pickle
 import base64
+import os
+import pickle
+import shutil
 import zipfile
 from io import BytesIO
 
 import numpy as np
 
 from odin.fuel import Dataset
-from odin.utils import ctext, get_file, batching, select_path
+from odin.utils import batching, ctext, get_file, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
-
-from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
+from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 # ===========================================================================
@@ -29,14 +28,15 @@ _MD5_FULL = '7481cc9d20adef4d06fdb601d9d99e77'
 _URL_PROTEIN = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0dTRTEwMDg2Nl9QQk1DLnJhd0Nv\ndW50UHJvdGVpbi5jc3Yuemlw\n'
 _MD5_PROTEIN = '7dc5f64c2916d864568f1b739679717e'
 
-_CITEseq_PBMC_PREPROCESSED = select_path(
-    os.path.join(PREPROCESSED_BASE_DIR, 'PBMC_citeseq_preprocessed'),
-    create_new=True)
-_5000_PBMC_PREPROCESSED = select_path(
-    os.path.join(PREPROCESSED_BASE_DIR, 'PBMC_citeseq_5000_preprocessed'),
-    create_new=True)
+_CITEseq_PBMC_PREPROCESSED = select_path(os.path.join(
+    PREPROCESSED_BASE_DIR, 'PBMC_citeseq_preprocessed'),
+                                         create_new=True)
+_5000_PBMC_PREPROCESSED = select_path(os.path.join(
+    PREPROCESSED_BASE_DIR, 'PBMC_citeseq_5000_preprocessed'),
+                                      create_new=True)
 
 _PASSWORD = 'uef-czi'
+
 
 # ===========================================================================
 # Main
@@ -48,8 +48,8 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
   if not os.path.exists(download_path):
     os.mkdir(download_path)
 
-  preprocessed_path = (_5000_PBMC_PREPROCESSED if version_5000genes else
-                       _CITEseq_PBMC_PREPROCESSED)
+  preprocessed_path = (_5000_PBMC_PREPROCESSED
+                       if version_5000genes else _CITEseq_PBMC_PREPROCESSED)
   if override:
     shutil.rmtree(preprocessed_path)
     os.mkdir(preprocessed_path)
@@ -59,8 +59,9 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
     y, y_row, y_col = [], None, None
     # ====== download the data ====== #
     download_files = {}
-    for url, md5 in zip([_URL_5000 if version_5000genes else _URL_FULL, _URL_PROTEIN],
-                        [_MD5_5000 if version_5000genes else _MD5_FULL, _MD5_PROTEIN]):
+    for url, md5 in zip(
+        [_URL_5000 if version_5000genes else _URL_FULL, _URL_PROTEIN],
+        [_MD5_5000 if version_5000genes else _MD5_FULL, _MD5_PROTEIN]):
       url = str(base64.decodebytes(url), 'utf-8')
       base_name = os.path.basename(url)
       get_file(fname=base_name, origin=url, outdir=download_path)
@@ -98,8 +99,7 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
           ctext(np.sum(np.logical_not(human_cols)), 'cyan'))
     X = X[:, human_cols]
     X_col = np.array([i for i in X_col if "HUMAN_" in i])
-    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
-                                       print_log=True)
+    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col, print_log=True)
 
     # ====== protein ====== #
     print("Processing %s ..." % ctext("protein count", 'cyan'))
@@ -111,11 +111,8 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
     "Cell order mismatch between gene count and protein count"
 
     # save data
-    print("Saving data to %s ..." %
-      ctext(preprocessed_path, 'cyan'))
-    save_to_dataset(preprocessed_path,
-                    X, X_col, y, y_col,
-                    rowname=X_row)
+    print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
+    save_to_dataset(preprocessed_path, X, X_col, y, y_col, rowname=X_row)
   # ====== read preprocessed data ====== #
   ds = Dataset(preprocessed_path, read_only=True)
   return ds

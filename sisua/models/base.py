@@ -303,9 +303,9 @@ class SingleCellModel(AdvanceModel):
       callbacks=None,
       validation_split=0.1,
       validation_freq=1,
-      min_delta=3,  # for early stopping
-      patience=12,  # for early stopping
-      allow_rollback=False, # for early stopping
+      min_delta=2,  # for early stopping
+      patience=20,  # for early stopping
+      allow_rollback=False,  # for early stopping
       shuffle=True,
       verbose=1):
     """ This fit function is the combination of both

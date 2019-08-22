@@ -4,6 +4,7 @@ import copy
 import os
 from collections import OrderedDict
 from numbers import Number
+from typing import Tuple
 
 import numpy as np
 
@@ -38,8 +39,10 @@ def get_dataset_meta():
   from sisua.data.data_loader.pbmcecc import read_PBMCeec
   from sisua.data.experimental_data.pbmc_8k_ecc_ly import (
       read_PBMCcross_ecc_8k, read_PBMCcross_remove_protein)
-
+  from sisua.data.data_loader.centenarian import read_centenarian
   data_meta = {
+      "centenarian":
+          read_centenarian,
       # ====== PBMC 10x ====== #
       # TODO: fix error with PBMC-scVAE
       # 'pbmcscvae': read_10xPBMC_PP,
@@ -210,7 +213,8 @@ def get_dataset_summary(return_html=False):
   return df
 
 
-def get_dataset(dataset_name, override=False):
+def get_dataset(dataset_name,
+                override=False) -> Tuple[SingleCellOMICS, SingleCellOMICS]:
   """ Check `get_dataset_meta` for more information
 
   Return

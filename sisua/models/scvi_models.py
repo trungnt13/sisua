@@ -175,7 +175,6 @@ class SCVI(SingleCellModel):
 
     # NOTE: add_metric should not be in control if-then-else
     self.add_metric(tf.reduce_max(L_samples), aggregation='mean', name="Lmax")
-    self.add_metric(tf.reduce_max(px_rate), aggregation='mean', name="Xmax")
     self.add_metric(tf.reduce_mean(kl_z), aggregation='mean', name="KLqpZ")
     self.add_metric(tf.reduce_mean(kl_l), aggregation='mean', name="KLqpL")
     self.add_metric(tf.reduce_mean(-llk_x), aggregation='mean', name="nllk_x")

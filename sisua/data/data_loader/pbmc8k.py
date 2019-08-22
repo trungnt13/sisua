@@ -2,7 +2,6 @@ import os
 import shutil
 import pickle
 import base64
-import zipfile
 from io import BytesIO
 
 import numpy as np
