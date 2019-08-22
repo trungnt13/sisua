@@ -14,7 +14,8 @@ import numpy as np
 import tensorflow as tf
 from six import add_metaclass, string_types
 from tensorflow.python.keras.callbacks import (Callback, CallbackList,
-                                               EarlyStopping, LambdaCallback)
+                                               EarlyStopping, LambdaCallback,
+                                               ModelCheckpoint, TerminateOnNaN)
 from tensorflow.python.keras.engine import base_layer_utils
 from tensorflow.python.keras.layers import Layer
 from tensorflow.python.platform import tf_logging as logging
@@ -106,6 +107,7 @@ class SingleCellModel(AdvanceModel):
                kl_analytic=True,
                kl_weight=1.,
                kl_warmup=200,
+               log_norm=True,
                seed=8,
                name=None):
     if name is None:
@@ -124,6 +126,11 @@ class SingleCellModel(AdvanceModel):
     self._is_fitting = False
     self._corruption_rate = None
     self._corruption_dist = None
+    self._log_norm = bool(log_norm)
+
+  @property
+  def log_norm(self):
+    return self._log_norm
 
   @property
   def epoch_history(self):
@@ -135,10 +142,6 @@ class SingleCellModel(AdvanceModel):
 
   @abstractproperty
   def is_semi_supervised(self):
-    raise NotImplementedError
-
-  @abstractmethod
-  def _call(self, x, y, masks, training=None, n_samples=None):
     raise NotImplementedError
 
   @property
@@ -175,6 +178,19 @@ class SingleCellModel(AdvanceModel):
   def parameters(self):
     return self._parameters
 
+  @abstractmethod
+  def _call(self, x, t, y, masks, training=None, n_samples=None):
+    """
+    x : input gene-expression matrix (multiple inputs can be given)
+    t : target for reconstruction of gene-expression matrix (can be different
+        from `x`)
+    y : input for semi-supervised learning
+    masks : binary mask for semi-supervised training
+    training : flag mark training progress
+    n_samples : number of MCMC samples
+    """
+    raise NotImplementedError
+
   def call(self, inputs, training=None, n_samples=None):
     # check arguments
     if n_samples is None:
@@ -186,7 +202,19 @@ class SingleCellModel(AdvanceModel):
       x = inputs
       y = []
       masks = []
-    return self._call(x, y, masks, training, n_samples)
+    # check log normalization
+    if isinstance(x, tuple):
+      x = list(x)
+    if isinstance(x, list):
+      t = x[0]
+      if self.log_norm:
+        x[0] = tf.math.log1p(x[0])
+    else:
+      t = x
+      if self.log_norm:
+        x = tf.math.log1p(x)
+    # return the subclass results
+    return self._call(x, t, y, masks, training, n_samples)
 
   def evaluate(self, inputs, n_samples=1, batch_size=128, verbose=1):
     raise Exception(
@@ -274,8 +302,8 @@ class SingleCellModel(AdvanceModel):
     if isinstance(Z[0], (tuple, list)):
       Z = tuple([
           stack_distributions([z[idx]
-                               for z in Z])
-          for idx in range(len(Z[0]), axis=0)
+                               for z in Z], axis=0)
+          for idx in range(len(Z[0]))
       ])
     else:
       Z = stack_distributions(Z, axis=0)
@@ -303,10 +331,11 @@ class SingleCellModel(AdvanceModel):
       callbacks=None,
       validation_split=0.1,
       validation_freq=1,
-      min_delta=2,  # for early stopping
+      min_delta=3,  # for early stopping
       patience=20,  # for early stopping
       allow_rollback=False,  # for early stopping
       shuffle=True,
+      checkpoint=None,
       verbose=1):
     """ This fit function is the combination of both
     `Model.compile` and `Model.fit` """
@@ -420,6 +449,16 @@ class SingleCellModel(AdvanceModel):
                         mode='min',
                         baseline=None,
                         restore_best_weights=bool(allow_rollback)))
+    # add termination on NaN
+    callbacks.append(TerminateOnNaN())
+    # checkpoint
+    if checkpoint is not None:
+      callbacks.append(
+          ModelCheckpoint(filepath=str(checkpoint),
+                          monitor='val_loss',
+                          verbose=1,
+                          save_best_only=True,
+                          mode='min'))
     # automatically set inputs as validation set for missing inputs
     # metrical callbacks
     from sisua.analysis.sc_metrics import SingleCellMetric
@@ -484,13 +523,13 @@ class SingleCellModel(AdvanceModel):
       cls,
       inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
       params: dict = {
-          'nlayers': scope.int(hp.quniform('nlayers', 1, 4, 1)),
-          'hdim': scope.int(hp.quniform('hdim', 32, 512, 1)),
-          'zdim': scope.int(hp.quniform('zdim', 32, 512, 1)),
+          'nlayers': scope.int(hp.choice('nlayers', [1, 2, 3, 4])),
+          'hdim': scope.int(hp.choice('hdim', [32, 64, 128, 256, 512])),
+          'zdim': scope.int(hp.choice('zdim', [32, 64, 128, 256, 512])),
       },
       loss_name: Text = 'val_loss',
       max_evals: int = 100,
-      kwargs: dict = {},
+      model_kwargs: dict = {},
       fit_kwargs: dict = {
           'epochs': 64,
           'batch_size': 128
@@ -498,11 +537,12 @@ class SingleCellModel(AdvanceModel):
       algorithm: Text = 'bayes',
       seed: int = 8,
       save_path: Text = '/tmp/{model:s}_{data:s}_{loss:s}_{params:s}.hp',
-      override: bool = True):
+      override: bool = True,
+      verbose: bool = False):
     """ Hyper-parameters optimization for given SingleCellModel
     Parameters
     ----------
-    kwargs : `dict`
+    model_kwargs : `dict`
       keyword arguments for model construction
     fit_kwargs : `dict`
       keyword arguments for `fit` method
@@ -510,8 +550,8 @@ class SingleCellModel(AdvanceModel):
     Example
     -------
     >>> callbacks = [
-    >>>     # NegativeLogLikelihood(),
-    >>>     # ImputationError(),
+    >>>     NegativeLogLikelihood(),
+    >>>     ImputationError(),
     >>>     CorrelationScores(extras=y_train)
     >>> ]
     >>> i, j = DeepCountAutoencoder.fit_hyper(x_train,
@@ -558,9 +598,22 @@ class SingleCellModel(AdvanceModel):
     if os.path.exists(save_path) and not override:
       raise RuntimeError("Cannot override path: %s" % save_path)
 
+    # ====== verbose mode ====== #
+    if verbose:
+      print(" ======== Tunning: %s ======== " % cls.__name__)
+      print("Save path:", save_path)
+      print("Model config:", model_kwargs)
+      print("Fit config  :", fit_kwargs)
+      print("Loss name   :", loss_name)
+      print("Algorithm   :", algorithm)
+      print("Max evals   :", max_evals)
+      print("Search space:")
+      for i, j in params.items():
+        print("  ", i, j)
+
     def fit_and_evaluate(*args):
       kw = args[0]
-      kw.update(kwargs)
+      kw.update(model_kwargs)
       obj = cls(**kw)
       obj.fit(inputs, **fit_kwargs)
       history = obj.history.history
@@ -573,24 +626,34 @@ class SingleCellModel(AdvanceModel):
           'status': STATUS_OK,
       }
 
-    trials = Trials()
-    results = fmin(fit_and_evaluate,
-                   space=params,
-                   algo=tpe_suggest if algorithm == 'bayes' else rand_suggest,
-                   max_evals=int(max_evals),
-                   trials=trials,
-                   rstate=np.random.RandomState(seed))
-    history = []
-    for t in trials:
-      r = t['result']
-      if r['status'] == STATUS_OK:
-        history.append({
-            'loss': r['loss'],
-            'loss_variance': r['loss_variance'],
-            'params': {i: j[0] for i, j in t['misc']['vals'].items()},
-            'history': r['history']
-        })
-    with open(save_path, 'wb') as f:
-      print("Saving hyperopt results to: %s" % save_path)
-      dill.dump((results, history), f)
+    def hyperopt_run():
+      trials = Trials()
+      results = fmin(fit_and_evaluate,
+                     space=params,
+                     algo=tpe_suggest if algorithm == 'bayes' else rand_suggest,
+                     max_evals=int(max_evals),
+                     trials=trials,
+                     rstate=np.random.RandomState(seed),
+                     verbose=verbose)
+      history = []
+      for t in trials:
+        r = t['result']
+        if r['status'] == STATUS_OK:
+          history.append({
+              'loss': r['loss'],
+              'loss_variance': r['loss_variance'],
+              'params': {i: j[0] for i, j in t['misc']['vals'].items()},
+              'history': r['history']
+          })
+      with open(save_path, 'wb') as f:
+        print("Saving hyperopt results to: %s" % save_path)
+        dill.dump((results, history), f)
+
+    p = mpi.Process(target=hyperopt_run)
+    p.start()
+    p.join()
+    with open(save_path, 'rb') as f:
+      results, history = dill.load(f)
+    if verbose:
+      print("Best:", results)
     return results, history

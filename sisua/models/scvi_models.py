@@ -42,7 +42,7 @@ class SCVI(SingleCellModel):
                hdim=128,
                zdim=32,
                nlayers=2,
-               clip_library=10,
+               clip_library=12,
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
@@ -118,7 +118,7 @@ class SCVI(SingleCellModel):
                                   initializer=tf.initializers.RandomNormal,
                                   trainable=True)
 
-  def _call(self, x, y, masks, training, n_samples):
+  def _call(self, x, t, y, masks, training, n_samples):
     if isinstance(x, (tuple, list)):
       x, local_mean, local_var = x
     else:
@@ -135,7 +135,7 @@ class SCVI(SingleCellModel):
     qZ = self.latent(e_z, mode=Statistic.DIST)
     qL = self.library(e_l, mode=Statistic.DIST)
     Z_samples = qZ.sample(n_samples)
-    # clipping L value to avoid overflow, exp(10) = 22000
+    # clipping L value to avoid overflow, exp(12) = ~160000
     L_samples = qL.sample(n_samples)
     L_samples = tf.clip_by_value(L_samples, 0, self.clip_library)
 
@@ -159,7 +159,7 @@ class SCVI(SingleCellModel):
     else:
       pX = pX((px_rate, px_r, px_dropout))
 
-    llk_x = tf.expand_dims(pX.log_prob(x), -1)
+    llk_x = tf.expand_dims(pX.log_prob(t), -1)
     kl_z = self.latent.kl_divergence(analytic_kl=self.kl_analytic,
                                      n_samples=n_samples)
     kl_l = self.library.kl_divergence(analytic_kl=self.kl_analytic,

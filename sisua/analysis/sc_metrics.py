@@ -199,7 +199,9 @@ class SingleCellMetric(Callback):
 # Losses
 # ===========================================================================
 class NegativeLogLikelihood(SingleCellMetric):
-  """ Log likelihood metric """
+  """ Log likelihood metric
+  Return 'nllk%d' for each tuple of input and output
+  """
 
   def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
            y_pred: List[Distribution], latents: List[Distribution], extras):
@@ -234,6 +236,10 @@ class ImputationError(SingleCellMetric):
 
 class CorrelationScores(SingleCellMetric):
   """ Return (1-correlation_coefficients) to represent the loss
+    'pearson_mean': np.mean(pearson),
+    'spearman_mean': np.mean(spearman),
+    'pearson_med': np.median(pearson),
+    'spearman_med': np.median(spearman),
   """
 
   def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],

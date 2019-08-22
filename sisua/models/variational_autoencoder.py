@@ -62,7 +62,7 @@ class VariationalAutoEncoder(SingleCellModel):
   def is_semi_supervised(self):
     return len(self.xdist) > 1
 
-  def _call(self, x, y, masks, training, n_samples):
+  def _call(self, x, t, y, masks, training, n_samples):
     # initializing the output layers
     if not isinstance(self.xdist[0], Layer):
       dist = []
@@ -95,7 +95,7 @@ class VariationalAutoEncoder(SingleCellModel):
     # calculating the losses
     kl = self.latent.kl_divergence(analytic_kl=self.kl_analytic,
                                    n_samples=n_samples)
-    llk_x = tf.expand_dims(pX[0].log_prob(x), -1)
+    llk_x = tf.expand_dims(pX[0].log_prob(t), -1)
     llk_y = 0
     for i, m, dist in zip(y, masks, pX[1:]):
       llk_y += tf.expand_dims(dist.log_prob(i), -1) * m

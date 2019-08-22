@@ -113,7 +113,7 @@ class DeepCountAutoencoder(SingleCellModel):
   def is_semi_supervised(self):
     return len(self.loss_info) > 1
 
-  def _call(self, x, y, masks, training, n_samples):
+  def _call(self, x, t, y, masks, training, n_samples):
     e = self.encoder(x, training=training)
     z = self.latent_layer(e)
     d = self.decoder(z, training=training)
@@ -133,7 +133,7 @@ class DeepCountAutoencoder(SingleCellModel):
     # self.add_loss(lambda: loss.read(0))
 
     # calculating the losses
-    loss_x = self.loss_info[0][0](x, pred[0])
+    loss_x = self.loss_info[0][0](t, pred[0])
     # don't forget to apply mask for semi-supervised loss
     loss_y = 0
     for (fn, _, _), i_true, i_pred, m in zip(self.loss_info[1:], y, pred[1:],
