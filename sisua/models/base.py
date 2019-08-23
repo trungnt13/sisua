@@ -566,6 +566,10 @@ class SingleCellModel(AdvanceModel):
     >>>                                       max_evals=100,
     >>>                                       seed=8)
     """
+    if isinstance(loss_name, string_types):
+      loss_name = [loss_name]
+    loss_name = [str(i) for i in loss_name]
+
     algorithm = str(algorithm.lower())
     assert algorithm in ('rand', 'grid', 'bayes'), \
       "Only support 3 algorithm: rand, grid and bayes; given %s" % algorithm
@@ -617,13 +621,27 @@ class SingleCellModel(AdvanceModel):
       obj = cls(**kw)
       obj.fit(inputs, **fit_kwargs)
       history = obj.history.history
-      loss = history[loss_name]
-      # first epoch doesn't count
+      all_loss = [history[name] for name in loss_name]
+      # get mean and status
+      loss = 0
+      loss_variance = 0
+      is_nan = False
+      for l in all_loss:
+        if np.any(np.isnan(l)):
+          is_nan = True
+          loss = np.inf
+          loss_variance = np.inf
+          break
+        else:  # first epoch doesn't count
+          loss += np.mean(l[1:])
+          loss_variance += np.var(l[1:])
+      loss = loss / len(all_loss)
+      loss_variance = loss_variance / len(all_loss)
       return {
-          'loss': np.mean(loss[1:]),
-          'loss_variance': np.var(loss[1:]),
-          'history': obj.history.history,
-          'status': STATUS_OK,
+          'loss': loss,
+          'loss_variance': loss_variance,
+          'history': history,
+          'status': STATUS_FAIL if is_nan else STATUS_OK,
       }
 
     def hyperopt_run():
@@ -638,13 +656,13 @@ class SingleCellModel(AdvanceModel):
       history = []
       for t in trials:
         r = t['result']
-        if r['status'] == STATUS_OK:
-          history.append({
-              'loss': r['loss'],
-              'loss_variance': r['loss_variance'],
-              'params': {i: j[0] for i, j in t['misc']['vals'].items()},
-              'history': r['history']
-          })
+        history.append({
+            'loss': r['loss'],
+            'loss_variance': r['loss_variance'],
+            'params': {i: j[0] for i, j in t['misc']['vals'].items()},
+            'history': r['history'],
+            'status': r['status'],
+        })
       with open(save_path, 'wb') as f:
         print("Saving hyperopt results to: %s" % save_path)
         dill.dump((results, history), f)
@@ -652,8 +670,13 @@ class SingleCellModel(AdvanceModel):
     p = mpi.Process(target=hyperopt_run)
     p.start()
     p.join()
-    with open(save_path, 'rb') as f:
-      results, history = dill.load(f)
+
+    try:
+      with open(save_path, 'rb') as f:
+        results, history = dill.load(f)
+    except FileNotFoundError:
+      results, history = {}, {}
+
     if verbose:
       print("Best:", results)
     return results, history
