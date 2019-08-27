@@ -6,7 +6,7 @@ from itertools import product
 import numpy as np
 from odin.utils import ctext, catch_warnings_ignore
 
-from sisua.data import get_dataset, SingleCellOMICS
+from sisua.data import get_dataset, SingleCellOMIC
 from sisua.data.utils import standardize_protein_name
 
 # ===========================================================================
@@ -104,7 +104,7 @@ def train_and_evaluate(model_name, train_ds):
     # preserve the same order of all_proteins
     y_true = np.hstack([y_true[i][:, np.newaxis]
                         for i in all_proteins])
-    prot = SingleCellOMICS(matrix=y_true,
+    prot = SingleCellOMIC(matrix=y_true,
                            rowname=ds['X_row'], colname=all_proteins)
 
     # create a mixed Posterior

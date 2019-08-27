@@ -23,7 +23,7 @@ from sisua.analysis.latent_benchmarks import (plot_distance_heatmap,
 from sisua.analysis.sc_metrics import (SingleCellMetric,
                                        _preprocess_output_distribution,
                                        _to_binary)
-from sisua.data import SingleCellOMICS
+from sisua.data import SingleCellOMIC
 from sisua.data.utils import standardize_protein_name
 from sisua.models import SingleCellModel
 from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
@@ -46,7 +46,7 @@ class SingleCellMonitor(SingleCellMetric, Visualizer):
   def path(self):
     return self._path
 
-  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def call(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], extras):
     self.plot(y_true, y_crpt, y_pred, latents, self.model.history.history,
               extras)
@@ -59,16 +59,18 @@ class SingleCellMonitor(SingleCellMetric, Visualizer):
                         clear_figures=True)
 
   @abstractmethod
-  def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def plot(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], history,
            extras):
     raise NotImplementedError
 
 
 class LearningCurves(SingleCellMonitor):
-  """ Additional key in the loss dictionary could be given by `extras` """
+  """ Additional key in the loss dictionary could be given by `extras`,
+  otherwise, plotting 'loss' and 'val_loss' by default.
+  """
 
-  def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def plot(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], history,
            extras):
     if extras is None:
@@ -111,8 +113,8 @@ class ScatterPlot(SingleCellMonitor):
   def _preprocess(self, y_true, y_pred, latents, extras):
     y_true = y_true[0]
     y_pred = [_preprocess_output_distribution(i) for i in y_pred]
-    assert isinstance(extras, SingleCellOMICS), \
-      "protein data must be provided as extras in form of SingleCellOMICS"
+    assert isinstance(extras, SingleCellOMIC), \
+      "protein data must be provided as extras in form of SingleCellOMIC"
     protein = extras[y_true.indices]
     y_true.assert_matching_cells(protein)
     labels = _to_binary(protein)
@@ -126,7 +128,7 @@ class ScatterPlot(SingleCellMonitor):
       raise NotImplementedError()
     return y_true, data, labels, labels_name
 
-  def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def plot(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], history,
            extras):
     y_true, data, labels, labels_name = self._preprocess(
@@ -156,7 +158,7 @@ class ScatterPlot(SingleCellMonitor):
 
 class HeatmapPlot(ScatterPlot):
 
-  def plot(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def plot(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], history,
            extras):
     y_true, data, labels, labels_name = self._preprocess(

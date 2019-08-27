@@ -12,7 +12,7 @@ from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import cache_memory, ctext, one_hot
 from sisua.data import normalization_recipes
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
-from sisua.data.single_cell_dataset import (SingleCellOMICS,
+from sisua.data.single_cell_dataset import (SingleCellOMIC,
                                             apply_artificial_corruption,
                                             get_library_size)
 from sisua.data.utils import (get_gene_id2name, standardize_protein_name,
@@ -214,7 +214,7 @@ def get_dataset_summary(return_html=False):
 
 
 def get_dataset(dataset_name,
-                override=False) -> Tuple[SingleCellOMICS, SingleCellOMICS]:
+                override=False) -> Tuple[SingleCellOMIC, SingleCellOMIC]:
   """ Check `get_dataset_meta` for more information
 
   Return
@@ -231,11 +231,11 @@ def get_dataset(dataset_name,
   ds = data_meta[dataset_name](override=override)
   validating_dataset(ds)
   # ******************** return ******************** #
-  x = SingleCellOMICS(X=ds['X'],
+  x = SingleCellOMIC(X=ds['X'],
                       obs={'cellid': ds['X_row']},
                       var={'geneid': ds['X_col']},
                       name=dataset_name)
-  y = SingleCellOMICS(X=ds['y'],
+  y = SingleCellOMIC(X=ds['y'],
                       obs={'cellid': ds['X_row']},
                       var={'protid': ds['y_col']},
                       name=dataset_name)

@@ -38,7 +38,7 @@ import sisua
 from sisua import is_verbose
 from sisua.data import get_library_size, apply_artificial_corruption
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
-from sisua.data import get_dataset, SingleCellOMICS
+from sisua.data import get_dataset, SingleCellOMIC
 from sisua.utils import LearningCurves, plot_monitoring_epoch
 from sisua.label_threshold import ProbabilisticEmbedding
 

@@ -23,9 +23,9 @@ from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
 from odin.bay.distributions import stack_distributions
-from odin.networks import AdvanceModel, DeterministicDense, DistributionDense
+from odin.networks import AdvanceModel, DenseDeterministic, DistributionDense
 from odin.utils import cache_memory, classproperty
-from sisua.data import SingleCellOMICS
+from sisua.data import SingleCellOMIC
 from sisua.models import latents as sisua_latents
 from sisua.models import networks as sisua_networks
 
@@ -43,12 +43,12 @@ except ImportError as e:
 # Helper
 # ===========================================================================
 def _to_sc_omics(x):
-  if isinstance(x, SingleCellOMICS):
+  if isinstance(x, SingleCellOMIC):
     return x
-  return SingleCellOMICS(x)
+  return SingleCellOMIC(x)
 
 
-def _to_tfdata(sco: SingleCellOMICS, mask: Union[np.ndarray, None],
+def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
                is_semi_supervised, batch_size, shuffle, epochs):
   all_data = [i.X for i in sco]
   if is_semi_supervised and mask is not None:
@@ -97,6 +97,19 @@ _MAXIMUM_CACHE_SIZE = 2
 class SingleCellModel(AdvanceModel):
   """
 
+  I/O
+  ---
+  >>> import dill
+  >>> c, w = model.get_config(), model.get_weights()
+  >>> with open('/tmp/model', 'wb') as f:
+  >>>   dill.dump((c, w), f)
+  ...
+  >>> with open('/tmp/model', 'rb') as f:
+  >>>   (c, w) = dill.load(f)
+  >>> model = SingleCellModel.from_config(c)
+  >>> model.set_weights(w)
+
+
   Note
   ----
   It is recommend to call `tensorflow.random.set_seed` for reproducible results
@@ -114,18 +127,20 @@ class SingleCellModel(AdvanceModel):
       name = self.__class__.__name__
     parameters.update(locals())
     super(SingleCellModel, self).__init__(parameters=parameters, name=name)
-    self._epochs = tf.Variable(0,
-                               trainable=False,
-                               dtype='float32',
-                               name="epoch")
+    self._epochs = self.add_weight(
+        name='epochs',
+        shape=(),
+        initializer=tf.initializers.Constant(value=0.),
+        trainable=False,
+        dtype='float32')
     # parameters for ELBO
     self._kl_analytic = bool(kl_analytic)
     self._kl_weight = tf.convert_to_tensor(kl_weight, dtype='float32')
     self._kl_warmup = tf.convert_to_tensor(kl_warmup, dtype='float32')
     self._seed = int(seed)
     self._is_fitting = False
-    self._corruption_rate = None
-    self._corruption_dist = None
+    self._corruption_rate = 0
+    self._corruption_dist = 'binomial'
     self._log_norm = bool(log_norm)
 
   @property
@@ -317,7 +332,7 @@ class SingleCellModel(AdvanceModel):
 
   def fit(
       self,
-      inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
+      inputs: Union[SingleCellOMIC, Iterable[SingleCellOMIC]],
       optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
       learning_rate=1e-3,
       clipnorm=100,
@@ -331,11 +346,11 @@ class SingleCellModel(AdvanceModel):
       callbacks=None,
       validation_split=0.1,
       validation_freq=1,
-      min_delta=3,  # for early stopping
-      patience=20,  # for early stopping
-      allow_rollback=False,  # for early stopping
-      shuffle=True,
+      min_delta=0.5,  # for early stopping
+      patience=25,  # for early stopping
+      allow_rollback=True,  # for early stopping
       checkpoint=None,
+      shuffle=True,
       verbose=1):
     """ This fit function is the combination of both
     `Model.compile` and `Model.fit` """
@@ -352,24 +367,10 @@ class SingleCellModel(AdvanceModel):
     if validation_split <= 0:
       raise ValueError("validation_split must > 0")
 
-    # prepare optimizer
-    if isinstance(optimizer, string_types):
-      config = dict(learning_rate=learning_rate)
-      if clipnorm is not None:
-        config['clipnorm'] = clipnorm
-      optimizer = tf.optimizers.get({'class_name': optimizer, 'config': config})
-    elif isinstance(optimizer, tf.optimizers.Optimizer):
-      pass
-    elif isinstance(optimizer, type) and issubclass(optimizer,
-                                                    tf.optimizers.Optimizer):
-      optimizer = optimizer(learning_rate=learning_rate) \
-        if clipnorm is None else \
-        optimizer(learning_rate=learning_rate, clipnorm=clipnorm)
-    else:
-      raise ValueError("No support for optimizer: %s" % str(optimizer))
-
+    # store the corruption rate for later use
     self._corruption_dist = corruption_dist
     self._corruption_rate = corruption_rate
+
     # prepare input data
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
@@ -404,26 +405,7 @@ class SingleCellModel(AdvanceModel):
     steps_per_epoch = int(np.ceil(train[0].shape[0] / batch_size))
     validation_steps = int(np.ceil(valid[0].shape[0] / batch_size))
 
-    # create tensorflow dataset, a bit ugly with many if-then-else
-    # but it works!
-    # def to_tfdata(sco, mask):
-    #   all_data = [i.X for i in sco]
-    #   if self.is_semi_supervised:
-    #     all_data += [mask]
-    #   # NOTE: from_tensor_slices accept tuple but not list
-    #   ds = tf.data.Dataset.from_tensor_slices(all_data[0] if len(all_data) ==
-    #                                           1 else tuple(all_data))
-    #   if shuffle:
-    #     ds = ds.shuffle(1000)
-    #   ds = ds.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-    #   ds = ds.repeat(epochs)
-    #   # just return a tuple with 1 element to trick keras
-    #   if len(all_data) == 1:
-    #     ds = ds.map(lambda arg: (arg,))
-    #   else:
-    #     ds = ds.map(lambda *args: (args,))
-    #   return ds
-
+    # convert to tensorflow Dataset
     train_data = _to_tfdata(train, train_mask, self.is_semi_supervised,
                             batch_size, shuffle, epochs)
     valid_data = _to_tfdata(valid, valid_mask, self.is_semi_supervised,
@@ -445,7 +427,7 @@ class SingleCellModel(AdvanceModel):
           EarlyStopping(monitor='val_loss',
                         min_delta=min_delta,
                         patience=patience,
-                        verbose=0,
+                        verbose=verbose,
                         mode='min',
                         baseline=None,
                         restore_best_weights=bool(allow_rollback)))
@@ -456,8 +438,11 @@ class SingleCellModel(AdvanceModel):
       callbacks.append(
           ModelCheckpoint(filepath=str(checkpoint),
                           monitor='val_loss',
-                          verbose=1,
+                          verbose=verbose,
+                          save_weights_only=True,
+                          save_freq='epoch',
                           save_best_only=True,
+                          load_weights_on_restart=False,
                           mode='min'))
     # automatically set inputs as validation set for missing inputs
     # metrical callbacks
@@ -481,11 +466,31 @@ class SingleCellModel(AdvanceModel):
       self.call = partial(self.call, n_samples=n_samples)
     self._is_fitting = True
 
-    # compile and fit
+    # prepare the logging
     curr_log = logging.get_verbosity()
     logging.set_verbosity(logging.ERROR)
-    if not self._is_compiled:
+    # compiling and setting the optimizer
+    if not self._is_compiled and self.optimizer is None:
+      # prepare optimizer
+      if isinstance(optimizer, string_types):
+        config = dict(learning_rate=learning_rate)
+        if clipnorm is not None:
+          config['clipnorm'] = clipnorm
+        optimizer = tf.optimizers.get({
+            'class_name': optimizer,
+            'config': config
+        })
+      elif isinstance(optimizer, tf.optimizers.Optimizer):
+        pass
+      elif isinstance(optimizer, type) and issubclass(optimizer,
+                                                      tf.optimizers.Optimizer):
+        optimizer = optimizer(learning_rate=learning_rate) \
+          if clipnorm is None else \
+          optimizer(learning_rate=learning_rate, clipnorm=clipnorm)
+      else:
+        raise ValueError("No support for optimizer: %s" % str(optimizer))
       super(SingleCellModel, self).compile(optimizer)
+    # fitting
     super(SingleCellModel, self).fit(x=train_data,
                                      validation_data=valid_data,
                                      validation_freq=validation_freq,
@@ -493,7 +498,7 @@ class SingleCellModel(AdvanceModel):
                                      initial_epoch=self.epochs,
                                      steps_per_epoch=steps_per_epoch,
                                      validation_steps=validation_steps,
-                                     epochs=epochs,
+                                     epochs=self.epochs + epochs,
                                      verbose=verbose)
     logging.set_verbosity(curr_log)
 
@@ -506,7 +511,7 @@ class SingleCellModel(AdvanceModel):
 
   def __str__(self):
     return "<[%s]%s fitted:%s epoch:%s semi:%s>" % (
-        self.__class__.__name__, self.name, self._is_compiled, self.epochs,
+        self.__class__.__name__, self.name, self.epochs > 0, self.epochs,
         self.is_semi_supervised)
 
   @classproperty
@@ -521,7 +526,7 @@ class SingleCellModel(AdvanceModel):
   @classmethod
   def fit_hyper(
       cls,
-      inputs: Union[SingleCellOMICS, Iterable[SingleCellOMICS]],
+      inputs: Union[SingleCellOMIC, Iterable[SingleCellOMIC]],
       params: dict = {
           'nlayers': scope.int(hp.choice('nlayers', [1, 2, 3, 4])),
           'hdim': scope.int(hp.choice('hdim', [32, 64, 128, 256, 512])),

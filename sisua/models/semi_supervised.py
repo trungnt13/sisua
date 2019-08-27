@@ -20,7 +20,7 @@ class MultitaskAutoEncoder(DeepCountAutoencoder):
 
   def __init__(self,
                dispersion='full',
-               loss=['zinb', 'nb'],
+               xdist=['zinb', 'nb'],
                xdrop=0.3,
                edrop=0,
                zdrop=0,

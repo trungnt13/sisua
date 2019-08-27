@@ -47,7 +47,7 @@ prot_ds.plot_percentile_histogram(n_hist=8, title="Protein")
 vs.plot_save(SAVE_DATA_FIGURE_PATH)
 
 # ====== get train and test data ====== #
-# the SingleCellOMICS will ensure data splitting is
+# the SingleCellOMIC will ensure data splitting is
 # consistent every time running the experiment
 X_train = gene_ds.get_data(data_type='train')
 y_train = prot_ds.get_data(data_type='train')

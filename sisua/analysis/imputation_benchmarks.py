@@ -106,7 +106,7 @@ def imputation_score(original, imputed):
   assert original.shape == imputed.shape
   nonzeros = np.nonzero(original)
   d = np.abs(original - imputed)  # [nonzeros]
-  return np.median(d)
+  return float(np.median(d))
 
 
 def imputation_mean_score(original, corrupted, imputed):

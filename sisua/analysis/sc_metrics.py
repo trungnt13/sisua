@@ -19,7 +19,7 @@ from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_score,
                                                   imputation_std_score)
 from sisua.analysis.latent_benchmarks import clustering_scores
-from sisua.data import SingleCellOMICS
+from sisua.data import SingleCellOMIC
 from sisua.models import SingleCellModel
 from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
 
@@ -77,7 +77,7 @@ class SingleCellMetric(Callback):
   """
 
   def __init__(self,
-               inputs: Union[SingleCellOMICS, List[SingleCellOMICS], np.
+               inputs: Union[SingleCellOMIC, List[SingleCellOMIC], np.
                              ndarray, List[np.ndarray], None] = None,
                extras=None,
                n_samples=1,
@@ -107,7 +107,7 @@ class SingleCellMetric(Callback):
     return self
 
   @abstractmethod
-  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def call(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], extras):
     raise NotImplementedError
 
@@ -200,10 +200,13 @@ class SingleCellMetric(Callback):
 # ===========================================================================
 class NegativeLogLikelihood(SingleCellMetric):
   """ Log likelihood metric
-  Return 'nllk%d' for each tuple of input and output
+  Returns
+  -------
+  dict:
+    'nllk%d' for each tuple of input and output
   """
 
-  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def call(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], extras):
     nllk = {}
     for idx, (t, p) in enumerate(zip(y_true, y_pred)):
@@ -212,8 +215,15 @@ class NegativeLogLikelihood(SingleCellMetric):
 
 
 class ImputationError(SingleCellMetric):
+  """
+  Return
+  ------
+  dict :
+    'imp_med'
+    'imp_mean'
+  """
 
-  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def call(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], extras):
     # only care about the first data input
     y_true = y_true[0]
@@ -235,20 +245,28 @@ class ImputationError(SingleCellMetric):
 
 
 class CorrelationScores(SingleCellMetric):
-  """ Return (1-correlation_coefficients) to represent the loss
+  """ (1 - correlation_coefficients) to represent the loss
+  Returns
+  -------
+  dict :
     'pearson_mean': np.mean(pearson),
     'spearman_mean': np.mean(spearman),
     'pearson_med': np.median(pearson),
     'spearman_med': np.median(spearman),
+
+  Example
+  -------
+  >>> CorrelationScores(extras=y_train, freq=1)
+
   """
 
-  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  def call(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], extras):
     y_true = y_true[0]
     y_crpt = y_crpt[0]
     y_pred = y_pred[0]
-    assert isinstance(extras, SingleCellOMICS), \
-      "protein data must be provided as extras in form of SingleCellOMICS"
+    assert isinstance(extras, SingleCellOMIC), \
+      "protein data must be provided as extras in form of SingleCellOMIC"
     protein = extras[y_true.indices]
     y_true.assert_matching_cells(protein)
 
@@ -278,14 +296,27 @@ class CorrelationScores(SingleCellMetric):
 
 
 class ClusteringScores(SingleCellMetric):
+  """
+  Returns
+  -------
+  dict :
+    silhouette_score (higher is better, best is 1, worst is -1)
+    adjusted_rand_score (higher is better)
+    normalized_mutual_info_score (higher is better)
+    unsupervised_clustering_accuracy (higher is better)
 
-  def call(self, y_true: List[SingleCellOMICS], y_crpt: List[SingleCellOMICS],
+  Example
+  -------
+  >>> ClusteringScores(extras=y_train, freq=1)
+  """
+
+  def call(self, y_true: List[SingleCellOMIC], y_crpt: List[SingleCellOMIC],
            y_pred: List[Distribution], latents: List[Distribution], extras):
     y_true = y_true[0]
     y_crpt = y_crpt[0]
     y_pred = y_pred[0]
-    assert isinstance(extras, SingleCellOMICS), \
-      "protein data must be provided as extras in form of SingleCellOMICS"
+    assert isinstance(extras, SingleCellOMIC), \
+      "protein data must be provided as extras in form of SingleCellOMIC"
     protein = extras[y_true.indices]
     y_true.assert_matching_cells(protein)
     labels = _to_binary(protein)

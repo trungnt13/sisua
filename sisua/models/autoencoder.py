@@ -11,13 +11,13 @@ from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
                                           ZINegativeBinomialLayer,
                                           ZIPoissonLayer)
 from odin.bay.helpers import Statistic
-from odin.networks import (DeterministicDense, DistributionDense, Identity,
+from odin.networks import (DenseDeterministic, DistributionDense, Identity,
                            Parallel)
 from sisua.models.base import SingleCellModel
 from sisua.models.networks import DenseNetwork
 
 
-def _get_loss(loss, dispersion=None):
+def _get_loss_or_distribution(loss, dispersion=None):
   loss = str(loss).lower()
   is_probabilistic_loss = True
   # ====== Poisson ====== #
@@ -52,7 +52,7 @@ def _get_loss(loss, dispersion=None):
   # ====== deterministic loss function ====== #
   else:
     is_probabilistic_loss = False
-    output_layer = lambda units: DeterministicDense(units, activation='relu')
+    output_layer = lambda units: DenseDeterministic(units, activation='relu')
     loss_fn = tf.losses.get(str(loss))
   # post-processing the loss function to be more universal
   if is_probabilistic_loss:
@@ -67,7 +67,7 @@ class DeepCountAutoencoder(SingleCellModel):
 
   def __init__(self,
                dispersion='full',
-               loss='zinb',
+               xdist='zinb',
                xdrop=0.3,
                edrop=0,
                zdrop=0,
@@ -99,19 +99,21 @@ class DeepCountAutoencoder(SingleCellModel):
                                   output_dropout=ddrop,
                                   seed=self.seed,
                                   name='Decoder')
-    self.latent_layer = DeterministicDense(zdim,
+    self.latent_layer = DenseDeterministic(zdim,
                                            use_bias=bool(biased_latent),
                                            activation='linear',
                                            name='Latent')
     # loss funciton
-    if not isinstance(loss, (tuple, list)):
-      loss = [loss]
-    self.loss_info = [_get_loss(i, dispersion=dispersion) for i in loss]
+    if not isinstance(xdist, (tuple, list)):
+      xdist = [xdist]
+    self.xdist_info = [
+        _get_loss_or_distribution(i, dispersion=dispersion) for i in xdist
+    ]
     self.output_layer = None
 
   @property
   def is_semi_supervised(self):
-    return len(self.loss_info) > 1
+    return len(self.xdist_info) > 1
 
   def _call(self, x, t, y, masks, training, n_samples):
     e = self.encoder(x, training=training)
@@ -120,7 +122,8 @@ class DeepCountAutoencoder(SingleCellModel):
 
     if self.output_layer is None:
       self.output_layer = Parallel([
-          layer(i.shape[1]) for i, (_, layer, _) in zip([x] + y, self.loss_info)
+          layer(i.shape[1])
+          for i, (_, layer, _) in zip([x] + y, self.xdist_info)
       ],
                                    name="Outputs")
     pred = self.output_layer(d, mode=Statistic.DIST)
@@ -133,10 +136,10 @@ class DeepCountAutoencoder(SingleCellModel):
     # self.add_loss(lambda: loss.read(0))
 
     # calculating the losses
-    loss_x = self.loss_info[0][0](t, pred[0])
+    loss_x = self.xdist_info[0][0](t, pred[0])
     # don't forget to apply mask for semi-supervised loss
     loss_y = 0
-    for (fn, _, _), i_true, i_pred, m in zip(self.loss_info[1:], y, pred[1:],
+    for (fn, _, _), i_true, i_pred, m in zip(self.xdist_info[1:], y, pred[1:],
                                              masks):
       loss_y += fn(i_true, i_pred) * m
     loss = tf.reduce_mean(loss_x + loss_y)

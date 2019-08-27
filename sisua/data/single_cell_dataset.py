@@ -123,7 +123,7 @@ def get_library_size(X, return_log_count=False):
 # ===========================================================================
 # OMICS
 # ===========================================================================
-class SingleCellOMICS(sc.AnnData, Visualizer):
+class SingleCellOMIC(sc.AnnData, Visualizer):
   """ An annotated data matrix.
 
   Parameters
@@ -182,7 +182,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         obs = {'rowid': ['Row#%d' % i for i in range(X.shape[0])]}
       if var is None:
         var = {'colid': ['Col#%d' % i for i in range(X.shape[1])]}
-    super(SingleCellOMICS, self).__init__(X=X,
+    super(SingleCellOMIC, self).__init__(X=X,
                                           obs=obs,
                                           var=var,
                                           uns=uns,
@@ -204,14 +204,14 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
   @property
   def X(self):
     with catch_warnings_ignore(FutureWarning):
-      X = super(SingleCellOMICS, self).X
+      X = super(SingleCellOMIC, self).X
     if X.ndim == 1:
       X = np.expand_dims(X, axis=1)
     return X
 
-  def assert_matching_cells(self, sco) -> 'SingleCellOMICS':
-    assert isinstance(sco, SingleCellOMICS), \
-      "sco must be instance of SingleCellOMICS"
+  def assert_matching_cells(self, sco) -> 'SingleCellOMIC':
+    assert isinstance(sco, SingleCellOMIC), \
+      "sco must be instance of SingleCellOMIC"
     assert sco.shape[0] == self.shape[0], \
       "Number of cell mismatch %d and %d" % (self.shape[0], sco.shape[0])
     if 'cellid' in sco.obs and 'cellid' in self.obs:
@@ -231,7 +231,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
 
   def as_obsm(self, obsm_name):
     assert obsm_name in self.obsm
-    omics = SingleCellOMICS(self,
+    omics = SingleCellOMIC(self,
                             oidx=slice(None, None),
                             vidx=slice(None, None),
                             asview=True)
@@ -250,7 +250,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
   def __getitem__(self, index):
     """Returns a sliced view of the object."""
     oidx, vidx = self._normalize_indices(index)
-    omics = SingleCellOMICS(self, oidx=oidx, vidx=vidx, asview=True)
+    omics = SingleCellOMIC(self, oidx=oidx, vidx=vidx, asview=True)
     # update observation indexing
     omics._obs = self._obs.iloc[oidx]
     omics._obsm = AxisArrays(omics,
@@ -309,11 +309,11 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
 
   def copy(self, X=None, filename=None, name=None):
     """Full copy, optionally on disk. (this code is copied from
-    `AnnData`, modification to return `SingleCellOMICS` instance.
+    `AnnData`, modification to return `SingleCellOMIC` instance.
     """
     from anndata.core.views import DictView
     if not self.isbacked:
-      omics = SingleCellOMICS(
+      omics = SingleCellOMIC(
           X if X is not None else
           (self._X.copy() if self._X is not None else None),
           self._obs.copy(),
@@ -331,16 +331,16 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     else:
       if filename is None:
         raise ValueError(
-            'To copy an SingleCellOMICS object in backed mode, '
+            'To copy an SingleCellOMIC object in backed mode, '
             'pass a filename: `.copy(filename=\'myfilename.h5ad\')`.')
       if self.isview:
         self.write(filename)
       else:
         from shutil import copyfile
         copyfile(self.filename, filename)
-      omics = SingleCellOMICS(filename=filename,
+      omics = SingleCellOMIC(filename=filename,
                               name=self.name if name is None else name)
-    # other info related to SingleCellOMICS
+    # other info related to SingleCellOMIC
     omics._indices = self.indices
     omics._total_counts = self._total_counts
     omics._log_counts = self._log_counts
@@ -360,7 +360,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
   @property
   def indices(self):
     """ Return the row indices had been used to created this data,
-    helpful when using `SingleCellOMICS.split` to keep track the
+    helpful when using `SingleCellOMIC.split` to keep track the
     data partition """
     return self._indices
 
@@ -420,8 +420,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     Parameters
     ----------
     seed : `int` (default=8)
-      the same seed will ensure the same partition of any `SingleCellOMICS`,
-      as long as all the data has the same number of `SingleCellOMICS.nsamples`
+      the same seed will ensure the same partition of any `SingleCellOMIC`,
+      as long as all the data has the same number of `SingleCellOMIC.nsamples`
     train_percent : `float` (default=0.8)
       the percent of data used for training, the rest is for testing
     add_name : `bool` (default=True)
@@ -429,8 +429,8 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
 
     Returns
     -------
-    train : `SingleCellOMICS`
-    test : `SingleCellOMICS`
+    train : `SingleCellOMIC`
+    test : `SingleCellOMIC`
 
     Example
     -------
@@ -449,7 +449,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     ntrain = int(train_percent * self.n_obs)
 
     train_ids = ids[:ntrain]
-    train = SingleCellOMICS(
+    train = SingleCellOMIC(
         X=self.X[train_ids],
         obs=self.obs.iloc[train_ids],
         obsm={i: j[train_ids] for i, j in self.obsm.items()},
@@ -460,7 +460,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     train._indices = train_ids  # copy the indices, this is important
 
     test_ids = ids[ntrain:]
-    test = SingleCellOMICS(
+    test = SingleCellOMIC(
         X=self.X[test_ids],
         obs=self.obs.iloc[test_ids],
         obsm={i: j[test_ids] for i, j in self.obsm.items()},
@@ -482,7 +482,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     corruption_rate : `float` (default=0.25)
     corruption_dist : {'binomial', 'uniform} (default='binomial')
     inplace : `bool` (default=True)
-      Perform computation inplace or return new `SingleCellOMICS` with
+      Perform computation inplace or return new `SingleCellOMIC` with
       the corrupted data.
     seed : `int` (default=8)
         seed for the random state.
@@ -553,12 +553,12 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
         workflows, Seurat passes the cutoffs whereas Cell Ranger passes
         `n_top_genes`.
     inplace : `bool` (default=True)
-        if False, copy the `SingleCellOMICS` and apply the vargene filter.
+        if False, copy the `SingleCellOMIC` and apply the vargene filter.
 
     Returns
     -------
-    New `SingleCellOMICS` with filtered features if `applying_filter=True` else
-    assign `SingleCellOMICS.highly_variable_features` with following attributes
+    New `SingleCellOMIC` with filtered features if `applying_filter=True` else
+    assign `SingleCellOMIC.highly_variable_features` with following attributes
 
     highly_variable : bool
         boolean indicator of highly-variable genes
@@ -620,13 +620,13 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     max_row_counts : {int, None} (default=None)
       Maximum number of rows expressed required for a feature to pass filtering.
     inplace : `bool` (default=True)
-      if False, return new `SingleCellOMICS` with the filtered
+      if False, return new `SingleCellOMIC` with the filtered
       genes applied
 
     Returns
     -------
-    if `applying_filter=False` annotates the `SingleCellOMICS`, otherwise,
-    return new `SingleCellOMICS` with the new subset of genes
+    if `applying_filter=False` annotates the `SingleCellOMIC`, otherwise,
+    return new `SingleCellOMIC` with the new subset of genes
 
     gene_subset : `numpy.ndarray`
         Boolean index mask that does filtering. `True` means that the
@@ -674,13 +674,13 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     max_genes : {int, None} (default=None)
       Maximum number of rows expressed required for a feature to pass filtering.
     inplace : `bool` (default=True)
-      if False, return new `SingleCellOMICS` with the filtered
+      if False, return new `SingleCellOMIC` with the filtered
       cells applied
 
     Returns
     -------
-    if `applying_filter=False` annotates the `SingleCellOMICS`, otherwise,
-    return new `SingleCellOMICS` with the new subset of cells
+    if `applying_filter=False` annotates the `SingleCellOMIC`, otherwise,
+    return new `SingleCellOMIC` with the new subset of cells
 
     cells_subset : numpy.ndarray
         Boolean index mask that does filtering. ``True`` means that the
@@ -826,7 +826,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
     max_value : `float` or `None`, optional (default=`None`)
         Clip (truncate) to this value after scaling. If `None`, do not clip.
     inplace : `bool` (default=True)
-      if False, return new `SingleCellOMICS` with the filtered
+      if False, return new `SingleCellOMIC` with the filtered
       cells applied
 
     References
@@ -939,7 +939,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
 
     Returns
     -------
-    returns `SingleCellOMICS` with the following:
+    returns `SingleCellOMIC` with the following:
 
     **connectivities** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
         Weighted adjacency matrix of the neighborhood graph of data
@@ -1074,7 +1074,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
 
     Returns
     -------
-    updates `SingleCellOMICS`'s `obs` and `var`.
+    updates `SingleCellOMIC`'s `obs` and `var`.
 
     Observation level metrics include:
     total_{var_type}_by_{expr_type}
@@ -1183,7 +1183,7 @@ class SingleCellOMICS(sc.AnnData, Visualizer):
       all_nonzeros.append(x[ids[0], ids[1]])
     all_nonzeros = np.concatenate(all_nonzeros)
 
-    text = super(SingleCellOMICS, self).__repr__()
+    text = super(SingleCellOMIC, self).__repr__()
     text = text.replace('AnnData object', self.name)
     text += '\n    Sparsity: %.2f' % self.sparsity
     text += '\n    Nonzeros: %s' % describe(

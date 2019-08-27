@@ -7,7 +7,7 @@ import numpy as np
 import scanpy as sc
 from six import add_metaclass
 
-from sisua.data.single_cell_dataset import SingleCellOMICS
+from sisua.data.single_cell_dataset import SingleCellOMIC
 
 
 # ===========================================================================
@@ -66,8 +66,8 @@ class Methods(Flag):
             max_value=None,
             gene_subset=None,
             trained_embedding=None):
-    assert isinstance(X, SingleCellOMICS), \
-      "X must be instance of sisua.data.SingleCellOMICS"
+    assert isinstance(X, SingleCellOMIC), \
+      "X must be instance of sisua.data.SingleCellOMIC"
     is_logarithmized = False
     for method in self:
       # cell filtering
@@ -124,6 +124,11 @@ class Methods(Flag):
 # ===========================================================================
 class NormalizationRecipe(object):
   """ Predefined normalization recipe
+
+  Note
+  ----
+  It is recommended to enable corruption within this normalization to
+  simulate actual conditions
   """
 
   def __init__(self,
@@ -174,16 +179,22 @@ class NormalizationRecipe(object):
     return self.normalize(X, training=training, copy=copy)
 
   def normalize(self, X, training=False, copy=True):
-    if isinstance(X, SingleCellOMICS):
+    """
+    X : SingleCellOMIC
+    training : data is used for training or not (
+      corruption is enable for training)
+    copy : create a copy version of data for normalization
+    """
+    if isinstance(X, SingleCellOMIC):
       X = X.copy() if copy else X
     elif isinstance(X, sc.AnnData):
-      X = SingleCellOMICS(X.copy() if copy else X)
+      X = SingleCellOMIC(X.copy() if copy else X)
     else:
-      X = SingleCellOMICS(X=X)
+      X = SingleCellOMIC(X=X)
 
     # data should be corrupted before doing any preprocessing to
     # match the actual condition
-    if training:
+    if training and self.corruption_rate > 0:
       X.corrupt(corruption_rate=self.corruption_rate,
                 corruption_dist=self.corruption_dist,
                 inplace=True)
@@ -217,6 +228,11 @@ class Seurat(NormalizationRecipe):
   """Normalization and filtering as of Seurat [Satija15]_.
   This uses a particular preprocessing.
   Expects non-logarithmized data.
+
+  Note
+  ----
+  It is recommended to enable corruption within this normalization to
+  simulate actual conditions
   """
 
   def __init__(self,
@@ -253,6 +269,11 @@ class CellRanger(NormalizationRecipe):
   References
   ----------
   pass
+
+  Note
+  ----
+  It is recommended to enable corruption within this normalization to
+  simulate actual conditions
   """
 
   def __init__(self,
@@ -277,6 +298,12 @@ class CellRanger(NormalizationRecipe):
     self.log = bool(log)
 
   def normalize(self, X, training=False, copy=True):
+    """
+    X : SingleCellOMIC
+    training : data is used for training or not (
+      corruption is enable for training)
+    copy : create a copy version of data for normalization
+    """
     import scanpy as sc
     sc.pp.recipe_seurat
     X = super(CellRanger, self).normalize(X, training=training, copy=copy)
@@ -292,11 +319,11 @@ class Sisua(NormalizationRecipe):
   """
 
   def __init__(self,
+               corruption_rate=0.25,
+               corruption_dist='binomial',
                min_counts=1,
                total_counts=True,
-               n_top_genes=1000,
-               corruption_rate=0.25,
-               corruption_dist='binomial'):
+               n_top_genes=1000):
     methods = (Methods.CELL_COUNT | Methods.GENE_COUNT | Methods.TOTAL_COUNTS |
                (Methods.LOG if n_top_genes is None else Methods.GENE_DISP |
                 Methods.LOG) | Methods.SCALE)

@@ -6,7 +6,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import numpy as np
 
 from sisua import data
-from sisua.data import SingleCellOMICS
+from sisua.data import SingleCellOMIC
 from sisua.models.variational_autoencoder import (
   VariationalAutoencoder)
 import scanpy as sc
