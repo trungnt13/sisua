@@ -9,10 +9,10 @@ from tensorflow_probability.python.distributions import (LogNormal,
 
 from odin.bay.distribution_layers import (LogNormalLayer,
                                           MultivariateNormalLayer, NormalLayer)
-from odin.networks import DistributionDense
+from odin.networks import DenseDistribution
 
 
-class NormalDiagLatent(DistributionDense):
+class NormalDiagLatent(DenseDistribution):
 
   def __init__(self, units, use_bias=True, name="LatentSpace"):
     super(NormalDiagLatent, self).__init__(
@@ -26,7 +26,7 @@ class NormalDiagLatent(DistributionDense):
         name=name)
 
 
-class NormalLatent(DistributionDense):
+class NormalLatent(DenseDistribution):
 
   def __init__(self, units, use_bias=True, name="LatentSpace"):
     super(NormalLatent,
@@ -39,7 +39,7 @@ class NormalLatent(DistributionDense):
                          name=name)
 
 
-class LogNormalLatent(DistributionDense):
+class LogNormalLatent(DenseDistribution):
 
   def __init__(self, units, use_bias=True, name="LatentSpace"):
     super(LogNormalLatent,
@@ -52,11 +52,11 @@ class LogNormalLatent(DistributionDense):
                          name=name)
 
 
-class MixedNormalLatent(DistributionDense):
+class MixedNormalLatent(DenseDistribution):
   pass
 
 
-class DirichletLatent(DistributionDense):
+class DirichletLatent(DenseDistribution):
   pass
 
 

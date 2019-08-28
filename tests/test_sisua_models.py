@@ -14,7 +14,7 @@ from tensorflow_probability.python.distributions import Deterministic, Normal
 
 from odin.bay.distribution_layers import DeterministicLayer, NormalLayer
 from odin.bay.distributions import stack_distributions
-from odin.networks import AdvanceModel, DistributionDense, Parallel
+from odin.networks import AdvanceModel, DenseDistribution, Parallel
 # output, latent = ae.predict(x)
 from sisua.analysis import Posterior
 from sisua.data import get_dataset
@@ -24,7 +24,7 @@ from sisua.data.normalization_recipes import (CellRanger, Methods,
 from sisua.models import get_model
 from sisua.models.autoencoder import DeepCountAutoencoder
 from sisua.models.semi_supervised import (MultiLatentVAE, MultitaskAutoEncoder,
-                                          MultiTaskVAE)
+                                          MultitaskVAE)
 from sisua.models.variational_autoencoder import VariationalAutoEncoder
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -75,10 +75,10 @@ vae = VariationalAutoEncoder()
 vae.fit(x, epochs=8, n_samples=1)
 vae.predict(x)
 
-mvae = MultiTaskVAE()
+mvae = MultitaskVAE()
 mvae.fit([x, y], epochs=8, n_samples=1)
 mvae.predict([x, y])
 
-mvld = MultiTaskVAE(linear_decoder=True)
+mvld = MultitaskVAE(linear_decoder=True)
 mvld.fit([x, y], epochs=8, n_samples=1)
 mvld.predict([x, y])

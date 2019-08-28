@@ -21,7 +21,7 @@ from sisua.analysis.imputation_benchmarks import (correlation_scores,
 from sisua.analysis.latent_benchmarks import clustering_scores
 from sisua.data import SingleCellOMIC
 from sisua.models import SingleCellModel
-from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
+from sisua.models.base import _to_sc_omics
 
 __all__ = [
     'SingleCellMetric', 'NegativeLogLikelihood', 'ImputationError',

@@ -22,8 +22,9 @@ from tensorflow.python.platform import tf_logging as logging
 from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
+from odin.bay.distribution_alias import parse_distribution
 from odin.bay.distributions import stack_distributions
-from odin.networks import AdvanceModel, DenseDeterministic, DistributionDense
+from odin.networks import AdvanceModel, DenseDeterministic, DenseDistribution
 from odin.utils import cache_memory, classproperty
 from sisua.data import SingleCellOMIC
 from sisua.models import latents as sisua_latents
@@ -50,12 +51,17 @@ def _to_sc_omics(x):
 
 def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
                is_semi_supervised, batch_size, shuffle, epochs):
-  all_data = [i.X for i in sco]
+  all_data = []
+  for i, j in enumerate(sco):
+    if i == 0:  # main data, gene expression
+      all_data += [j.X, j.local_mean, j.local_var]
+    else:  # semi-supervised data
+      all_data.append(j.X)
+  # adding mask at the end if semi-supervised
   if is_semi_supervised and mask is not None:
     all_data += [mask]
   # NOTE: from_tensor_slices accept tuple but not list
-  ds = tf.data.Dataset.from_tensor_slices(all_data[0] if len(all_data) ==
-                                          1 else tuple(all_data))
+  ds = tf.data.Dataset.from_tensor_slices(tuple(all_data))
   if shuffle:
     ds = ds.shuffle(1000)
   ds = ds.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
@@ -68,22 +74,24 @@ def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
   return ds
 
 
-def _to_semisupervised_inputs(inputs, is_fitting):
-  """ Preprocessing the inputs for semi-supervised training """
-  # objective mask is provided
-  assert isinstance(inputs, (tuple, list))
-
-  # mask is given at the end during training
-  if is_fitting:
-    x = inputs[0]
-    y = list(inputs[1:-1])
-    masks = [inputs[-1]] * len(y)
-  # no mask is provided
+def _get_loss_or_distribution(loss, dispersion):
+  # note: loss function always return keepdims=True
+  loss = str(loss).lower()
+  # ====== simple loss function from tensorflow ====== #
+  if loss in dir(tf.losses):
+    output_layer = lambda units: DenseDeterministic(units, activation='relu')
+    loss_fn = lambda y_true, y_pred: tf.expand_dims(tf.losses.get(str(loss))
+                                                    (y_true, y_pred),
+                                                    axis=-1)
+  # ====== probabilistic loss ====== #
   else:
-    x = inputs[0]
-    y = list(inputs[1:])
-    masks = [1.] * len(y)
-  return x, y, masks
+    layer, _ = parse_distribution(loss)
+    output_layer = lambda units: DenseDistribution(
+        units, posterior=layer, posterior_kwargs=dict(dispersion=dispersion))
+    loss_fn = lambda y_true, y_pred: tf.expand_dims(-y_pred.log_prob(y_true),
+                                                    axis=-1)
+  # post-processing the loss function to be more universal
+  return loss_fn, output_layer
 
 
 _CACHE_PREDICT = defaultdict(dict)
@@ -116,6 +124,8 @@ class SingleCellModel(AdvanceModel):
   """
 
   def __init__(self,
+               xdist,
+               dispersion,
                parameters,
                kl_analytic=True,
                kl_weight=1.,
@@ -142,22 +152,47 @@ class SingleCellModel(AdvanceModel):
     self._corruption_rate = 0
     self._corruption_dist = 'binomial'
     self._log_norm = bool(log_norm)
+    # dispersion
+    dispersion = str(dispersion).lower()
+    assert dispersion in ('full', 'share', 'single')
+    self.dispersion = dispersion
+    # parsing the input distribution
+    if not isinstance(xdist, (tuple, list)):
+      xdist = [xdist]
+    self._is_semi_supervised = True if len(xdist) > 1 else False
+    self.xdist = []
+    self.xloss = []
+    for i in xdist:
+      fn_loss, fn_dist = _get_loss_or_distribution(i,
+                                                   dispersion=self.dispersion)
+      self.xloss.append(fn_loss)
+      self.xdist.append(fn_dist)
+
+  @property
+  def n_outputs(self):
+    return len(self.xdist)
+
+  @property
+  def output_layers(self):
+    layers = []
+    for i in range(self.n_outputs):
+      layer = getattr(self, 'output_layer%d' % i, None)
+      if layer is None:
+        break
+      layers.append(layer)
+    return layers
 
   @property
   def log_norm(self):
     return self._log_norm
 
   @property
-  def epoch_history(self):
-    return self.history.history
-
-  @property
   def custom_objects(self):
     return [sisua_latents, sisua_networks]
 
-  @abstractproperty
+  @property
   def is_semi_supervised(self):
-    raise NotImplementedError
+    return self._is_semi_supervised
 
   @property
   def corruption_rate(self):
@@ -194,15 +229,25 @@ class SingleCellModel(AdvanceModel):
     return self._parameters
 
   @abstractmethod
-  def _call(self, x, t, y, masks, training=None, n_samples=None):
+  def _call(self, x, lmean, lvar, t, y, masks, training=None, n_samples=None):
     """
-    x : input gene-expression matrix (multiple inputs can be given)
-    t : target for reconstruction of gene-expression matrix (can be different
-        from `x`)
-    y : input for semi-supervised learning
-    masks : binary mask for semi-supervised training
-    training : flag mark training progress
-    n_samples : number of MCMC samples
+    x : [batch_size, n_genes]
+      input gene-expression matrix (multiple inputs can be given)
+    lmean : [batch_size]
+      mean of library size
+    lvar : [batch_size]
+      variance of library size
+    t : [batch_size, n_genes]
+      target for reconstruction of gene-expression matrix (can be different
+      from `x`)
+    y : [batch_size, n_protein]
+      input for semi-supervised learning
+    masks : [batch_size, 1]
+      binary mask for semi-supervised training
+    training : `bool`
+      flag mark training progress
+    n_samples : {`None`, `int`}
+      number of MCMC samples
     """
     raise NotImplementedError
 
@@ -210,26 +255,54 @@ class SingleCellModel(AdvanceModel):
     # check arguments
     if n_samples is None:
       n_samples = 1
+    if not isinstance(inputs, (tuple, list)):
+      inputs = [inputs]
+    else:
+      inputs = list(inputs)
 
-    if self.is_semi_supervised:
-      x, y, masks = _to_semisupervised_inputs(inputs, self._is_fitting)
+    # eager mode, the Model is called directly
+    # lmean and lvar is not given
+    if (len(inputs) >= 3 and
+        (inputs[1].shape[1] != 1 or inputs[2].shape[1] != 1)) or \
+      len(inputs) < 3:
+      if isinstance(inputs[0], SingleCellOMIC):
+        inputs = [inputs[0].X, inputs[0].local_mean, inputs[0].local_var
+                 ] + inputs[1:]
+      else:
+        inputs = [
+            inputs,
+            tf.zeros(shape=(inputs.shape[0], 1)),
+            tf.zeros(shape=(inputs.shape[0], 1))
+        ] + inputs[1:]
+
+    # Preprocessing the inputs for semi-supervised training
+    x, lmean, lvar = inputs[:3]
+    if self._is_fitting:
+      y = list(inputs[3:-1])  # y1, y2, ...
+      masks = [inputs[-1]] * len(y)  # same mask for all y
     else:
-      x = inputs
-      y = []
+      y = list(inputs[3:])  # y1, y2, ...
       masks = []
+
     # check log normalization
-    if isinstance(x, tuple):
-      x = list(x)
-    if isinstance(x, list):
-      t = x[0]
-      if self.log_norm:
-        x[0] = tf.math.log1p(x[0])
-    else:
-      t = x
-      if self.log_norm:
-        x = tf.math.log1p(x)
-    # return the subclass results
-    return self._call(x, t, y, masks, training, n_samples)
+    t = x
+    if self.log_norm:
+      x = tf.math.log1p(x)
+
+    # initialize output_layers distribution
+    # we must set the attribute directly so the Model will manage
+    # the output layer
+    for idx, (i, dist_fn) in enumerate(zip([x] + y, self.xdist)):
+      if idx + 1 > len(self.output_layers):
+        post = dist_fn(i.shape[1])
+        setattr(self, 'output_layer%d' % idx, post)
+
+    # postprocessing the returns
+    outputs, latents = self._call(x, lmean, lvar, t, y, masks, training,
+                                  n_samples)
+    if not self.is_semi_supervised and isinstance(outputs, (tuple, list)):
+      outputs = outputs[0]
+    return outputs, latents
 
   def evaluate(self, inputs, n_samples=1, batch_size=128, verbose=1):
     raise Exception(
@@ -627,7 +700,7 @@ class SingleCellModel(AdvanceModel):
       obj.fit(inputs, **fit_kwargs)
       history = obj.history.history
       all_loss = [history[name] for name in loss_name]
-      # get mean and status
+      # get min, variance and status
       loss = 0
       loss_variance = 0
       is_nan = False
@@ -638,7 +711,7 @@ class SingleCellModel(AdvanceModel):
           loss_variance = np.inf
           break
         else:  # first epoch doesn't count
-          loss += np.mean(l[1:])
+          loss += np.min(l[1:])
           loss_variance += np.var(l[1:])
       loss = loss / len(all_loss)
       loss_variance = loss_variance / len(all_loss)

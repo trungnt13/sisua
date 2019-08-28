@@ -26,7 +26,7 @@ from sisua.analysis.sc_metrics import (SingleCellMetric,
 from sisua.data import SingleCellOMIC
 from sisua.data.utils import standardize_protein_name
 from sisua.models import SingleCellModel
-from sisua.models.base import _to_sc_omics, _to_semisupervised_inputs
+from sisua.models.base import _to_sc_omics
 
 __all__ = ['SingleCellMonitor', 'LearningCurves', 'ScatterPlot', 'HeatmapPlot']
 

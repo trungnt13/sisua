@@ -11,53 +11,10 @@ from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
                                           ZINegativeBinomialLayer,
                                           ZIPoissonLayer)
 from odin.bay.helpers import Statistic
-from odin.networks import (DenseDeterministic, DistributionDense, Identity,
+from odin.networks import (DenseDeterministic, DenseDistribution, Identity,
                            Parallel)
 from sisua.models.base import SingleCellModel
 from sisua.models.networks import DenseNetwork
-
-
-def _get_loss_or_distribution(loss, dispersion=None):
-  loss = str(loss).lower()
-  is_probabilistic_loss = True
-  # ====== Poisson ====== #
-  if loss == 'poisson':
-    output_layer = lambda units: DistributionDense(units,
-                                                   posterior=PoissonLayer)
-  elif loss == 'zipoisson':
-    output_layer = lambda units: DistributionDense(units,
-                                                   posterior=ZIPoissonLayer)
-  # ====== NB ====== #
-  elif loss == 'nb':
-    output_layer = lambda units: DistributionDense(
-        units,
-        posterior=lambda units: NegativeBinomialLayer(units,
-                                                      dispersion=dispersion))
-  elif loss == 'zinb':
-    output_layer = lambda units: DistributionDense(
-        units,
-        posterior=lambda units: ZINegativeBinomialLayer(units,
-                                                        dispersion=dispersion))
-  # ====== alternate parameterization for NB ====== #
-  elif loss == 'nbd':
-    output_layer = lambda units: DistributionDense(
-        units,
-        posterior=lambda units: NegativeBinomialDispLayer(
-            units, dispersion=dispersion))
-  elif loss == 'zinbd':
-    output_layer = lambda units: DistributionDense(
-        units,
-        posterior=lambda units: ZINegativeBinomialDispLayer(
-            units, dispersion=dispersion))
-  # ====== deterministic loss function ====== #
-  else:
-    is_probabilistic_loss = False
-    output_layer = lambda units: DenseDeterministic(units, activation='relu')
-    loss_fn = tf.losses.get(str(loss))
-  # post-processing the loss function to be more universal
-  if is_probabilistic_loss:
-    loss_fn = lambda y_true, y_pred: -y_pred.log_prob(y_true)
-  return loss_fn, output_layer, is_probabilistic_loss
 
 
 class DeepCountAutoencoder(SingleCellModel):
@@ -79,7 +36,10 @@ class DeepCountAutoencoder(SingleCellModel):
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
-    super(DeepCountAutoencoder, self).__init__(parameters=locals(), **kwargs)
+    super(DeepCountAutoencoder, self).__init__(xdist=xdist,
+                                               dispersion=dispersion,
+                                               parameters=locals(),
+                                               **kwargs)
     self.encoder = DenseNetwork(n_units=hdim,
                                 nlayers=nlayers,
                                 activation='relu',
@@ -103,52 +63,25 @@ class DeepCountAutoencoder(SingleCellModel):
                                            use_bias=bool(biased_latent),
                                            activation='linear',
                                            name='Latent')
-    # loss funciton
-    if not isinstance(xdist, (tuple, list)):
-      xdist = [xdist]
-    self.xdist_info = [
-        _get_loss_or_distribution(i, dispersion=dispersion) for i in xdist
-    ]
-    self.output_layer = None
 
-  @property
-  def is_semi_supervised(self):
-    return len(self.xdist_info) > 1
-
-  def _call(self, x, t, y, masks, training, n_samples):
+  def _call(self, x, lmean, lvar, t, y, masks, training, n_samples):
     e = self.encoder(x, training=training)
-    z = self.latent_layer(e)
-    d = self.decoder(z, training=training)
-
-    if self.output_layer is None:
-      self.output_layer = Parallel([
-          layer(i.shape[1])
-          for i, (_, layer, _) in zip([x] + y, self.xdist_info)
-      ],
-                                   name="Outputs")
-    pred = self.output_layer(d, mode=Statistic.DIST)
-
-    # NOTE: TensorArray could be used to remove the redundancy of
-    # loss computation during prediction, however, Tensorflow Autograph
-    # cannot track the gradient here.
-    # loss = tf.TensorArray(dtype='float32', size=1, dynamic_size=False)
-    # loss.write(0, tf.reduce_mean(tf.losses.mean_squared_error(inputs, pred)))
-    # self.add_loss(lambda: loss.read(0))
-
+    qZ = self.latent_layer(e)
+    # the first dimension always the MCMC sample dimension
+    d = self.decoder(qZ.sample(1), training=training)
+    pX = [dist(d, mode=Statistic.DIST) for dist in self.output_layers]
     # calculating the losses
-    loss_x = self.xdist_info[0][0](t, pred[0])
+    loss_x = self.xloss[0](t, pX[0])
     # don't forget to apply mask for semi-supervised loss
     loss_y = 0
-    for (fn, _, _), i_true, i_pred, m in zip(self.xdist_info[1:], y, pred[1:],
-                                             masks):
-      loss_y += fn(i_true, i_pred) * m
+    for i_true, m, i_pred, fn_loss in zip(y, masks, pX[1:], self.xloss[1:]):
+      loss_y += fn_loss(i_true, i_pred) * m
     loss = tf.reduce_mean(loss_x + loss_y)
 
     if training:
       self.add_loss(loss)
-
     self.add_metric(loss_x, 'mean', "loss_x")
     if self.is_semi_supervised:
       self.add_metric(loss_y, 'mean', "loss_y")
 
-    return pred if self.is_semi_supervised else pred[0], z
+    return pX, qZ

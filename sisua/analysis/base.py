@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 import inspect
 import os
 import pickle
+import shutil
 import time
 from collections import OrderedDict, defaultdict
 from itertools import product
@@ -58,13 +59,37 @@ class Posterior(Visualizer):
   verbose : bool
     turn on verbose
 
+  Example
+  -------
+  >>> pos1 = Posterior(mae, x_test, y_test)
+  >>> print(pos1.scores_classifier(x_train, y_train))
+  >>> print(pos1.scores_llk())
+  >>> print(pos1.scores_imputation())
+  >>> print(pos1.scores_spearman())
+  >>> print(pos1.scores_pearson())
+  >>> print(pos1.scores_clustering())
+  >>> pos1.save_scores('/tmp/tmp1.txt')
+  ...
+  >>> pos1.plot_protein_scatter().plot_protein_predicted_series()
+  >>> pos1.plot_classifier_F1(x_train, y_train)
+  >>> pos1.plot_learning_curves('loss_x')
+  >>> pos1.plot_learning_curves()
+  >>> pos1.get_correlation_marker_pairs('X')
+  >>> pos1.get_correlation_marker_pairs('V')
+  >>> pos1.get_correlation_marker_pairs('W')
+  >>> pos1.get_correlation_marker_pairs('T')
+  >>> pos1.plot_correlation_top_pairs().plot_correlation_bottom_pairs()
+  >>> pos1.plot_latents_binary_scatter().plot_latents_distance_heatmap(
+  >>> ).plot_latents_protein_pairs()
+  >>> pos1.save_figures('/tmp/tmp1.pdf')
+
   """
 
   def __init__(self,
                scm: SingleCellModel,
                mRNA: SingleCellOMIC,
                protein: Optional[SingleCellOMIC] = None,
-               n_samples=100,
+               n_samples=1,
                verbose=False):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
@@ -111,7 +136,8 @@ class Posterior(Visualizer):
 
     outputs_clean, latents_clean = scm.predict(inputs,
                                                apply_corruption=False,
-                                               n_samples=self.n_samples)
+                                               n_samples=self.n_samples,
+                                               verbose=self.verbose)
     if not isinstance(outputs_clean, (tuple, list)):
       outputs_clean = [outputs_clean]
     if not isinstance(latents_clean, (tuple, list)):
@@ -119,7 +145,8 @@ class Posterior(Visualizer):
 
     outputs_corrupt, latents_corrupt = scm.predict(inputs_corrupt,
                                                    apply_corruption=False,
-                                                   n_samples=self.n_samples)
+                                                   n_samples=self.n_samples,
+                                                   verbose=self.verbose)
     if not isinstance(outputs_corrupt, (tuple, list)):
       outputs_corrupt = [outputs_corrupt]
     if not isinstance(latents_corrupt, (tuple, list)):
@@ -161,12 +188,12 @@ class Posterior(Visualizer):
 
   @property
   def W(self):
-    return self.outputs_corrupt[0].mean().numpy()
+    return tf.reduce_mean(self.outputs_corrupt[0].mean(), axis=0).numpy()
 
   @property
   def V(self):
     dist = _preprocess_output_distribution(self.outputs_corrupt[0])
-    return dist.mean().numpy()
+    return tf.reduce_mean(dist.mean(), axis=0).numpy()
 
   @property
   def Z(self):
@@ -199,7 +226,7 @@ class Posterior(Visualizer):
       raise RuntimeError(
           "Not semi supervised model, cannot generate prediction for protein values"
       )
-    return self.outputs_corrupt[1].mean().numpy()
+    return tf.reduce_mean(self.outputs_corrupt[1].mean(), axis=0).numpy()
 
   @property
   def name(self):
@@ -276,7 +303,7 @@ class Posterior(Visualizer):
                                     use_PCA=bool(pca),
                                     show_colorbar=bool(legend))
     if fig is not None:
-      self.add_figure('latents_pairs', fig)
+      self.add_figure('latents_protein_pairs', fig)
     return self
 
   def plot_latents_distance_heatmap(self, legend=True, ax=None, fig=(8, 8)):
@@ -498,17 +525,24 @@ class Posterior(Visualizer):
     with catch_warnings_ignore(UserWarning):
       plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     self.add_figure(
-        'correlation_%s%s%d' % (data_type, 'top' if top else 'bottom', n), fig)
+        'correlation_%s_%s%d' %
+        (data_type_name.lower(), 'top' if top else 'bottom', n), fig)
     return self
 
-  def plot_correlation_marker_pairs(self, fontsize=10, fig=None):
+  def plot_correlation_marker_pairs(self, imputed=True, fontsize=10, fig=None):
     """ Plotting the correlation series between marker gene and protein,
     The original (uncorrupted data) is used for comparison to the
     imputation.
 
     """
     from scipy.stats import pearsonr, spearmanr
-    v, x, y = self.V, self.X, self.y_true
+    if imputed:
+      v = self.V
+      name = 'Imputed'
+    else:
+      v = self.W
+      name = "Reconstructed"
+    x, y = self.X, self.y_true
     original_series = correlation_scores(X=x,
                                          y=y,
                                          gene_name=self.gene_name,
@@ -562,10 +596,10 @@ class Posterior(Visualizer):
         ax.set_xticks(())
         ax.set_xlabel(name, fontsize=fontsize)
 
-    plt.suptitle(self.name, fontsize=fontsize + 2)
+    plt.suptitle('[%s]%s' % (name, self.name), fontsize=fontsize + 2)
     with catch_warnings_ignore(UserWarning):
       plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    self.add_figure('correlation_marker', fig)
+    self.add_figure('correlation_marker_%s' % name.lower(), fig)
     return self
 
   # ******************** Simple analysis ******************** #
@@ -622,6 +656,7 @@ class Posterior(Visualizer):
                                  show_plot=False)
 
   def save_scores(self, path):
+    """ Saving all scores to a txt file """
     text = '==== %s ====\n' % self.name
     for name, scores in (
         ('llk', self.scores_llk()),
@@ -683,18 +718,6 @@ class Posterior(Visualizer):
     ax.set_title('[metric: %s] %s' % (metric, self.name), fontsize=14)
     self.add_figure('learning_curves_%s' % metric, ax.get_figure())
     return self
-
-  # ******************** X, y ******************** #
-  def preprocessX(self, X):
-    # X_norm, T_norm, L, L_mean, L_var, y_norm
-    outputs = self.infer._preprocess_inputs(X=X, y=None)
-    return outputs[0]
-
-  def preprocessY(self, y):
-    # X_norm, T_norm, L, L_mean, L_var, y_norm
-    X = np.ones(shape=(y.shape[0], self.gene_dim))
-    outputs = self.infer._preprocess_inputs(X=X, y=y)
-    return outputs[-1]
 
   # ******************** Correlation scores ******************** #
   def get_correlation_marker_pairs(self, data_type='X', score_type='spearman'):
@@ -856,6 +879,8 @@ class Posterior(Visualizer):
                            y_true_new=None,
                            y_pred_new=None,
                            labels_new=None):
+    """ Plot comparison of protein in latent space, imputed and original
+    input space """
     if not self.is_semi_supervised:
       return self
 
@@ -869,87 +894,82 @@ class Posterior(Visualizer):
     y_true = self.y_true if y_true_new is None else y_true_new
     y_pred = self.y_pred if y_pred_new is None else y_pred_new
 
-    if protein_name in labels:
-      idx = [i for i, j in enumerate(labels) if protein_name in j][0]
-      y_true = y_true[:, idx]
-      y_pred = y_pred[:, idx]
+    if protein_name not in labels:
+      return self
 
-      X, Z, V = self.X, self.Z, self.V
+    idx = [i for i, j in enumerate(labels) if protein_name in j][0]
+    y_true = y_true[:, idx]
+    y_pred = y_pred[:, idx]
+    X, Z, V = self.X, self.Z, self.V
 
-      if fig is None:
-        fig = plot_figure(nrow=13, ncol=10)
-      assert isinstance(fig, plt.Figure), \
-      "fig must be instance of matplotlib.Figure"
+    if fig is None:
+      fig = plot_figure(nrow=13, ncol=10)
+    assert isinstance(fig, plt.Figure), \
+    "fig must be instance of matplotlib.Figure"
 
-      x = fn_dim(Z)
-      ax = plot_scatter_heatmap(x,
-                                val=y_true,
-                                ax=321,
-                                grid=False,
-                                colorbar=True)
-      ax.set_xlabel('Latent / ProteinOriginal')
-      ax = plot_scatter_heatmap(x,
-                                val=y_pred,
-                                ax=322,
-                                grid=False,
-                                colorbar=True)
-      ax.set_xlabel('Latent / ProteinPredicted')
+    x = fn_dim(Z)
+    ax = plot_scatter_heatmap(x, val=y_true, ax=321, grid=False, colorbar=True)
+    ax.set_xlabel('Latent / ProteinOriginal')
+    ax = plot_scatter_heatmap(x, val=y_pred, ax=322, grid=False, colorbar=True)
+    ax.set_xlabel('Latent / ProteinPredicted')
 
-      x = fn_dim(V)
-      ax = plot_scatter_heatmap(x,
-                                val=y_true,
-                                ax=323,
-                                grid=False,
-                                colorbar=True)
-      ax.set_xlabel('InputImputed / ProteinOriginal')
-      ax = plot_scatter_heatmap(x,
-                                val=y_pred,
-                                ax=324,
-                                grid=False,
-                                colorbar=True)
-      ax.set_xlabel('InputImputed / ProteinPredicted')
+    x = fn_dim(V)
+    ax = plot_scatter_heatmap(x, val=y_true, ax=323, grid=False, colorbar=True)
+    ax.set_xlabel('InputImputed / ProteinOriginal')
+    ax = plot_scatter_heatmap(x, val=y_pred, ax=324, grid=False, colorbar=True)
+    ax.set_xlabel('InputImputed / ProteinPredicted')
 
-      x = fn_dim(X)
-      ax = plot_scatter_heatmap(x,
-                                val=y_true,
-                                ax=325,
-                                grid=False,
-                                colorbar=True)
-      ax.set_xlabel('InputOriginal / ProteinOriginal')
-      ax = plot_scatter_heatmap(x,
-                                val=y_pred,
-                                ax=326,
-                                grid=False,
-                                colorbar=True)
-      ax.set_xlabel('InputOriginal / ProteinPredicted')
+    x = fn_dim(X)
+    ax = plot_scatter_heatmap(x, val=y_true, ax=325, grid=False, colorbar=True)
+    ax.set_xlabel('InputOriginal / ProteinOriginal')
+    ax = plot_scatter_heatmap(x, val=y_pred, ax=326, grid=False, colorbar=True)
+    ax.set_xlabel('InputOriginal / ProteinPredicted')
 
-      fig.suptitle(protein_name, fontsize=16)
-      with catch_warnings_ignore(UserWarning):
-        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-      self.add_figure(fig_name, fig)
+    fig.suptitle(protein_name, fontsize=16)
+    with catch_warnings_ignore(UserWarning):
+      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    self.add_figure(fig_name, fig)
     return self
 
-  # ******************** setter ******************** #
-  def set_labels(self,
-                 y_train=None,
-                 y_test=None,
-                 y_train_pred=None,
-                 y_test_pred=None,
-                 labels=None):
-    """ This can override the provided protein labels, helpful
-    when running the trained model on different dataset for
-    cross-dataset validation """
-    raise NotImplementedError
-    return self
+  # ******************** just summary everything  ******************** #
+  def full_report(self, path, x_train=None, y_train=None, override=True):
+    """
+    path : `str`
+      path to a folder
+    """
+    if not os.path.exists(path):
+      os.mkdir(path)
+    elif not os.path.isdir(path):
+      raise ValueError("path to %s must be a folder" % path)
+    else:
+      shutil.rmtree(path)
+      os.mkdir(path)
 
-  # ******************** properties ******************** #
-  def __str__(self):
-    s = 'Inference: %s\n' % str(self._infer.__class__)
-    for k, v in sorted(self.infer.configs.items()):
-      s += '  %-8s: %s\n' % (k, str(v))
-    s += 'Dataset: %s\n' % self._ds.path
-    for k, v in sorted(self._ds.items()):
-      s += '  %-8s: %s\n' % (k, str(v.shape))
-    s += '  is_binary_classes: %s\n' % self.is_binary_classes
-    s += '#MCMC samples: %d\n' % self.n_mcmc_samples
-    return s
+    score_path = os.path.join(path, 'scores.txt')
+    self.save_scores(score_path)
+    if self.verbose:
+      print("Saved scores at:", score_path)
+
+    self.plot_learning_curves(metric='loss')
+    if self.is_semi_supervised:
+      self.plot_protein_scatter(protein_name='CD4')
+      self.plot_protein_scatter(protein_name='CD8')
+      self.plot_protein_scatter(protein_name='CD45RA')
+      self.plot_protein_scatter(protein_name='CD45RO')
+      self.plot_protein_predicted_series()
+
+    self.plot_correlation_top_pairs().plot_correlation_bottom_pairs()
+    self.plot_correlation_marker_pairs(
+        imputed=True).plot_correlation_marker_pairs(imputed=False)
+
+    self.plot_classifier_F1(x_train, y_train)
+    self.plot_latents_binary_scatter()
+    self.plot_latents_distance_heatmap()
+    self.plot_latents_protein_pairs()
+
+    self.save_figures(path,
+                      dpi=120,
+                      separate_files=True,
+                      clear_figures=True,
+                      verbose=self.verbose)
+    return self

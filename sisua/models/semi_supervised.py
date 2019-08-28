@@ -7,7 +7,7 @@ from tensorflow.python.keras.layers import Layer
 
 from odin.bay import Statistic
 from odin.bay.distribution_alias import parse_distribution
-from odin.networks import DistributionDense, Parallel
+from odin.networks import DenseDistribution, Parallel
 from odin.utils import as_tuple
 from sisua.models.autoencoder import DeepCountAutoencoder
 from sisua.models.base import SingleCellModel
@@ -40,7 +40,7 @@ class MultitaskAutoEncoder(DeepCountAutoencoder):
     super(MultitaskAutoEncoder, self).__init__(**kw)
 
 
-class MultiTaskVAE(VariationalAutoEncoder):
+class MultitaskVAE(VariationalAutoEncoder):
   """ Variational autoencoder with multitask learning extension
   """
 
@@ -63,8 +63,8 @@ class MultiTaskVAE(VariationalAutoEncoder):
     del kw['__class__']
     del kw['kwargs']
     kw.update(kwargs)
-    super(MultiTaskVAE, self).__init__(**kw)
+    super(MultitaskVAE, self).__init__(**kw)
 
 
-class MultiLatentVAE(VariationalAutoEncoder):
-  pass
+# class MultiLatentVAE(VariationalAutoEncoder):
+#   pass

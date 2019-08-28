@@ -46,7 +46,10 @@ class SCVI(SingleCellModel):
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
-    super(SCVI, self).__init__(parameters=locals(), **kwargs)
+    super(SCVI, self).__init__(xdist=xdist,
+                               dispersion=dispersion,
+                               parameters=locals(),
+                               **kwargs)
     self.encoder_z = DenseNetwork(n_units=hdim,
                                   nlayers=nlayers,
                                   activation='relu',
@@ -83,17 +86,7 @@ class SCVI(SingleCellModel):
     self.px_r = None
     # dropout
     self.px_dropout = None
-    self.dispersion = str(dispersion).lower()
-    assert self.dispersion in ('full', 'share', 'single')
-    assert xdist in ('nbd', 'zinbd'), \
-      "Only support 'nbd' and 'zinbd as output distribution"
-    self.xdist = (NegativeBinomialDispLayer
-                  if xdist == 'nbd' else ZINegativeBinomialDispLayer)
     self.clip_library = float(clip_library)
-
-  @property
-  def is_semi_supervised(self):
-    return False
 
   def _initialize_layers(self, n_dims):
     if self.px_scale is not None:
@@ -118,12 +111,7 @@ class SCVI(SingleCellModel):
                                   initializer=tf.initializers.RandomNormal,
                                   trainable=True)
 
-  def _call(self, x, t, y, masks, training, n_samples):
-    if isinstance(x, (tuple, list)):
-      x, local_mean, local_var = x
-    else:
-      local_mean = tf.cast(0., x.dtype)
-      local_var = tf.cast(1., x.dtype)
+  def _call(self, x, lmean, lvar, t, y, masks, training, n_samples):
     n_dims = x.shape[1]
     self._initialize_layers(n_dims)
 
@@ -151,6 +139,7 @@ class SCVI(SingleCellModel):
     # dropout for zero inflation
     px_dropout = self.px_dropout(d)
 
+    exit()
     pX = self.xdist(event_shape=n_dims,
                     given_log_mean=False,
                     given_log_disp=False)
@@ -164,9 +153,8 @@ class SCVI(SingleCellModel):
                                      n_samples=n_samples)
     kl_l = self.library.kl_divergence(analytic_kl=self.kl_analytic,
                                       n_samples=n_samples,
-                                      prior=Normal(
-                                          loc=local_mean,
-                                          scale=tf.math.sqrt(local_var)))
+                                      prior=Normal(loc=lmean,
+                                                   scale=tf.math.sqrt(lvar)))
     elbo = llk_x - kl_l - kl_z * self.kl_weight
     elbo = tf.reduce_logsumexp(elbo, axis=0)
     loss = tf.reduce_mean(-elbo)
