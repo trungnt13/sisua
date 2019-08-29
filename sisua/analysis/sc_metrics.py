@@ -67,11 +67,13 @@ class SingleCellMetric(Callback):
 
   Parameters
   ----------
-  inputs : None
+  inputs : {`SingleCellOMIC`, `numpy.ndarray`}
   extras : None
-  n_samples :
-  batch_size :
-  freq : `int` (default=`1`)
+    extras object (e.g. protein) used for calculating the metric
+  n_samples : `int` (default=`1`)
+    number of MCMC samples for prediction
+  batch_size : `int` (default=`64`)
+  freq : `int` (default=`3`)
     frequency of evaluating the metric, some metrics are very computational
     intensive and could slow down the training progress significantly
   """
@@ -81,7 +83,7 @@ class SingleCellMetric(Callback):
                              ndarray, List[np.ndarray], None] = None,
                extras=None,
                n_samples=1,
-               batch_size=128,
+               batch_size=64,
                freq=3,
                name=None,
                **kwargs):
@@ -179,7 +181,13 @@ class SingleCellMetric(Callback):
     """
     if epoch % self.freq == 0 and logs is not None:
       self._last_epoch = epoch
-      metrics = self()
+      # calculating the metric
+      try:
+        metrics = self()
+      except Exception as e:
+        print("Error:", e)
+        metrics = {}
+      # update the log
       for key, val in metrics.items():
         logs[key] = val
         logs[key + '_epoch'] = epoch
@@ -187,7 +195,13 @@ class SingleCellMetric(Callback):
   def on_train_end(self, logs=None):
     if self.model.epochs != self._last_epoch:
       self._last_epoch = self.model.epochs
-      metrics = self()
+      # calculating the metric
+      try:
+        metrics = self()
+      except Exception as e:
+        print("Error:", e)
+        metrics = {}
+      # update the log
       history = self.model.history.history
       for key, val in metrics.items():
         if key in history:
@@ -200,6 +214,19 @@ class SingleCellMetric(Callback):
 # ===========================================================================
 class NegativeLogLikelihood(SingleCellMetric):
   """ Log likelihood metric
+
+  Parameters
+  ----------
+  inputs : {`SingleCellOMIC`, `numpy.ndarray`}
+  extras : None
+    extras object (e.g. protein) used for calculating the metric
+  n_samples : `int` (default=`1`)
+    number of MCMC samples for prediction
+  batch_size : `int` (default=`64`)
+  freq : `int` (default=`3`)
+    frequency of evaluating the metric, some metrics are very computational
+    intensive and could slow down the training progress significantly
+
   Returns
   -------
   dict:
@@ -215,7 +242,20 @@ class NegativeLogLikelihood(SingleCellMetric):
 
 
 class ImputationError(SingleCellMetric):
-  """
+  """ Imputation error
+
+  Parameters
+  ----------
+  inputs : {`SingleCellOMIC`, `numpy.ndarray`}
+  extras : None
+    extras object (e.g. protein) used for calculating the metric
+  n_samples : `int` (default=`1`)
+    number of MCMC samples for prediction
+  batch_size : `int` (default=`64`)
+  freq : `int` (default=`3`)
+    frequency of evaluating the metric, some metrics are very computational
+    intensive and could slow down the training progress significantly
+
   Return
   ------
   dict :
@@ -246,6 +286,19 @@ class ImputationError(SingleCellMetric):
 
 class CorrelationScores(SingleCellMetric):
   """ (1 - correlation_coefficients) to represent the loss
+
+  Parameters
+  ----------
+  inputs : {`SingleCellOMIC`, `numpy.ndarray`}
+  extras : {`SingleCellOMIC`, `numpy.ndarray`}
+    the protein array
+  n_samples : `int` (default=`1`)
+    number of MCMC samples for prediction
+  batch_size : `int` (default=`64`)
+  freq : `int` (default=`3`)
+    frequency of evaluating the metric, some metrics are very computational
+    intensive and could slow down the training progress significantly
+
   Returns
   -------
   dict :
@@ -297,6 +350,18 @@ class CorrelationScores(SingleCellMetric):
 
 class ClusteringScores(SingleCellMetric):
   """
+  Parameters
+  ----------
+  inputs : {`SingleCellOMIC`, `numpy.ndarray`}
+  extras : {`SingleCellOMIC`, `numpy.ndarray`}
+    the protein array
+  n_samples : `int` (default=`1`)
+    number of MCMC samples for prediction
+  batch_size : `int` (default=`64`)
+  freq : `int` (default=`3`)
+    frequency of evaluating the metric, some metrics are very computational
+    intensive and could slow down the training progress significantly
+
   Returns
   -------
   dict :

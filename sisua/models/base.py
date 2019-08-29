@@ -14,14 +14,16 @@ import numpy as np
 import tensorflow as tf
 from six import add_metaclass, string_types
 from tensorflow.python.keras.callbacks import (Callback, CallbackList,
-                                               EarlyStopping, LambdaCallback,
-                                               ModelCheckpoint, TerminateOnNaN)
+                                               LambdaCallback,
+                                               LearningRateScheduler,
+                                               ModelCheckpoint)
 from tensorflow.python.keras.engine import base_layer_utils
 from tensorflow.python.keras.layers import Layer
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
+from odin.backend.keras_callbacks import EarlyStopping
 from odin.bay.distribution_alias import parse_distribution
 from odin.bay.distribution_layers import VectorDeterministicLayer
 from odin.bay.distributions import stack_distributions
@@ -436,6 +438,7 @@ class SingleCellModel(AdvanceModel):
       min_delta=0.5,  # for early stopping
       patience=25,  # for early stopping
       allow_rollback=True,  # for early stopping
+      terminate_on_nan=True,  # for early stopping
       checkpoint=None,
       shuffle=True,
       verbose=1):
@@ -517,9 +520,8 @@ class SingleCellModel(AdvanceModel):
                         verbose=verbose,
                         mode='min',
                         baseline=None,
+                        terminate_on_nan=bool(terminate_on_nan),
                         restore_best_weights=bool(allow_rollback)))
-    # add termination on NaN
-    callbacks.append(TerminateOnNaN())
     # checkpoint
     if checkpoint is not None:
       callbacks.append(
@@ -538,7 +540,8 @@ class SingleCellModel(AdvanceModel):
     for cb in callbacks:
       if isinstance(cb, (SingleCellMetric, SingleCellMonitor)) and \
         cb.inputs is None:
-        cb.inputs = valid
+        # only mRNA expression is needed during evaluation (prediction)
+        cb.inputs = valid[0]
     # reorganize so the SingleCellMonitor is at the end, hence, all the
     # metrics are computed before the monitor start plotting
     cb_others = [
@@ -684,10 +687,15 @@ class SingleCellModel(AdvanceModel):
     else:
       dsname = inputs.name if hasattr(inputs, 'name') else 'x'
     kw = {
-        'model': cls.id,
-        'data': dsname.replace('_', ''),
-        'loss': loss_name.replace('val_', '').replace('_', ''),
-        'params': '_'.join(sorted([i.replace('_', '') for i in params.keys()]))
+        'model':
+            cls.id,
+        'data':
+            dsname.replace('_', ''),
+        'loss':
+            '_'.join(
+                [i.replace('val_', '').replace('_', '') for i in loss_name]),
+        'params':
+            '_'.join(sorted([i.replace('_', '') for i in params.keys()]))
     }
     kw = {i: j for i, j in kw.items() if i in fmt}
     save_path = save_path.format(**kw)
@@ -714,7 +722,7 @@ class SingleCellModel(AdvanceModel):
       obj.fit(inputs, **fit_kwargs)
       history = obj.history.history
       all_loss = [history[name] for name in loss_name]
-      # get min, variance and status
+      # get min, variance and status, if NaN set to Inf
       loss = 0
       loss_variance = 0
       is_nan = False
