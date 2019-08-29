@@ -5,11 +5,6 @@ from typing import Iterable
 import tensorflow as tf
 from tensorflow.python.keras.layers import Dense, Layer
 
-from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
-                                          NegativeBinomialLayer, PoissonLayer,
-                                          ZINegativeBinomialDispLayer,
-                                          ZINegativeBinomialLayer,
-                                          ZIPoissonLayer)
 from odin.bay.helpers import Statistic
 from odin.networks import (DenseDeterministic, DenseDistribution, Identity,
                            Parallel)
@@ -23,6 +18,7 @@ class DeepCountAutoencoder(SingleCellModel):
   """
 
   def __init__(self,
+               units,
                dispersion='full',
                xdist='zinb',
                xdrop=0.3,
@@ -36,7 +32,8 @@ class DeepCountAutoencoder(SingleCellModel):
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
-    super(DeepCountAutoencoder, self).__init__(xdist=xdist,
+    super(DeepCountAutoencoder, self).__init__(units=units,
+                                               xdist=xdist,
                                                dispersion=dispersion,
                                                parameters=locals(),
                                                **kwargs)
@@ -63,17 +60,36 @@ class DeepCountAutoencoder(SingleCellModel):
                                            use_bias=bool(biased_latent),
                                            activation='linear',
                                            name='Latent')
+    # initialize output_layers distribution
+    # we must set the attribute directly so the Model will manage
+    # the output layer, once all the output layers are initialized
+    # the number of outputs will match `n_outputs`
+    for idx, (units, posterior,
+              activation) in enumerate(zip(self.units, self.xdist,
+                                           self.xactiv)):
+      name = 'output_layer%d' % idx
+      post = DenseDistribution(
+          units=units,
+          posterior=posterior,
+          activation=activation,
+          posterior_kwargs=dict(dispersion=self.dispersion))
+      setattr(self, name, post)
 
   def _call(self, x, lmean, lvar, t, y, masks, training, n_samples):
     e = self.encoder(x, training=training)
     qZ = self.latent_layer(e)
     # the first dimension always the MCMC sample dimension
     d = self.decoder(qZ.sample(1), training=training)
-    pX = [dist(d, mode=Statistic.DIST) for dist in self.output_layers]
+
+    pX = [
+        getattr(self, 'output_layer%d' % i)(d, mode=Statistic.DIST)
+        for i in range(self.n_outputs)
+    ]
+
     # calculating the losses
     loss_x = self.xloss[0](t, pX[0])
     # don't forget to apply mask for semi-supervised loss
-    loss_y = 0
+    loss_y = tf.convert_to_tensor(0, dtype=x.dtype)
     for i_true, m, i_pred, fn_loss in zip(y, masks, pX[1:], self.xloss[1:]):
       loss_y += fn_loss(i_true, i_pred) * m
     loss = tf.reduce_mean(loss_x + loss_y)

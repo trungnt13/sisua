@@ -23,8 +23,9 @@ from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
 from odin.bay.distribution_alias import parse_distribution
+from odin.bay.distribution_layers import VectorDeterministicLayer
 from odin.bay.distributions import stack_distributions
-from odin.networks import AdvanceModel, DenseDeterministic, DenseDistribution
+from odin.networks import AdvanceModel
 from odin.utils import cache_memory, classproperty
 from sisua.data import SingleCellOMIC
 from sisua.models import latents as sisua_latents
@@ -74,24 +75,24 @@ def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
   return ds
 
 
-def _get_loss_or_distribution(loss, dispersion):
+def _get_loss_and_distribution(loss):
   # note: loss function always return keepdims=True
   loss = str(loss).lower()
   # ====== simple loss function from tensorflow ====== #
   if loss in dir(tf.losses):
-    output_layer = lambda units: DenseDeterministic(units, activation='relu')
+    output_layer = VectorDeterministicLayer
+    activation = 'relu'
     loss_fn = lambda y_true, y_pred: tf.expand_dims(tf.losses.get(str(loss))
                                                     (y_true, y_pred),
                                                     axis=-1)
   # ====== probabilistic loss ====== #
   else:
-    layer, _ = parse_distribution(loss)
-    output_layer = lambda units: DenseDistribution(
-        units, posterior=layer, posterior_kwargs=dict(dispersion=dispersion))
+    output_layer = parse_distribution(loss)[0]
+    activation = 'linear'
     loss_fn = lambda y_true, y_pred: tf.expand_dims(-y_pred.log_prob(y_true),
                                                     axis=-1)
   # post-processing the loss function to be more universal
-  return loss_fn, output_layer
+  return output_layer, activation, loss_fn
 
 
 _CACHE_PREDICT = defaultdict(dict)
@@ -124,6 +125,7 @@ class SingleCellModel(AdvanceModel):
   """
 
   def __init__(self,
+               units,
                xdist,
                dispersion,
                parameters,
@@ -156,31 +158,44 @@ class SingleCellModel(AdvanceModel):
     dispersion = str(dispersion).lower()
     assert dispersion in ('full', 'share', 'single')
     self.dispersion = dispersion
+    # parsing the units
+    if not isinstance(units, (tuple, list)):
+      units = [units]
+    units = [int(i) for i in units]
+    self._units = units
     # parsing the input distribution
     if not isinstance(xdist, (tuple, list)):
       xdist = [xdist]
+    # check length of units is matching xdist,
+    # i.e. consistent number of outputs
+    assert len(units) == len(xdist), \
+      "Given %d output(s) in 'units' which differnt from  " % len(units) + \
+        "%d distribution(s) given in 'xdist'" % len(xdist)
+    # check if mRNA output is zero inflated
+    if 'zi' == xdist[0][:2].lower():
+      self._is_zero_inflated = True
+    else:
+      self._is_zero_inflated = False
+    # check if is semi-supervised
     self._is_semi_supervised = True if len(xdist) > 1 else False
+    # for initializing the output layers
     self.xdist = []
     self.xloss = []
+    self.xactiv = []
     for i in xdist:
-      fn_loss, fn_dist = _get_loss_or_distribution(i,
-                                                   dispersion=self.dispersion)
+      fn_dist, activation, fn_loss = _get_loss_and_distribution(i)
       self.xloss.append(fn_loss)
       self.xdist.append(fn_dist)
+      self.xactiv.append(activation)
+
+  @property
+  def units(self):
+    """ Always return a list of units for all outputs """
+    return tuple(self._units)
 
   @property
   def n_outputs(self):
     return len(self.xdist)
-
-  @property
-  def output_layers(self):
-    layers = []
-    for i in range(self.n_outputs):
-      layer = getattr(self, 'output_layer%d' % i, None)
-      if layer is None:
-        break
-      layers.append(layer)
-    return layers
 
   @property
   def log_norm(self):
@@ -189,6 +204,10 @@ class SingleCellModel(AdvanceModel):
   @property
   def custom_objects(self):
     return [sisua_latents, sisua_networks]
+
+  @property
+  def is_zero_inflated(self):
+    return self._is_zero_inflated
 
   @property
   def is_semi_supervised(self):
@@ -289,14 +308,6 @@ class SingleCellModel(AdvanceModel):
     if self.log_norm:
       x = tf.math.log1p(x)
 
-    # initialize output_layers distribution
-    # we must set the attribute directly so the Model will manage
-    # the output layer
-    for idx, (i, dist_fn) in enumerate(zip([x] + y, self.xdist)):
-      if idx + 1 > len(self.output_layers):
-        post = dist_fn(i.shape[1])
-        setattr(self, 'output_layer%d' % idx, post)
-
     # postprocessing the returns
     outputs, latents = self._call(x, lmean, lvar, t, y, masks, training,
                                   n_samples)
@@ -333,6 +344,9 @@ class SingleCellModel(AdvanceModel):
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     inputs = [_to_sc_omics(i) for i in inputs]
+    assert len(inputs) == 1, \
+      "During prediction phase, only the mRNA gene expression is provided, " +\
+        "this is strict regulation for all models!"
     # checking the cache, this mechanism will significantly improve speed
     # during monitoring of fitting process
     self_id = id(self)

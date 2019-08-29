@@ -942,6 +942,8 @@ class Posterior(Visualizer):
     elif not os.path.isdir(path):
       raise ValueError("path to %s must be a folder" % path)
     else:
+      if self.verbose:
+        print("Override analysis at path:", path)
       shutil.rmtree(path)
       os.mkdir(path)
 
