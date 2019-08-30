@@ -133,7 +133,7 @@ class SingleCellModel(AdvanceModel):
                parameters,
                kl_analytic=True,
                kl_weight=1.,
-               kl_warmup=200,
+               kl_warmup=50,
                log_norm=True,
                seed=8,
                name=None):
@@ -324,8 +324,9 @@ class SingleCellModel(AdvanceModel):
   def predict(self,
               inputs,
               n_samples=1,
-              batch_size=128,
+              batch_size=64,
               apply_corruption=False,
+              enable_cache=True,
               verbose=1):
     """
     Parameters
@@ -333,6 +334,9 @@ class SingleCellModel(AdvanceModel):
     apply_corruption : `bool` (default=`False`)
       if `True` applying corruption on data before prediction to match the
       condition during fitting.
+    enable_cache : `bool` (default=`True`)
+      if `True` store the "footprint" of the input arguments to return the
+      cached outputs
 
     Return
     ------
@@ -349,13 +353,15 @@ class SingleCellModel(AdvanceModel):
     assert len(inputs) == 1, \
       "During prediction phase, only the mRNA gene expression is provided, " +\
         "this is strict regulation for all models!"
+
     # checking the cache, this mechanism will significantly improve speed
     # during monitoring of fitting process
     self_id = id(self)
     footprint = ''.join([str(id(i.X)) for i in inputs]) + \
       str(n_samples) + str(apply_corruption) + str(self.epochs)
-    if footprint in _CACHE_PREDICT[id(self)]:
+    if enable_cache and footprint in _CACHE_PREDICT[id(self)]:
       return _CACHE_PREDICT[self_id][footprint]
+
     # applying corruption for testing
     if apply_corruption and self.corruption_rate is not None:
       inputs = [
@@ -412,22 +418,23 @@ class SingleCellModel(AdvanceModel):
     else:
       Z = stack_distributions(Z, axis=0)
     # cache and return
-    _CACHE_PREDICT[self_id][footprint] = (X, Z)
-    # LIFO
-    if len(_CACHE_PREDICT[self_id]) > _MAXIMUM_CACHE_SIZE:
-      key = list(_CACHE_PREDICT[self_id].keys())[0]
-      del _CACHE_PREDICT[self_id][key]
+    if enable_cache:
+      _CACHE_PREDICT[self_id][footprint] = (X, Z)
+      # LIFO
+      if len(_CACHE_PREDICT[self_id]) > _MAXIMUM_CACHE_SIZE:
+        key = list(_CACHE_PREDICT[self_id].keys())[0]
+        del _CACHE_PREDICT[self_id][key]
     return X, Z
 
   def fit(
       self,
       inputs: Union[SingleCellOMIC, Iterable[SingleCellOMIC]],
       optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
-      learning_rate=1e-3,
+      learning_rate=1e-4,
       clipnorm=100,
       n_samples=1,
       semi_percent=0.8,
-      semi_weight=25,
+      semi_weight=10,
       corruption_rate=0.25,
       corruption_dist='binomial',
       batch_size=64,

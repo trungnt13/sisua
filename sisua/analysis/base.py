@@ -89,11 +89,13 @@ class Posterior(Visualizer):
                scm: SingleCellModel,
                mRNA: SingleCellOMIC,
                protein: Optional[SingleCellOMIC] = None,
-               n_samples=1,
+               batch_size=16,
+               n_samples=10,
                verbose=False):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
     self.n_samples = int(n_samples)
+    self.batch_size = int(batch_size)
 
     if isinstance(scm, string_types):
       with open(scm, 'rb') as f:
@@ -126,26 +128,26 @@ class Posterior(Visualizer):
     mRNA_corrupt = self.mRNA_corrupt
     protein = self.protein
 
-    if isinstance(scm, SCVI):
-      inputs = (mRNA, mRNA.local_mean, mRNA.local_var)
-      inputs_corrupt = (mRNA_corrupt, mRNA.local_mean, mRNA.local_var)
-    else:
-      inputs = (mRNA, protein) if scm.is_semi_supervised else mRNA
-      inputs_corrupt = (mRNA_corrupt,
-                        protein) if scm.is_semi_supervised else mRNA
-
-    outputs_clean, latents_clean = scm.predict(inputs,
-                                               apply_corruption=False,
-                                               n_samples=self.n_samples,
-                                               verbose=self.verbose)
+    # NOTE: for now we haven't find the use of input clean yet
+    # save some processing time here
+    # outputs_clean, latents_clean = scm.predict(mRNA,
+    #                                            apply_corruption=False,
+    #                                            n_samples=self.n_samples,
+    #                                            batch_size=self.batch_size,
+    #                                            enable_cache=False,
+    #                                            verbose=self.verbose)
+    outputs_clean = []
+    latents_clean = []
     if not isinstance(outputs_clean, (tuple, list)):
       outputs_clean = [outputs_clean]
     if not isinstance(latents_clean, (tuple, list)):
       latents_clean = [latents_clean]
 
-    outputs_corrupt, latents_corrupt = scm.predict(inputs_corrupt,
+    outputs_corrupt, latents_corrupt = scm.predict(mRNA_corrupt,
                                                    apply_corruption=False,
                                                    n_samples=self.n_samples,
+                                                   batch_size=self.batch_size,
+                                                   enable_cache=False,
                                                    verbose=self.verbose)
     if not isinstance(outputs_corrupt, (tuple, list)):
       outputs_corrupt = [outputs_corrupt]
@@ -281,8 +283,11 @@ class Posterior(Visualizer):
     X_train = X_train.corrupt(corruption_rate=self.scm.corruption_rate,
                               corruption_dist=self.scm.corruption_dist,
                               inplace=False)
-    outputs, latents = self.scm.predict((
-        X_train, y_train) if self.is_semi_supervised else X_train)
+    outputs, latents = self.scm.predict(X_train,
+                                        n_samples=self.n_samples,
+                                        batch_size=self.batch_size,
+                                        enable_cache=False,
+                                        verbose=self.verbose)
     # return, always a list, except the labels
     if not isinstance(outputs, (tuple, list)):
       outputs = [outputs]
