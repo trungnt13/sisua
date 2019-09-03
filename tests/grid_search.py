@@ -151,5 +151,39 @@ if not no_score:
 # ===========================================================================
 if analyze:
   with open(os.path.join(path, 'scores'), 'rb') as f:
-    scores = pickle.load(f)
-  print(scores)
+    scores: pd.DataFrame = pickle.load(f)
+  g = scores.groupby(by=['model', 'zdim'])
+
+  model = ['dca', 'scvi', 'vae', 'mvae']
+  zdim = sorted(set([i[1] for i in g.groups.keys()]))
+  n_row = len(zdim)
+  n_col = len(model)
+
+  plt.figure(figsize=(8, 5.5))
+  plot_idx = 1
+  for z in zdim:  # each row
+    for m in model:  # each column
+      ids = g.groups[(m, z)]
+      tab = scores.iloc[ids]
+
+      tab = tab.sort_values(by=['pearson', 'spearman'], axis=0)
+      pearson = tab.pivot("layer", "hdim", "pearson")
+      spearman = tab.pivot("layer", "hdim", "spearman")
+      correlation = (pearson + spearman) / 2
+
+      # tab = tab.sort_values(by='llk', axis=0)
+      # correlation =  tab.pivot("layer", "hdim", "llk")
+
+      ax = plt.subplot(n_row, n_col, plot_idx)
+      sns.heatmap(correlation,
+                  annot=True,
+                  cmap='Blues',
+                  cbar=False,
+                  xticklabels="auto",
+                  yticklabels="auto")
+      ax.set_xlabel(None)
+      ax.set_ylabel(None)
+      # plt.title('%s-%d' % (m, z))
+      plot_idx += 1
+  plt.tight_layout()
+  plot_save(os.path.join(path, 'compare.pdf'))
