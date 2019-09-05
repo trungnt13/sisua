@@ -17,6 +17,7 @@ from sisua.models.scvi_models import SCVI
 from sisua.models.semi_supervised import MultitaskAutoEncoder, MultitaskVAE
 from sisua.models.variational_autoencoder import VariationalAutoEncoder
 
+# turn off TF logging and set reproducibile random seed
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 tf.random.set_seed(8)
@@ -80,11 +81,17 @@ def run_training(args):
     model = model(gene, **kw)
 
   start_time = time.time()
-  model.fit((x_train, y_train) if model.is_semi_supervised else x_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            semi_weight=10,
-            verbose=False)
+  try:
+    model.fit((x_train, y_train) if model.is_semi_supervised else x_train,
+              epochs=epochs,
+              batch_size=batch_size,
+              semi_weight=10,
+              verbose=False)
+  except Exception as e:
+    print("Error:", e)
+    print("Error Config:", name)
+    return
+
   print("Finish training %-4s layer:%d hdim:%-3d zdim:%d in %.2f(s)" %
         (model.id, n, h, z, time.time() - start_time))
   with open(os.path.join(path, name), 'wb') as f:

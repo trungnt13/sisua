@@ -1,3 +1,7 @@
+# Tensorflow re-implementaiton of: https://github.com/YosefLab/scVI/tree/master/scvi
+# MIT License
+# Copyright (c) 2018, Romain Lopez
+# Modification by Trung Ngo 2019
 from __future__ import absolute_import, division, print_function
 
 import numpy as np

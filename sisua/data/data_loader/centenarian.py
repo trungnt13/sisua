@@ -91,6 +91,7 @@ def read_centenarian(override=False):
                       origin=_URL[2],
                       outdir=download_path,
                       verbose=True)
+
     data = []
     with gzip.open(labels, mode='rb') as f:
       for line in f:

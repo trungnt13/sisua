@@ -1,8 +1,12 @@
 from typing import Dict, Optional, Text
 
-from sisua.models import (autoencoder, latents, networks, scvi_models,
-                          semi_supervised, variational_autoencoder)
+from sisua.models import latents, networks
+from sisua.models.autoencoder import *
 from sisua.models.base import *
+from sisua.models.scscope_models import *
+from sisua.models.scvi_models import *
+from sisua.models.semi_supervised import *
+from sisua.models.variational_autoencoder import *
 
 
 def get_model(identifier: Optional[Text] = None) -> Dict:

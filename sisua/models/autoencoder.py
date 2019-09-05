@@ -1,3 +1,6 @@
+# Tensorflow re-implementaiton of: https://github.com/theislab/dca
+# License: https://github.com/theislab/dca/blob/master/LICENSE.txt
+# Modification by Trung Ngo 2019
 from __future__ import absolute_import, division, print_function
 
 from typing import Iterable

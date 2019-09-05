@@ -40,7 +40,10 @@ def get_dataset_meta():
   from sisua.data.experimental_data.pbmc_8k_ecc_ly import (
       read_PBMCcross_ecc_8k, read_PBMCcross_remove_protein)
   from sisua.data.data_loader.centenarian import read_centenarian
+  from sisua.data.data_loader.cell_vdj_10x import read_CellVDJ
   data_meta = {
+      "cellvdj":
+          read_CellVDJ,
       "centenarian":
           read_centenarian,
       # ====== PBMC 10x ====== #
@@ -232,13 +235,13 @@ def get_dataset(dataset_name,
   validating_dataset(ds)
   # ******************** return ******************** #
   x = SingleCellOMIC(X=ds['X'],
-                      obs={'cellid': ds['X_row']},
-                      var={'geneid': ds['X_col']},
-                      name=dataset_name)
+                     obs={'cellid': ds['X_row']},
+                     var={'geneid': ds['X_col']},
+                     name=dataset_name)
   y = SingleCellOMIC(X=ds['y'],
-                      obs={'cellid': ds['X_row']},
-                      var={'protid': ds['y_col']},
-                      name=dataset_name)
+                     obs={'cellid': ds['X_row']},
+                     var={'protid': ds['y_col']},
+                     name=dataset_name)
   return x, y
 
 
