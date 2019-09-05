@@ -83,12 +83,12 @@ def read_CellVDJ(override=False):
       else:
         raise ValueError("Unknown features: %s" % str(row))
 
-    y = X[:, prot_ids]
+    y = np.asarray(X[:, prot_ids])
     # Antibody ID, Antibody Name
     y_col = X_col[prot_ids][:, 0]
     y_col_name = X_col[prot_ids][:, 1]
 
-    X = X[:, gene_ids]
+    X = np.asarray(X[:, gene_ids])
     # Gene ID, Gene Name
     X_col_name = X_col[gene_ids][:, 1]
     X_col = X_col[gene_ids][:, 0]

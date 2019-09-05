@@ -183,20 +183,20 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       if var is None:
         var = {'colid': ['Col#%d' % i for i in range(X.shape[1])]}
     super(SingleCellOMIC, self).__init__(X=X,
-                                          obs=obs,
-                                          var=var,
-                                          uns=uns,
-                                          obsm=obsm,
-                                          varm=varm,
-                                          layers=layers,
-                                          raw=raw,
-                                          dtype=dtype,
-                                          shape=shape,
-                                          filename=filename,
-                                          filemode=filemode,
-                                          asview=asview,
-                                          oidx=oidx,
-                                          vidx=vidx)
+                                         obs=obs,
+                                         var=var,
+                                         uns=uns,
+                                         obsm=obsm,
+                                         varm=varm,
+                                         layers=layers,
+                                         raw=raw,
+                                         dtype=dtype,
+                                         shape=shape,
+                                         filename=filename,
+                                         filemode=filemode,
+                                         asview=asview,
+                                         oidx=oidx,
+                                         vidx=vidx)
     self._name = str(name)
     self._indices = np.arange(self.X.shape[0], dtype='int32')
     self._calculate_library_info()
@@ -232,9 +232,9 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
   def as_obsm(self, obsm_name):
     assert obsm_name in self.obsm
     omics = SingleCellOMIC(self,
-                            oidx=slice(None, None),
-                            vidx=slice(None, None),
-                            asview=True)
+                           oidx=slice(None, None),
+                           vidx=slice(None, None),
+                           asview=True)
     X_org = omics._X
     omics._X = omics.obsm[obsm_name]
     # already applied obsm at least once
@@ -339,7 +339,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
         from shutil import copyfile
         copyfile(self.filename, filename)
       omics = SingleCellOMIC(filename=filename,
-                              name=self.name if name is None else name)
+                             name=self.name if name is None else name)
     # other info related to SingleCellOMIC
     omics._indices = self.indices
     omics._total_counts = self._total_counts
