@@ -11,7 +11,9 @@ from odin.networks import DenseDistribution, Parallel
 from odin.utils import as_tuple
 from sisua.models.autoencoder import DeepCountAutoencoder
 from sisua.models.base import SingleCellModel
+from sisua.models.scvi_models import SCVI
 from sisua.models.variational_autoencoder import VariationalAutoEncoder
+
 
 
 class MultitaskAutoEncoder(DeepCountAutoencoder):
@@ -66,6 +68,35 @@ class MultitaskVAE(VariationalAutoEncoder):
     del kw['kwargs']
     kw.update(kwargs)
     super(MultitaskVAE, self).__init__(**kw)
+
+
+class MultitaskVI(SCVI):
+  """ Semi-supervised implementation of scVI
+  """
+
+  def __init__(self,
+               units,
+               dispersion='full',
+               xdist=['zinbd', 'nb'],
+               zdist='normal',
+               ldist='normal',
+               xdrop=0.3,
+               edrop=0,
+               zdrop=0,
+               ddrop=0,
+               hdim=128,
+               zdim=32,
+               nlayers=2,
+               clip_library=12,
+               batchnorm=True,
+               linear_decoder=False,
+               **kwargs):
+    kw = dict(locals())
+    del kw['self']
+    del kw['__class__']
+    del kw['kwargs']
+    kw.update(kwargs)
+    super(MultitaskVI, self).__init__(**kw)
 
 
 # class MultiLatentVAE(VariationalAutoEncoder):

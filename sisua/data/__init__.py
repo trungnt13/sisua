@@ -234,13 +234,20 @@ def get_dataset(dataset_name,
   ds = data_meta[dataset_name](override=override)
   validating_dataset(ds)
   # ******************** return ******************** #
+  var = {'geneid': ds['X_col']}
+  if 'X_col_name' in ds:
+    var['genename'] = ds['X_col_name']
   x = SingleCellOMIC(X=ds['X'],
                      obs={'cellid': ds['X_row']},
-                     var={'geneid': ds['X_col']},
+                     var=var,
                      name=dataset_name)
+
+  var = {'protid': ds['y_col']}
+  if 'y_col_name' in ds:
+    var['protname'] = ds['y_col_name']
   y = SingleCellOMIC(X=ds['y'],
                      obs={'cellid': ds['X_row']},
-                     var={'protid': ds['y_col']},
+                     var=var,
                      name=dataset_name)
   return x, y
 
