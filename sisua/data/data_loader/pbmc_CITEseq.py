@@ -41,7 +41,7 @@ _PASSWORD = 'uef-czi'
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_CITEseq_PBMC(override=False, version_5000genes=False):
+def read_CITEseq_PBMC(override=False, verbose=False, version_5000genes=False):
   download_path = os.path.join(
       DOWNLOAD_DIR,
       "PBMC_%s_original" % ('5000' if version_5000genes else 'CITEseq'))
@@ -64,12 +64,16 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
         [_MD5_5000 if version_5000genes else _MD5_FULL, _MD5_PROTEIN]):
       url = str(base64.decodebytes(url), 'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name, origin=url, outdir=download_path)
+      get_file(fname=base_name,
+               origin=url,
+               outdir=download_path,
+               verbose=verbose)
       download_files[base_name] = (os.path.join(download_path, base_name), md5)
     # ====== extract the data ====== #
     n = set()
     for name, (path, md5) in sorted(download_files.items()):
-      print("Extracting %s ..." % ctext(name, 'lightcyan'))
+      if verbose:
+        print("Extracting %s ..." % ctext(name, 'lightcyan'))
       binary_data = decrypt_aes(path, password=_PASSWORD)
       md5_ = md5_checksum(binary_data)
       assert md5_ == md5, "MD5 checksum mismatch for file: %s" % name
@@ -88,21 +92,26 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
     # ====== post-processing ====== #
     assert len(n) == 1, \
     "Number of samples inconsistent between raw count and protein count"
-    print("Processing %s ..." % ctext("gene count", 'cyan'))
+    if verbose:
+      print("Processing %s ..." % ctext("gene count", 'cyan'))
     X = np.array(X).T
     X_row, X_col = X[1:, 0], X[0, 1:]
     X = X[1:, 1:].astype('float32')
 
     # ====== filter mouse genes ====== #
     human_cols = [True if "HUMAN_" in i else False for i in X_col]
-    print("Removing %s MOUSE genes ..." %
-          ctext(np.sum(np.logical_not(human_cols)), 'cyan'))
+    if verbose:
+      print("Removing %s MOUSE genes ..." %
+            ctext(np.sum(np.logical_not(human_cols)), 'cyan'))
     X = X[:, human_cols]
     X_col = np.array([i for i in X_col if "HUMAN_" in i])
-    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col, print_log=True)
+    X, X_col = remove_allzeros_columns(matrix=X,
+                                       colname=X_col,
+                                       print_log=verbose)
 
     # ====== protein ====== #
-    print("Processing %s ..." % ctext("protein count", 'cyan'))
+    if verbose:
+      print("Processing %s ..." % ctext("protein count", 'cyan'))
     y = np.array(y).T
     y_row, y_col = y[1:, 0], y[0, 1:]
     y = y[1:, 1:].astype('float32')
@@ -111,8 +120,15 @@ def read_CITEseq_PBMC(override=False, version_5000genes=False):
     "Cell order mismatch between gene count and protein count"
 
     # save data
-    print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
-    save_to_dataset(preprocessed_path, X, X_col, y, y_col, rowname=X_row)
+    if verbose:
+      print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
+    save_to_dataset(preprocessed_path,
+                    X,
+                    X_col,
+                    y,
+                    y_col,
+                    rowname=X_row,
+                    print_log=verbose)
   # ====== read preprocessed data ====== #
   ds = Dataset(preprocessed_path, read_only=True)
   return ds

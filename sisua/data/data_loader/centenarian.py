@@ -72,7 +72,7 @@ def read_gzip_csv(path):
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_centenarian(override=False):
+def read_centenarian(override=False, verbose=False):
   download_path = os.path.join(DOWNLOAD_DIR, "SuperCentenarian_original")
   if not os.path.exists(download_path):
     os.mkdir(download_path)
@@ -90,7 +90,7 @@ def read_centenarian(override=False):
     labels = get_file(fname=os.path.basename(_URL[2]),
                       origin=_URL[2],
                       outdir=download_path,
-                      verbose=True)
+                      verbose=verbose)
 
     data = []
     with gzip.open(labels, mode='rb') as f:
@@ -107,15 +107,17 @@ def read_centenarian(override=False):
     raw = get_file(fname=os.path.basename(_URL[0]),
                    origin=_URL[0],
                    outdir=download_path,
-                   verbose=True)
-    print("Unzip and reading raw UMI ...")
+                   verbose=verbose)
+    if verbose:
+      print("Unzip and reading raw UMI ...")
     X_raw, cell_id1, gene_id1 = read_gzip_csv(raw)
 
     norm = get_file(fname=os.path.basename(_URL[1]),
                     origin=_URL[1],
                     outdir=download_path,
-                    verbose=True)
-    print("Unzip and reading log-norm UMI ...")
+                    verbose=verbose)
+    if verbose:
+      print("Unzip and reading log-norm UMI ...")
     X_norm, cell_id2, gene_id2 = read_gzip_csv(norm)
 
     assert np.all(cell_id1 == cell_id2) and np.all(labels[:, 0] == cell_id1) and \
@@ -123,13 +125,15 @@ def read_centenarian(override=False):
     assert X_raw.shape[0] == X_norm.shape[0] == len(cell_id1) and \
       X_raw.shape[1] == X_norm.shape[1] == len(gene_id1)
 
-    print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
+    if verbose:
+      print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
     save_to_dataset(preprocessed_path,
                     X=X_raw,
                     X_col=gene_id1,
                     y=y,
                     y_col=y_col,
-                    rowname=cell_id1)
+                    rowname=cell_id1,
+                    print_log=verbose)
     with MmapArrayWriter(os.path.join(preprocessed_path, 'X_log'),
                          shape=(0, X_norm.shape[1]),
                          dtype='float32',

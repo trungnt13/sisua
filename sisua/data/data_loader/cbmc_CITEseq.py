@@ -1,27 +1,27 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
-import os
 import base64
-import shutil
+import os
 import pickle
+import shutil
 from io import BytesIO, StringIO
 
 import numpy as np
 import scipy as sp
 
 from odin.fuel import Dataset
-from odin.utils import get_file, crypto, ctext, batching
-
-from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
+from odin.utils import batching, crypto, ctext, get_file
+from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
-_CITEseq_CBMC_PREPROCESSED = os.path.join(
-    PREPROCESSED_BASE_DIR, 'CBMC_preprocessed')
+_CITEseq_CBMC_PREPROCESSED = os.path.join(PREPROCESSED_BASE_DIR,
+                                          'CBMC_preprocessed')
 
 _URL = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0NCTUMuemlw\n'
 _PASSWORD = 'uef-czi'
 
-def read_CITEseq_CBMC(override=False):
+
+def read_CITEseq_CBMC(override=False, verbose=False):
   download_path = os.path.join(DOWNLOAD_DIR, "CBMC_original")
   if not os.path.exists(download_path):
     os.mkdir(download_path)
@@ -30,6 +30,8 @@ def read_CITEseq_CBMC(override=False):
   if not os.path.exists(preprocessed_path):
     os.mkdir(preprocessed_path)
   elif override:
+    if verbose:
+      print("Overriding path: %s" % _CITEseq_CBMC_PREPROCESSED)
     shutil.rmtree(_CITEseq_CBMC_PREPROCESSED)
     os.mkdir(_CITEseq_CBMC_PREPROCESSED)
   # ******************** preprocessed data NOT found ******************** #
@@ -39,18 +41,20 @@ def read_CITEseq_CBMC(override=False):
     # ====== download the data ====== #
     url = str(base64.decodebytes(_URL), 'utf-8')
     base_name = os.path.basename(url)
-    get_file(fname=base_name, origin=url, outdir=download_path)
+    get_file(fname=base_name, origin=url, outdir=download_path, verbose=verbose)
     zip_path = os.path.join(download_path, base_name)
     # ====== extract the data ====== #
     data_dict = {}
-    for name, data in crypto.unzip_aes(zip_path, password=_PASSWORD,
+    for name, data in crypto.unzip_aes(zip_path,
+                                       password=_PASSWORD,
                                        verbose=False):
       base_name = os.path.splitext(name)[0]
       if '.npz' in name:
         data = sp.sparse.load_npz(BytesIO(data)).todense()
       elif '.csv' in name:
         data = np.loadtxt(StringIO(str(data, 'utf-8')),
-                          dtype=str, delimiter=',')
+                          dtype=str,
+                          delimiter=',')
       else:
         raise RuntimeError("Unknown format: %s" % name)
       data_dict[base_name] = data
@@ -68,12 +72,16 @@ def read_CITEseq_CBMC(override=False):
     "Cell order mismatch between gene count and protein count"
 
     # save data
-    print("Saving data to %s ..." %
-      ctext(preprocessed_path, 'cyan'))
+    if verbose:
+      print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
 
     save_to_dataset(preprocessed_path,
-                    X, X_col, y, y_col,
-                    rowname=X_row)
+                    X,
+                    X_col,
+                    y,
+                    y_col,
+                    rowname=X_row,
+                    print_log=verbose)
   # ====== read preprocessed data ====== #
   ds = Dataset(preprocessed_path, read_only=True)
   return ds

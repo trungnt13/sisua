@@ -1,9 +1,12 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
 import os
+
 import numpy as np
 from six import string_types
+
 from odin.utils import ctext
+
 
 # ===========================================================================
 # For saving data
@@ -20,6 +23,7 @@ def save_data(outpath, header, row, data):
   except ImportError as e:
     return save_data_to_csv(outpath, header, row, data)
 
+
 def save_data_to_csv(outpath, header, row, data):
   if data is None:
     return
@@ -30,16 +34,17 @@ def save_data_to_csv(outpath, header, row, data):
   with open(outpath, 'w') as f:
     # preprocessing the head
     if isinstance(header, (tuple, list, np.ndarray, set)):
-      header = ",".join([str(val)
-                         if isinstance(val, (string_types, np.string_)) else
-                         "D%d" % i
-                         for i, val in enumerate(header)])
+      header = ",".join([
+          str(val) if isinstance(val, (string_types, np.string_)) else "D%d" % i
+          for i, val in enumerate(header)
+      ])
     f.write('Cell,' + header + '\n')
     # write the data
     for i, j in zip(row, data):
       f.write(i + ',')
       f.write(','.join(['%g' % x for x in j]))
       f.write('\n')
+
 
 def save_data_to_R(outpath, header, row, data):
   if data is None:
@@ -58,7 +63,6 @@ def save_data_to_R(outpath, header, row, data):
   if isinstance(header, string_types):
     header = header.split(',')
   header = np.array(header)
-  df = pd.DataFrame(data=data, index=row, columns=header,
-                    dtype=data.dtype)
+  df = pd.DataFrame(data=data, index=row, columns=header, dtype=data.dtype)
 
   feather.write_dataframe(df, outpath)

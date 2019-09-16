@@ -6,7 +6,7 @@ from tensorflow.python.keras.layers import (Activation, BatchNormalization,
 
 
 class DenseNetwork(Sequential):
-  """
+  """ Multi-layer fully connected neural network
   """
 
   def __init__(self,

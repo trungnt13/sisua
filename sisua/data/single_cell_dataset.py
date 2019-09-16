@@ -3,7 +3,7 @@ from __future__ import absolute_import, division, print_function
 import os
 import warnings
 from copy import deepcopy
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import scanpy as sc
@@ -414,7 +414,8 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     return ds
 
   # ******************** transformation ******************** #
-  def split(self, seed=8, train_percent=0.8):
+  def split(self, seed=8, train_percent=0.8) -> Tuple['SingleCellOMIC',
+                                                      'SingleCellOMIC']:
     """ Spliting the data into training and test dataset
 
     Parameters

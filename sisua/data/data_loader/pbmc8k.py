@@ -1,17 +1,16 @@
-import os
-import shutil
-import pickle
 import base64
+import os
+import pickle
+import shutil
 from io import BytesIO
 
 import numpy as np
 
 from odin.fuel import Dataset
-from odin.utils import ctext, get_file, batching, select_path
+from odin.utils import batching, ctext, get_file, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
-
-from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
-from sisua.data.utils import save_to_dataset, remove_allzeros_columns
+from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 # ===========================================================================
 # Constants
@@ -21,13 +20,15 @@ _URL_LYMPHOID = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWM4a19seS
 _URL_MYELOID = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWM4a19teS5ucHo=\n'
 _URL_PBMC8k = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWM4a19mdWxsLm5weg==\n'
 
+
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_PBMC8k(subset, override=False, filtered_genes=False):
+def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
   subset = str(subset).strip().lower()
   if subset not in ('ly', 'my', 'full'):
-    raise ValueError("subset can only be 'ly'-lymphoid and 'my'-myeloid or 'full'")
+    raise ValueError(
+        "subset can only be 'ly'-lymphoid and 'my'-myeloid or 'full'")
 
   download_path = os.path.join(DOWNLOAD_DIR, "PBMC8k_%s_original" % subset)
   if not os.path.exists(download_path):
@@ -51,7 +52,10 @@ def read_PBMC8k(subset, override=False, filtered_genes=False):
 
       url = str(base64.decodebytes(_URL_PBMC8k), 'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name, origin=url, outdir=download_path)
+      get_file(fname=base_name,
+               origin=url,
+               outdir=download_path,
+               verbose=verbose)
 
       data = np.load(os.path.join(download_path, base_name))
       X = data['X']
@@ -70,15 +74,17 @@ def read_PBMC8k(subset, override=False, filtered_genes=False):
       y = y[:, all_proteins]
       X_col = np.array(X_col)[all_genes]
       y_col = np.array(y_col)[all_proteins]
-      cell_types = np.array(
-          ['ly' if i in ly['X_row'] else 'my'
-           for i in X_row])
+      cell_types = np.array(['ly' if i in ly['X_row'] else 'my' for i in X_row])
     # ====== pbmc ly and my ====== #
     else:
-      url = str(base64.decodebytes(
-          _URL_LYMPHOID if subset == 'ly' else _URL_MYELOID), 'utf-8')
+      url = str(
+          base64.decodebytes(_URL_LYMPHOID if subset == 'ly' else _URL_MYELOID),
+          'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name, origin=url, outdir=download_path)
+      get_file(fname=base_name,
+               origin=url,
+               outdir=download_path,
+               verbose=verbose)
       # ====== extract the data ====== #
       data = np.load(os.path.join(download_path, base_name))
       X_row = data['X_row']
@@ -93,8 +99,9 @@ def read_PBMC8k(subset, override=False, filtered_genes=False):
       cell_types = None
 
     # ====== save everything ====== #
-    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
-                                       print_log=True)
+    X, X_col = remove_allzeros_columns(matrix=X,
+                                       colname=X_col,
+                                       print_log=verbose)
     assert X.shape == (len(X_row), len(X_col))
     assert len(X) == len(y)
     assert y.shape[1] == len(y_col)
@@ -102,8 +109,13 @@ def read_PBMC8k(subset, override=False, filtered_genes=False):
     if cell_types is not None:
       with open(os.path.join(preprocessed_path, 'cell_types'), 'wb') as f:
         pickle.dump(cell_types, f)
-    save_to_dataset(preprocessed_path, X, X_col, y, y_col,
-                    rowname=X_row)
+    save_to_dataset(preprocessed_path,
+                    X,
+                    X_col,
+                    y,
+                    y_col,
+                    rowname=X_row,
+                    print_log=verbose)
 
   # ******************** read preprocessed data ******************** #
   ds = Dataset(preprocessed_path, read_only=True)

@@ -1,26 +1,27 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
-import os
-import shutil
 import base64
+import os
 import pickle
+import shutil
 
 import numpy as np
 
-from odin.utils import get_file
 from odin.fuel import Dataset
-
+from odin.utils import get_file
 from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
-from sisua.data.utils import save_to_dataset, remove_allzeros_columns
+from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 _URL_LYMPHOID = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWNlY2NfbHkubnB6\n'
 _URL_MYELOID = None
 _URL_FULL = None
 
-def read_PBMCeec(subset, override=False, filtered_genes=False):
+
+def read_PBMCeec(subset, override=False, verbose=False, filtered_genes=False):
   subset = str(subset).strip().lower()
   if subset not in ('ly', 'my', 'full'):
-    raise ValueError("subset can only be 'ly'-lymphoid and 'my'-myeloid or 'full'")
+    raise ValueError(
+        "subset can only be 'ly'-lymphoid and 'my'-myeloid or 'full'")
   if subset in ('my', 'full'):
     raise NotImplementedError("No support for subset: %s - PBMCecc" % subset)
 
@@ -44,10 +45,14 @@ def read_PBMCeec(subset, override=False, filtered_genes=False):
       pass
     # ====== ly and my ====== #
     else:
-      url = str(base64.decodebytes(
-          _URL_LYMPHOID if subset == 'ly' else _URL_MYELOID), 'utf-8')
+      url = str(
+          base64.decodebytes(_URL_LYMPHOID if subset == 'ly' else _URL_MYELOID),
+          'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name, origin=url, outdir=download_path)
+      get_file(fname=base_name,
+               origin=url,
+               outdir=download_path,
+               verbose=verbose)
       # ====== extract the data ====== #
       data = np.load(os.path.join(download_path, base_name))
       X_row = data['X_row']
@@ -62,8 +67,9 @@ def read_PBMCeec(subset, override=False, filtered_genes=False):
       cell_types = None
 
     # ====== save everything ====== #
-    X, X_col = remove_allzeros_columns(matrix=X, colname=X_col,
-                                       print_log=True)
+    X, X_col = remove_allzeros_columns(matrix=X,
+                                       colname=X_col,
+                                       print_log=verbose)
     assert X.shape == (len(X_row), len(X_col))
     assert len(X) == len(y)
     assert y.shape[1] == len(y_col)
@@ -72,8 +78,13 @@ def read_PBMCeec(subset, override=False, filtered_genes=False):
       with open(os.path.join(preprocessed_path, 'cell_types'), 'wb') as f:
         pickle.dump(cell_types, f)
 
-    save_to_dataset(preprocessed_path, X, X_col, y, y_col,
-                    rowname=X_row)
+    save_to_dataset(preprocessed_path,
+                    X,
+                    X_col,
+                    y,
+                    y_col,
+                    rowname=X_row,
+                    print_log=verbose)
 
   # ******************** read preprocessed data ******************** #
   ds = Dataset(preprocessed_path, read_only=True)

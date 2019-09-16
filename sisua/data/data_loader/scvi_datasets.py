@@ -1,16 +1,22 @@
-from __future__ import print_function, division, absolute_import
-import os
-import shutil
-import pickle
-import numpy as np
-from odin.fuel import Dataset
-from odin.utils import select_path, ctext, one_hot
-from sisua.data.path import PREPROCESSED_BASE_DIR, DOWNLOAD_DIR
+from __future__ import absolute_import, division, print_function
 
-def _save_data_to_path(preprocessed_path,
-                       X, y, gene_names, label_names, cell_names):
+import os
+import pickle
+import shutil
+
+import numpy as np
+
+from odin.fuel import Dataset
+from odin.utils import ctext, one_hot, select_path
+from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+
+
+
+def _save_data_to_path(preprocessed_path, X, y, gene_names, label_names,
+                       cell_names, verbose):
   # save data
-  print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
+  if verbose:
+    print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
   with open(os.path.join(preprocessed_path, 'X'), 'wb') as f:
     pickle.dump(X, f)
   with open(os.path.join(preprocessed_path, 'y'), 'wb') as f:
@@ -23,13 +29,14 @@ def _save_data_to_path(preprocessed_path,
   with open(os.path.join(preprocessed_path, 'y_col'), 'wb') as f:
     pickle.dump(label_names, f)
 
+
 # ===========================================================================
 # Common dataset
 # ===========================================================================
-def _read_scvi_dataset(name, clazz_name, override):
-  preprocessed_path = select_path(
-      os.path.join(PREPROCESSED_BASE_DIR, '%s_preprocessed' % name),
-      create_new=True)
+def _read_scvi_dataset(name, clazz_name, override, verbose):
+  preprocessed_path = select_path(os.path.join(PREPROCESSED_BASE_DIR,
+                                               '%s_preprocessed' % name),
+                                  create_new=True)
   if override:
     shutil.rmtree(preprocessed_path)
     os.mkdir(preprocessed_path)
@@ -55,7 +62,8 @@ def _read_scvi_dataset(name, clazz_name, override):
       pbmc8kconverter = get_gene_id2name()
       gene_names = np.array([
           pbmc8kconverter[i] if i in pbmc8kconverter else converter[i]
-          for i in gene_names])
+          for i in gene_names
+      ])
     assert len(gene_names) == X.shape[1]
 
     label_names = np.array(gene_dataset.cell_types)
@@ -63,31 +71,41 @@ def _read_scvi_dataset(name, clazz_name, override):
     assert len(label_names) == y.shape[1]
 
     cell_names = np.array(['Cell#%d' % i for i in range(X.shape[0])])
-    _save_data_to_path(preprocessed_path,
-                       X, y, gene_names, label_names, cell_names)
+    _save_data_to_path(preprocessed_path, X, y, gene_names, label_names,
+                       cell_names, verbose)
   # ====== read preprocessed data ====== #
   ds = Dataset(preprocessed_path, read_only=True)
   return ds
 
-def read_Cortex(override):
-  return _read_scvi_dataset(name="CORTEX", clazz_name='CortexDataset',
-                            override=override)
 
-def read_PBMC(override):
-  return _read_scvi_dataset(name="PBMC_scVI", clazz_name='PbmcDataset',
-                            override=override)
+def read_Cortex(override, verbose):
+  return _read_scvi_dataset(name="CORTEX",
+                            clazz_name='CortexDataset',
+                            override=override,
+                            verbose=verbose)
 
-def read_Retina(override):
-  return _read_scvi_dataset(name="RETINA", clazz_name='RetinaDataset',
-                            override=override)
+
+def read_PBMC(override, verbose):
+  return _read_scvi_dataset(name="PBMC_scVI",
+                            clazz_name='PbmcDataset',
+                            override=override,
+                            verbose=verbose)
+
+
+def read_Retina(override, verbose):
+  return _read_scvi_dataset(name="RETINA",
+                            clazz_name='RetinaDataset',
+                            override=override,
+                            verbose=verbose)
+
 
 # ===========================================================================
 # HEMATO dataset
 # ===========================================================================
-def read_Hemato(override):
-  preprocessed_path = select_path(
-      os.path.join(PREPROCESSED_BASE_DIR, 'HEMATO_preprocessed'),
-      create_new=True)
+def read_Hemato(override, verbose):
+  preprocessed_path = select_path(os.path.join(PREPROCESSED_BASE_DIR,
+                                               'HEMATO_preprocessed'),
+                                  create_new=True)
 
   if override:
     shutil.rmtree(preprocessed_path)
@@ -99,7 +117,8 @@ def read_Hemato(override):
     except ImportError:
       raise RuntimeError("Require `scVI` package for HEMATO dataset")
 
-    gene_dataset = HematoDataset(save_path=os.path.join(DOWNLOAD_DIR, 'HEMATO/'))
+    gene_dataset = HematoDataset(
+        save_path=os.path.join(DOWNLOAD_DIR, 'HEMATO/'))
 
     X = gene_dataset._X
     gene_names = np.array(gene_dataset.gene_names)
@@ -111,8 +130,8 @@ def read_Hemato(override):
 
     cell_names = np.array(['Cell#%d' % i for i in range(X.shape[0])])
 
-    _save_data_to_path(preprocessed_path,
-                       X, y, gene_names, label_names, cell_names)
+    _save_data_to_path(preprocessed_path, X, y, gene_names, label_names,
+                       cell_names, verbose)
 
     # create a binary classes for testing
     label_names = np.array(["Erythroblasts", "Granulocytes"])
@@ -122,8 +141,8 @@ def read_Hemato(override):
     y_bin = np.argmax(
         np.hstack((
             gene_dataset.meta.iloc[:, 1].values[:, None],  # Er
-            gene_dataset.meta.iloc[:, 2].values[:, None])), # Gr
-    axis=-1)
+            gene_dataset.meta.iloc[:, 2].values[:, None])),  # Gr
+        axis=-1)
     with open(os.path.join(preprocessed_path, 'labels_name'), 'wb') as f:
       pickle.dump(label_names, f)
     with open(os.path.join(preprocessed_path, 'labels_bin'), 'wb') as f:
