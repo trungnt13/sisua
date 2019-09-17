@@ -13,7 +13,6 @@ from tensorflow.python.keras.layers import Dense, Layer
 from tensorflow_probability.python.distributions import Deterministic, Normal
 
 from odin.bay.distribution_layers import DeterministicLayer, NormalLayer
-from odin.bay.distributions import stack_distributions
 from odin.networks import AdvanceModel, DenseDistribution, Parallel
 # output, latent = ae.predict(x)
 from sisua.analysis import Posterior

@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 import os
+import shutil
 
 import numpy as np
 import tensorflow as tf
@@ -24,14 +25,24 @@ np.random.seed(8)
 # ===========================================================================
 # Configuration
 # ===========================================================================
+# ====== configs ====== #
 epochs = 500
 batch_size = 64
 batch_size_pred = 16
 n_mcmc_prediction = 3
 VDJ_percent = 0.1  # 0.2 = ~10,000 cells
 
-# save path for all trained models
+# ====== flags ====== #
+enable_training = True
+pbmc8k_predict = True
+cellvdj_predict = True
+override = True
+
+# ====== save path for all trained models ====== #
 path = '/tmp/pbmc8k_cellvdj'
+if os.path.exists(path) and override:
+  print("Overriding path: %s" % path)
+  shutil.rmtree(path)
 if not os.path.exists(path):
   os.mkdir(path)
 if os.path.isfile(path):
@@ -57,35 +68,37 @@ all_models = [
 ]
 
 # ====== training all the models ====== #
-kw = dict(epochs=epochs, batch_size=batch_size)
-for m in all_models:
-  print("\nTraining model: %s" % m.id)
-  if m.is_semi_supervised:
-    m.fit([x_train, y_train], **kw)
-  else:
-    m.fit(x_train, **kw)
+if enable_training:
+  kw = dict(epochs=epochs, batch_size=batch_size)
+  for m in all_models:
+    print("\nTraining model: %s" % m.id)
+    if m.is_semi_supervised:
+      m.fit([x_train, y_train], **kw)
+    else:
+      m.fit(x_train, **kw)
 
 # ====== Generate prediction for PBMC8k ====== #
 all_8k_gene = []
 all_8k_prot = []
 all_8k_latents = []
-for m in all_models:
-  outputs, latents = m.predict(x_test,
-                               n_samples=n_mcmc_prediction,
-                               batch_size=batch_size_pred,
-                               apply_corruption=False,
-                               enable_cache=False)
+if pbmc8k_predict:
+  for m in all_models:
+    outputs, latents = m.predict(x_test,
+                                 n_samples=n_mcmc_prediction,
+                                 batch_size=batch_size_pred,
+                                 apply_corruption=False,
+                                 enable_cache=False)
 
-  if isinstance(latents, (tuple, list)):
-    latents = latents[0]
-  all_8k_latents.append(latents)
+    if isinstance(latents, (tuple, list)):
+      latents = latents[0]
+    all_8k_latents.append(latents)
 
-  if m.is_semi_supervised:
-    all_8k_gene.append(outputs[0])
-    all_8k_prot.append(outputs[1])
-  else:
-    all_8k_gene.append(outputs)
-    all_8k_prot.append(None)
+    if m.is_semi_supervised:
+      all_8k_gene.append(outputs[0])
+      all_8k_prot.append(outputs[1])
+    else:
+      all_8k_gene.append(outputs)
+      all_8k_prot.append(None)
 
 # ===========================================================================
 # Make prediction for CellVDJ
@@ -107,23 +120,23 @@ y, _ = y.split(train_percent=VDJ_percent)
 all_vdj_gene = []
 all_vdj_prot = []
 all_vdj_latents = []
-for m in all_models:
-  outputs, latents = m.predict(x,
-                               n_samples=n_mcmc_prediction,
-                               batch_size=batch_size_pred,
-                               apply_corruption=False,
-                               enable_cache=False)
+if cellvdj_predict:
+  for m in all_models:
+    outputs, latents = m.predict(x,
+                                 n_samples=n_mcmc_prediction,
+                                 batch_size=batch_size_pred,
+                                 apply_corruption=False,
+                                 enable_cache=False)
+    if isinstance(latents, (tuple, list)):
+      latents = latents[0]
+    all_vdj_latents.append(latents)
 
-  if isinstance(latents, (tuple, list)):
-    latents = latents[0]
-  all_vdj_latents.append(latents)
-
-  if m.is_semi_supervised:
-    all_vdj_gene.append(outputs[0])
-    all_vdj_prot.append(outputs[1])
-  else:
-    all_vdj_gene.append(outputs)
-    all_vdj_prot.append(None)
+    if m.is_semi_supervised:
+      all_vdj_gene.append(outputs[0])
+      all_vdj_prot.append(outputs[1])
+    else:
+      all_vdj_gene.append(outputs)
+      all_vdj_prot.append(None)
 
 # ===========================================================================
 # Saving everything
@@ -165,23 +178,26 @@ def save_data(arrays, prefix, dataset):
     mean = dist.mean().numpy()  # only save the mean
     if mean.ndim == 3:
       mean = np.mean(mean, axis=0)
-    mmwrite(os.path.join(path, '%s_%s_%s' % (prefix, name, dataset)),
-            mean.astype('float32'))
+    outpath = os.path.join(path, '%s_%s_%s' % (prefix, name, dataset))
+    print("Write data %s %s to path: %s" % (name, mean.shape, outpath))
+    mmwrite(outpath, mean.astype('float32'))
 
 
-save_data(all_8k_gene, prefix='ximpu', dataset='8k')
-save_data(all_8k_prot, prefix='ypred', dataset='8k')
-save_data(all_8k_latents, prefix='z', dataset='8k')
+if pbmc8k_predict:
+  save_data(all_8k_gene, prefix='ximpu', dataset='8k')
+  save_data(all_8k_prot, prefix='ypred', dataset='8k')
+  save_data(all_8k_latents, prefix='z', dataset='8k')
 
-save_data(all_vdj_gene, prefix='ximpu', dataset='vdj')
-save_data(all_vdj_prot, prefix='ypred', dataset='vdj')
-save_data(all_vdj_latents, prefix='z', dataset='vdj')
+if cellvdj_predict:
+  save_data(all_vdj_gene, prefix='ximpu', dataset='vdj')
+  save_data(all_vdj_prot, prefix='ypred', dataset='vdj')
+  save_data(all_vdj_latents, prefix='z', dataset='vdj')
 
 with open(os.path.join(path, "README.txt"), 'w') as f:
   f.write("""
 Dataset:
 8k : the test set of PBMC8k-ly
-vdj : about 5000 cells (10%) of CellVDJ dataset
+vdj : about > 5000 cells (10%) of CellVDJ dataset
 
 Annotation:
 x : original gene expression
