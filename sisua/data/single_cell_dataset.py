@@ -221,7 +221,11 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     return self
 
   def _calculate_library_info(self):
-    total_counts = np.sum(self.X, axis=1, keepdims=True)
+    if sp.sparse.issparse(self.X):
+      total_counts = np.expand_dims(np.sum(self.X, axis=1), axis=-1)
+    else:
+      total_counts = np.sum(self.X, axis=1, keepdims=True)
+
     log_counts, local_mean, local_var = get_library_size(self.X,
                                                          return_log_count=True)
     self._total_counts = total_counts

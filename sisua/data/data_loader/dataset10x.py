@@ -190,10 +190,10 @@ def read_dataset10x_cellexp(name, spec, override=False, verbose=False):
 
     # smaller than 12000 samples, just convert to dense matrix
     # for fast processing
-    if len(X_row) < 12000:
+    if len(X_row) < 60000:
       if verbose:
         print(
-            "Less than 12000 samples, convert all sparse matrices to dense ...")
+            "Less than 60000 samples, convert all sparse matrices to dense ...")
       if issparse(X):
         X = X.todense()
       if issparse(y):

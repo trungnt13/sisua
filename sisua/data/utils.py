@@ -138,7 +138,7 @@ def validating_dataset(path):
     '`y_col` (n_protein,) must be stored at path: %s' % ds.path
     y, y_col = ds['y'], ds['y_col']
   else:
-    y, y_col = None
+    y, y_col = None, None
 
   X, X_col, rowname = \
   ds['X'], ds['X_col'],  ds['X_row']

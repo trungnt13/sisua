@@ -42,6 +42,17 @@ def get_dataset_meta():
       "centenarian":
           read_centenarian,
       # ====== PBMC 10x ====== #
+      "neuron10k":
+          lambda override, verbose: read_dataset10x_cellexp(name=
+                                                            'neuron_10k_v3',
+                                                            spec='filtered',
+                                                            override=override,
+                                                            verbose=verbose),
+      "heart10kv3":
+          lambda override, verbose: read_dataset10x_cellexp(name='heart_10k_v3',
+                                                            spec='filtered',
+                                                            override=override,
+                                                            verbose=verbose),
       "cellvdj":
           lambda override, verbose: read_dataset10x_cellexp(name='cellvdj',
                                                             spec='filtered',
@@ -298,13 +309,16 @@ def get_dataset(dataset_name, override=False,
                      var=var,
                      name=dataset_name)
 
-  var = {'protid': ds['y_col']}
-  if 'y_col_name' in ds:
-    var['protname'] = ds['y_col_name']
-  y = SingleCellOMIC(X=ds['y'],
-                     obs={'cellid': ds['X_row']},
-                     var=var,
-                     name=dataset_name)
+  if 'y' in ds:
+    var = {'protid': ds['y_col']}
+    if 'y_col_name' in ds:
+      var['protname'] = ds['y_col_name']
+    y = SingleCellOMIC(X=ds['y'],
+                       obs={'cellid': ds['X_row']},
+                       var=var,
+                       name=dataset_name)
+  else:
+    y = None
   return x, y
 
 
