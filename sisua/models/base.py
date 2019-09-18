@@ -26,7 +26,7 @@ from tqdm import tqdm
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.bay.distribution_alias import parse_distribution
 from odin.bay.distribution_layers import VectorDeterministicLayer
-from odin.bay.distributions import concat_distributions
+from odin.bay.distributions import concat_distribution
 from odin.networks import AdvanceModel
 from odin.utils import cache_memory, classproperty
 from sisua.data import SingleCellOMIC
@@ -400,23 +400,23 @@ class SingleCellModel(AdvanceModel):
     # multiple outputs
     if isinstance(X[0], (tuple, list)):
       X = tuple([
-          concat_distributions([x[idx]
-                                for x in X], axis=merging_axis)
+          concat_distribution([x[idx]
+                               for x in X], axis=merging_axis)
           for idx in range(len(X[0]))
       ])
     # single output
     else:
-      X = concat_distributions(X, axis=merging_axis)
+      X = concat_distribution(X, axis=merging_axis)
 
     # multiple latents
     if isinstance(Z[0], (tuple, list)):
       Z = tuple([
-          concat_distributions([z[idx]
-                                for z in Z], axis=0)
+          concat_distribution([z[idx]
+                               for z in Z], axis=0)
           for idx in range(len(Z[0]))
       ])
     else:
-      Z = concat_distributions(Z, axis=0)
+      Z = concat_distribution(Z, axis=0)
     # cache and return
     if enable_cache:
       _CACHE_PREDICT[self_id][footprint] = (X, Z)
