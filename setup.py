@@ -4,6 +4,8 @@ import sys
 import pip
 from setuptools import setup, find_packages
 
+_SISUA_VERSION = '0.4.0'
+
 if not (sys.version_info.major == 3 and sys.version_info.minor == 6):
   raise RuntimeError("Sorry, we only support Python=3.6!")
 
@@ -21,11 +23,9 @@ with open('README.rst') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai==0.3.0",
+    "odin-ai==1.1.0",
     "seaborn>=0.9",
     "pandas",
-    "dca==0.2.2",
-    'scvi==0.2.4',
     'scanpy==1.4.4',
 ]
 
@@ -60,6 +60,6 @@ setup(
     packages=find_packages(),
     test_suite='tests',
     url='https://github.com/trungnt13/sisua',
-    version='0.3.0',
+    version=_SISUA_VERSION,
     zip_safe=False,
 )
