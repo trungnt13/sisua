@@ -1,153 +1,180 @@
-# TODO fig bug here
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
 import os
-import time
-import pickle
-from multiprocessing import Pool
 
-# for visualization
-from odin.utils import ctext
-from odin import visual as vs
+import numpy as np
+import seaborn as sns
+import tensorflow as tf
+from matplotlib import pyplot as plt
+from sklearn.decomposition import PCA
 
-# SISUA API
-from sisua.data import get_dataset
-from sisua.analysis import ResultsSheet, Posterior
+from odin.visual import plot_save
+from sisua.analysis import Posterior
+from sisua.data import get_dataset, standardize_protein_name
+from sisua.models import (SCVI, DeepCountAutoencoder, MultitaskVAE,
+                          VariationalAutoEncoder)
 
-# ===========================================================================
-# Configurations
-# ===========================================================================
-SAVE_FOLDER = '/tmp/sisua_basics'
-if not os.path.exists(SAVE_FOLDER):
-  os.mkdir(SAVE_FOLDER)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
-SAVE_DATA_FIGURE_PATH = os.path.join(SAVE_FOLDER, 'data.pdf')
-
-SAVE_FIGURE_PATH = SAVE_FOLDER
-
-SAVE_COMPARE_FIGURE_PATH = os.path.join(SAVE_FOLDER, 'compare_figure.pdf')
-SAVE_COMPARE_SCORES_PATH = os.path.join(SAVE_FOLDER, 'compare_scores.html')
-
-all_models = ('sisua', 'scvi', 'scvinl', 'scvae', 'dca')
-SAVE_MODEL_PATH = {i: os.path.join('/tmp', i)
-                   for i in all_models}
-n_epoch = 1
-# ===========================================================================
-# Loading data
-# ===========================================================================
-dataset, gene_ds, prot_ds = get_dataset('pbmc8k_ly')
-print(dataset)
-eval_ds = dict(
-    X_train=gene_ds.X_train, X_test=gene_ds.X_test, X_col = gene_ds.col_name,
-    y_train=prot_ds.X_train, y_test=prot_ds.X_test, y_col = prot_ds.col_name,
-)
-
-gene_ds.plot_percentile_histogram(n_hist=8, title="Gene")
-prot_ds.plot_percentile_histogram(n_hist=8, title="Protein")
-vs.plot_save(SAVE_DATA_FIGURE_PATH)
-
-# ====== get train and test data ====== #
-# the SingleCellOMIC will ensure data splitting is
-# consistent every time running the experiment
-X_train = gene_ds.get_data(data_type='train')
-y_train = prot_ds.get_data(data_type='train')
-
-n_genes = X_train.shape[1]
-n_prot = y_train.shape[1]
+tf.random.set_seed(8)
+np.random.seed(8)
 
 # ===========================================================================
-# Training different models
+# Loading Data
 # ===========================================================================
-def train_and_return(name):
-  from sisua.inference import (InferenceSCVAE, InferenceDCA,
-                               InferenceSCVI, InferenceSISUA)
-  print("Start training %s ..." % ctext(name, 'lightyellow'))
+x, y = get_dataset('pbmc8kly')
+print(x)
+print(y)
 
-  start_time = time.time()
-  # simple sklearn API style, single process training
-  if name == 'sisua':
-    model = InferenceSISUA(gene_dim=n_genes, prot_dim=n_prot)
-  elif name == 'scvi':
-    model = InferenceSCVI(gene_dim=n_genes)
-  elif name == 'scvinl':
-    model = InferenceSCVI(gene_dim=n_genes, no_library_size=True)
-  elif name == 'scvae':
-    model = InferenceSCVAE(gene_dim=n_genes)
-  elif name == 'dca':
-    model = InferenceDCA(gene_dim=n_genes)
-  else:
-    raise NotImplementedError
-  # All models are the same, fast and easy
-  model.fit(X=X_train,
-            y=y_train if model.is_semi_supervised else None,
-            n_epoch=n_epoch, detail_logging=False)
-  train_time = time.time() - start_time
+x_train, x_test = x.split(train_percent=0.9)
+y_train, y_test = y.split(train_percent=0.9)
+x_train.assert_matching_cells(y_train)
+x_test.assert_matching_cells(y_test)
 
-  # ====== evaluation ====== #
-  start_time = time.time()
-
-  print("Start evaluating %s ..." % ctext(name, 'lightyellow'))
-  pos = Posterior(model, ds=eval_ds)
-
-  # chaining methods for convenience
-  # first evaluate the latents
-  pos.new_figure(nrow=12, ncol=12
-  ).plot_latents_binary_scatter(test=False, ax=221, legend=False
-  ).plot_latents_distance_heatmap(test=False, ax=222, legend=False
-  ).plot_latents_binary_scatter(test=True, ax=223
-  ).plot_latents_distance_heatmap(test=True, ax=224
-  # ).plot_streamline_F1(mode='ovr'
-  # ).plot_streamline_F1(mode='ovo'
-  )
-  # second evaluate the imputation
-  pos.plot_correlation_marker_pairs(
-  # ).plot_correlation_top_pairs(n=8, proteins=['CD4', 'CD8'], top=True
-  # ).plot_correlation_top_pairs(n=8, proteins=['CD4', 'CD8'], top=False
-  )
-
-  # # third the protein prediction
-  # pos.plot_protein_predicted_series(
-  # ).plot_protein_scatter(
-  # )
-  # Finally debugging the training process
-  pos.new_figure().plot_learning_curves()
-  eval_time = time.time() - start_time
-
-  # ====== save the results ====== #
-  save_path = os.path.join(SAVE_FIGURE_PATH, name)
-  if not os.path.exists(save_path):
-    os.mkdir(save_path)
-  pos.save_plots(save_path)
-  # pos.save_scores(SAVE_SCORES_PATH % name)
-
-  # ====== save and return ====== #
-  with open(SAVE_MODEL_PATH[name], 'wb') as f:
-    pickle.dump(model, f)
-  return name, len(pickle.dumps(model)), train_time, eval_time
-
-# ====== training can be done using multiprocessing ====== #
-with Pool(3) as p:
-  for name, size, train_time, eval_time in p.map(
-      train_and_return, all_models):
-    print("Finish %s, model size: %.2f(kB), train: %.2f(sec), test: %.2f(sec)" %
-      (ctext(name, 'lightyellow'), size / 1024, train_time, eval_time))
+n_genes = x.shape[1]
+n_prots = y.shape[1]
 
 # ===========================================================================
-# Comparison multiple systems
+# Create and train unsupervised model
 # ===========================================================================
-all_posteriors = {name: Posterior(pickle.load(open(path, 'rb')),
-                                  ds=eval_ds)
-                  for name, path in SAVE_MODEL_PATH.items()}
-# Create a combined analysis
-analyzer = ResultsSheet(*list(all_posteriors.values()))
+scvae = VariationalAutoEncoder(units=n_genes, xdist='zinb')
+# Be generous with the number of epoch, since we use EarlyStopping,
+# the algorithm will stop when overfitting
+scvae.fit(x_train, epochs=2, verbose=True)
 
-# same strategy, method chaining
-analyzer.plot_correlation_marker_pairs(
-).plot_latents_binary_scatter(pca=False
-).plot_imputation_scatter(color_by_library=False
-).plot_imputation_scatter(color_by_library=True
-).plot_scores(score_type='pearson'
-).plot_scores(score_type='cluster'
-).plot_scores(score_type='classifier'
-).save_plots(SAVE_COMPARE_FIGURE_PATH
-).save_scores(SAVE_COMPARE_SCORES_PATH)
+imputation, latent = scvae.predict(x_test)
+# instead of getting a single imputation, we get a distribution of
+# the imputation, which is much more helpful
+print(imputation)
+print(latent)
+
+pos = Posterior(scvae, gene=x_test, protein=y_test, verbose=True)
+# inspecting training process
+pos.plot_learning_curves(metrics=['loss', 'klqp', 'loss_x', 'nllk_x'],
+                         fig=(12, 4))
+
+# the analysis of marker proteins (if available)
+proteins = ['cd4', 'cd8']
+pos.plot_correlation_marker_pairs(imputed=True, proteins=proteins)
+pos.plot_correlation_top_pairs(n=5, proteins=proteins)
+pos.plot_correlation_bottom_pairs(n=5, proteins=proteins)
+
+# the analysis of latent space
+pos.plot_latents_binary_scatter()
+pos.plot_latents_distance_heatmap()
+pos.plot_latents_protein_pairs()
+pos.plot_classifier_F1(x_train=x_train, y_train=y_train)
+# all figure and analysis could be saved to pdf file for later inspectation
+# pos.save_figures('/tmp/tmp.pdf')
+# ===========================================================================
+# The DeepCountAutoencoder could have deterministic or stochastic loss
+# ===========================================================================
+# deterministic loss
+dca_detr = DeepCountAutoencoder(units=n_genes, xdist='mse')
+dca_detr.fit(x_train, epochs=2, verbose=False)
+imputation_dca1, latent_dca1 = dca_detr.predict(x_test)
+
+# stochastic loss
+dca_stch = DeepCountAutoencoder(units=n_genes, xdist='zinb')
+dca_stch.fit(x_train, epochs=2, verbose=False)
+imputation_dca2, latent_dca2 = dca_stch.predict(x_test)
+
+# both model return a distribution, which is well generalized by the SISUA
+# framework, however, there is important different when you sampling from
+# imputation distribution
+print(imputation_dca1)
+print(imputation_dca2)
+
+# sample and plot the differences
+n = 4
+sample1 = imputation_dca1.sample(n).numpy()
+sample2 = imputation_dca2.sample(n).numpy()
+labels = np.argmax(y_test.probabilistic_embedding().obsm['X_prob'], axis=1)
+labels_name = [standardize_protein_name(i) for i in y_test.var['protid']]
+labels = [labels_name[i] for i in labels]
+
+plt.figure(figsize=(15, 6))
+for fig_id, (model_name, sample) in enumerate([("DCA-deterministic", sample1),
+                                               ("DCA-stochastic", sample2)]):
+  x = []
+  y = []
+  index = []
+  label = []
+  for i, s in enumerate(sample):
+    s = np.squeeze(s, axis=0)
+
+    pca = PCA(n_components=2, random_state=8).fit_transform(s)
+    x.append(pca[:, 0])
+    y.append(pca[:, 1])
+
+    index.append(np.full(shape=(s.shape[0],), fill_value=i + 1, dtype='int32'))
+
+    label.append(labels)
+
+  x = np.concatenate(x, axis=0)
+  y = np.concatenate(y, axis=0)
+  index = np.concatenate(index, axis=0)
+  label = np.concatenate(label, axis=0)
+
+  ax = plt.subplot(1, 2, fig_id + 1)
+  sns.scatterplot(x='x',
+                  y='y',
+                  hue='label',
+                  style='sample',
+                  alpha=0.5,
+                  data={
+                      'x': x,
+                      'y': y,
+                      'label': label,
+                      'sample': index
+                  },
+                  ax=ax)
+  ax.set_title(model_name)
+# ===========================================================================
+# Two latents are returned for scVI
+# ===========================================================================
+# Another parameterization of Negative Binomial distribution must be used
+# for scVI, i.e. Negative Binomial with mean and 'D'ispersion parameters
+scvi = SCVI(units=n_genes, xdist='zinbd')
+scvi.fit(x_train, epochs=2, verbose=False)
+imputation, (latent, log_library) = scvi.predict(x_test)
+print(imputation)
+print(latent)
+print(log_library)
+
+# we check how efficient scVI modeling the library size
+lib = np.sum(x_test.X, axis=1)
+indices = np.argsort(lib)
+
+# Original data is the continuous line
+# Sample from the model is the dashed lines
+plt.figure(figsize=(10, 6))
+ax = plt.gca()
+ax.plot(lib[indices], label="Original Library")
+ax = ax.twinx()
+for i in range(4):
+  # what is get is the log library
+  s = np.exp(log_library.sample().numpy().ravel())
+  ax.plot(s, linestyle='--', label="Sample#%d" % (i + 1))
+ax.legend()
+
+# ===========================================================================
+# Create and train semi-supervised model
+# ===========================================================================
+sisua = MultitaskVAE(units=[n_genes, n_prots], xdist=['zinb', 'nb'])
+# Be generous with the number of epoch, since we use EarlyStopping,
+# the algorithm will stop when overfitting
+sisua.fit([x_train, y_train], epochs=2, verbose=True)
+
+(imputation, protein), latent = sisua.predict(x_test)
+print(imputation)
+print(protein)
+print(latent)
+
+# only SISUA have the ability to make analysis for predicted protein levels
+pos = Posterior(sisua, gene=x_test, protein=y_test, verbose=True)
+pos.plot_protein_predicted_series(proteins=['cd4', 'cd8'])
+pos.plot_protein_scatter(protein_name='CD4')
+pos.plot_protein_scatter(protein_name='CD8')
+pos.save_figures()

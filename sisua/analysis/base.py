@@ -87,11 +87,11 @@ class Posterior(Visualizer):
 
   def __init__(self,
                scm: SingleCellModel,
-               mRNA: SingleCellOMIC,
+               gene: SingleCellOMIC,
                protein: Optional[SingleCellOMIC] = None,
                batch_size=16,
                n_samples=10,
-               verbose=False):
+               verbose=True):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
     self.n_samples = int(n_samples)
@@ -104,9 +104,9 @@ class Posterior(Visualizer):
       "scm must be instance of SingleCellModel but given %s" % str(type(scm))
     self.scm = scm
     # gene expression data
-    assert isinstance(mRNA, SingleCellOMIC), \
-      "mRNA must be instance of SingleCellOMIC"
-    self.mRNA = mRNA
+    assert isinstance(gene, SingleCellOMIC), \
+      "gene must be instance of SingleCellOMIC"
+    self.gene = gene
     # protein level data
     assert isinstance(protein, (SingleCellOMIC, type(None))), \
       "protein must be instance of SingleCellOMIC or None"
@@ -115,22 +115,22 @@ class Posterior(Visualizer):
         protein.probabilistic_embedding()
     self.protein = protein
     # corrupted gene expression
-    mRNA_corrupt = self.mRNA.corrupt(corruption_rate=self.scm.corruption_rate,
+    gene_corrupt = self.gene.corrupt(corruption_rate=self.scm.corruption_rate,
                                      corruption_dist=self.scm.corruption_dist,
                                      inplace=False)
-    self.mRNA_corrupt = mRNA_corrupt
+    self.gene_corrupt = gene_corrupt
     # initialize all the prediction
     self._initialize()
 
   def _initialize(self):
     scm = self.scm
-    mRNA = self.mRNA
-    mRNA_corrupt = self.mRNA_corrupt
+    gene = self.gene
+    gene_corrupt = self.gene_corrupt
     protein = self.protein
 
     # NOTE: for now we haven't find the use of input clean yet
     # save some processing time here
-    # outputs_clean, latents_clean = scm.predict(mRNA,
+    # outputs_clean, latents_clean = scm.predict(gene,
     #                                            apply_corruption=False,
     #                                            n_samples=self.n_samples,
     #                                            batch_size=self.batch_size,
@@ -143,7 +143,7 @@ class Posterior(Visualizer):
     if not isinstance(latents_clean, (tuple, list)):
       latents_clean = [latents_clean]
 
-    outputs_corrupt, latents_corrupt = scm.predict(mRNA_corrupt,
+    outputs_corrupt, latents_corrupt = scm.predict(gene_corrupt,
                                                    apply_corruption=False,
                                                    n_samples=self.n_samples,
                                                    batch_size=self.batch_size,
@@ -162,7 +162,7 @@ class Posterior(Visualizer):
   # ******************** Basic matrices ******************** #
   @property
   def gene_name(self):
-    return self.mRNA.var['geneid'].values
+    return self.gene.var['geneid'].values
 
   @property
   def protein_name(self):
@@ -171,7 +171,7 @@ class Posterior(Visualizer):
 
   @property
   def gene_dim(self):
-    return self.mRNA.shape[1]
+    return self.gene.shape[1]
 
   @property
   def prot_dim(self):
@@ -179,14 +179,14 @@ class Posterior(Visualizer):
 
   @property
   def X(self):
-    """ Original mRNA expression data without artificial corruption """
-    return self.mRNA.X
+    """ Original gene expression data without artificial corruption """
+    return self.gene.X
 
   @property
   def T(self):
-    """ The artificial corrupted mRNA expression similar to the one
+    """ The artificial corrupted gene expression similar to the one
     used for fitting the model """
-    return self.mRNA_corrupt.X
+    return self.gene_corrupt.X
 
   @property
   def W(self):
@@ -233,7 +233,7 @@ class Posterior(Visualizer):
   @property
   def name(self):
     i = self.scm.id
-    ds_name = self.mRNA.name.split('_')[0]
+    ds_name = self.gene.name.split('_')[0]
     n_gene = '%dgene' % self.X.shape[1]
     n_prot = '%dprot' % (self.y_true.shape[1]
                          if self.protein is not None else 0)
@@ -266,10 +266,10 @@ class Posterior(Visualizer):
     return np.all(np.sum(self.y_true, axis=-1) == 1.)
 
   # ******************** helpers ******************** #
-  def _train_data(self, X_train, y_train):
+  def _train_data(self, x_train, y_train):
     """ return outputs, latents, y_train """
-    if not isinstance(X_train, SingleCellOMIC):
-      X_train = SingleCellOMIC(X_train)
+    if not isinstance(x_train, SingleCellOMIC):
+      x_train = SingleCellOMIC(x_train)
     if not isinstance(y_train, SingleCellOMIC):
       y_train = SingleCellOMIC(y_train)
     # get binary values for y_train
@@ -280,10 +280,10 @@ class Posterior(Visualizer):
     else:
       y_train = y_train.X
     # create corrupted data and get the outputs and latents
-    X_train = X_train.corrupt(corruption_rate=self.scm.corruption_rate,
+    x_train = x_train.corrupt(corruption_rate=self.scm.corruption_rate,
                               corruption_dist=self.scm.corruption_dist,
                               inplace=False)
-    outputs, latents = self.scm.predict(X_train,
+    outputs, latents = self.scm.predict(x_train,
                                         n_samples=self.n_samples,
                                         batch_size=self.batch_size,
                                         enable_cache=False,
@@ -357,8 +357,9 @@ class Posterior(Visualizer):
 
   # ******************** Streamline classifier ******************** #
   def plot_classifier_F1(self,
-                         X_train: Optional[SingleCellOMIC] = None,
+                         x_train: Optional[SingleCellOMIC] = None,
                          y_train: Optional[SingleCellOMIC] = None,
+                         plot_train_results=False,
                          mode='ovr'):
     """
     ovr - one vs rest
@@ -367,25 +368,25 @@ class Posterior(Visualizer):
     if mode == 'ovo':
       raise NotImplementedError
 
-    if X_train is not None and y_train is not None:
-      _, latents, y_train = self._train_data(X_train, y_train)
+    if x_train is not None and y_train is not None:
+      _, latents, y_train = self._train_data(x_train, y_train)
       Z_train = latents[0].mean().numpy()
     else:
       Z_train = self.Z
       y_train = self.y_bin
     Z_test, y_test = self.Z, self.y_bin
 
-    (train,
-     test), (fig_train,
-             fig_test) = streamline_classifier(Z_train,
-                                               y_train,
-                                               Z_test,
-                                               y_test,
-                                               train_results=True,
-                                               labels_name=self.protein_name,
-                                               show_plot=True,
-                                               return_figure=True)
-    self.add_figure('streamline_f1_%s' % 'train', fig_train)
+    (train, test), (fig_train, fig_test) = streamline_classifier(
+        Z_train,
+        y_train,
+        Z_test,
+        y_test,
+        plot_train_results=plot_train_results,
+        labels_name=self.protein_name,
+        show_plot=True,
+        return_figure=True)
+    if plot_train_results:
+      self.add_figure('streamline_f1_%s' % 'train', fig_train)
     self.add_figure('streamline_f1_%s' % 'test', fig_test)
     return self
 
@@ -418,24 +419,26 @@ class Posterior(Visualizer):
   # ******************** Correlation analysis ******************** #
   def plot_correlation_top_pairs(self,
                                  data_type='V',
+                                 proteins=None,
                                  n=8,
                                  fontsize=10,
                                  fig=None):
     return self._plot_correlation_ranked_pairs(data_type=data_type,
                                                n=n,
-                                               proteins=None,
+                                               proteins=proteins,
                                                top=True,
                                                fontsize=fontsize,
                                                fig=fig)
 
   def plot_correlation_bottom_pairs(self,
                                     data_type='V',
+                                    proteins=None,
                                     n=8,
                                     fontsize=10,
                                     fig=None):
     return self._plot_correlation_ranked_pairs(data_type=data_type,
                                                n=n,
-                                               proteins=None,
+                                               proteins=proteins,
                                                top=False,
                                                fontsize=fontsize,
                                                fig=fig)
@@ -507,6 +510,9 @@ class Posterior(Visualizer):
 
     # ====== create figure ====== #
     nrow = len(correlations_map)
+    if nrow == 0:  # no matching protein found
+      return self
+
     ncol = n
     if fig is None:
       fig = plot_figure(nrow=3 * nrow, ncol=4 * ncol)
@@ -534,19 +540,37 @@ class Posterior(Visualizer):
         (data_type_name.lower(), 'top' if top else 'bottom', n), fig)
     return self
 
-  def plot_correlation_marker_pairs(self, imputed=True, fontsize=10, fig=None):
+  def plot_correlation_marker_pairs(self,
+                                    imputed=True,
+                                    fontsize=10,
+                                    proteins=None,
+                                    fig=None):
     """ Plotting the correlation series between marker gene and protein,
     The original (uncorrupted data) is used for comparison to the
     imputation.
 
+    Parameters
+    ----------
+    imputed : `bool` (default: True)
+      if `True`, plot the imputed value (in case of zero-inflated distribution),
+      otherwise, plot the reconstructed value
+    proteins : {`None`, `str`, list of `str`} (default=`None`)
+      a list of protein names to be included, if `None`, include all marker
+      proteins.
     """
     from scipy.stats import pearsonr, spearmanr
+    if proteins is not None:
+      proteins = [
+          standardize_protein_name(i).lower() for i in as_tuple(proteins, t=str)
+      ]
+
     if imputed:
       v = self.V
       name = 'Imputed'
     else:
       v = self.W
       name = "Reconstructed"
+
     x, y = self.X, self.y_true
     original_series = correlation_scores(X=x,
                                          y=y,
@@ -558,8 +582,23 @@ class Posterior(Visualizer):
                                         gene_name=self.gene_name,
                                         protein_name=self.protein_name,
                                         return_series=True)
+    # only select given protein
+    if proteins is not None:
+      original_series = {
+          i: j
+          for i, j in original_series.items()
+          if i.split('/')[0].lower() in proteins
+      }
+      imputed_series = {
+          i: j
+          for i, j in original_series.items()
+          if i.split('/')[0].lower() in proteins
+      }
+
     assert len(original_series) == len(imputed_series)
     n_pair = len(imputed_series)
+    if n_pair == 0:
+      return self
 
     if fig is None:
       fig = plt.figure(figsize=(15, 5 * n_pair), constrained_layout=True)
@@ -643,10 +682,10 @@ class Posterior(Visualizer):
                              n_labels=len(self.protein_name))
 
   def scores_classifier(self,
-                        X_train: Optional[SingleCellOMIC] = None,
+                        x_train: Optional[SingleCellOMIC] = None,
                         y_train: Optional[SingleCellOMIC] = None):
-    if X_train is not None and y_train is not None:
-      _, latents, y_train = self._train_data(X_train, y_train)
+    if x_train is not None and y_train is not None:
+      _, latents, y_train = self._train_data(x_train, y_train)
       Z_train = latents[0].mean().numpy()
     else:
       Z_train = self.Z
@@ -660,7 +699,7 @@ class Posterior(Visualizer):
                                  labels_name=self.protein_name,
                                  show_plot=False)
 
-  def save_scores(self, path):
+  def save_scores(self, path=None):
     """ Saving all scores to a txt file """
     text = '==== %s ====\n' % self.name
     for name, scores in (
@@ -676,6 +715,8 @@ class Posterior(Visualizer):
         j = '%+.4f' % j
         j = j.replace('+', ' ')
         text += ' %12s :%s\n' % (i, j)
+    if path is None:
+      return text
     with open(path, 'w') as f:
       f.write(text)
     return self
@@ -696,32 +737,85 @@ class Posterior(Visualizer):
   def valid_history(self):
     return self.scm.valid_history
 
-  def plot_learning_curves(self, metric='loss', ax=None, fig=(8, 8)):
-    ax = to_axis2D(ax, fig)
+  def plot_learning_curves(self,
+                           metrics='loss',
+                           ignore_case=True,
+                           ignore_missing=True,
+                           fig=(8, 8)):
+    """ Plotting the loss or metrics returned during training progress
+
+    Parameters
+    ----------
+    metrics : {`str`, list of `str`} (default='loss')
+      a metric name or list of metric name for plotting
+    ignore_case : `bool` (default=`False`)
+      if `True` turn everything to lower case for matching the metric name.
+    ignore_missing : `bool` (default=`True`)
+      if `True`, ignore the missing metric which not found in the history of
+      trained model.
+    """
+    metrics = as_tuple(metrics, t=str)
+    if ignore_case:
+      metrics = [m.lower() for m in metrics]
+    ax = to_axis2D(None, fig)
+    fig = ax.get_figure()
+
     train_history = self.train_history
     valid_history = self.valid_history
-    if not (metric in train_history and 'val_' + metric in valid_history):
-      raise ValueError(
-          "Cannot find metric with name: %s; all given metrics are: %s" %
-          (metric, ', '.join(train_history.keys())))
-    train = train_history[metric]
-    valid = valid_history['val_' + metric]
 
-    line_styles = dict(linewidth=1.8)
-    point_styles = dict(alpha=0.6, s=80, linewidths=0)
+    _ = []
+    train_keys = {
+        i.lower() if ignore_case else i: i for i in train_history.keys()
+    }
+    valid_keys = {
+        i.lower() if ignore_case else i: i for i in valid_history.keys()
+    }
+    for m in metrics:
+      if not (m in train_keys and 'val_' + m in valid_keys):
+        if not ignore_missing:
+          raise ValueError(
+              "Cannot find metric with name: %s; all given metrics are: %s" %
+              (m, ', '.join(train_keys)))
+      else:
+        _.append(train_keys[m])
 
-    ax.plot(train, label='train', color='blue', linestyle='-', **line_styles)
-    ax.scatter(np.argmin(train), np.min(train), c='blue', **point_styles)
+    metrics = tuple(_)
+    n_metrics = len(metrics)
+    if n_metrics == 0:  # no metric or loss found for plotting
+      return self
 
-    ax.plot(valid, label='valid', color='orange', linestyle='--', **line_styles)
-    ax.scatter(np.argmin(valid), np.min(valid), c='orange', **point_styles)
+    for idx, m in enumerate(metrics):
+      ax = plt.subplot(1, n_metrics, idx + 1)
 
-    ax.set_ylabel("Loss")
-    ax.set_xlabel("#Epoch")
+      train = train_history[m]
+      valid = valid_history['val_' + m]
 
-    ax.legend()
-    ax.set_title('[metric: %s] %s' % (metric, self.name), fontsize=14)
-    self.add_figure('learning_curves_%s' % metric, ax.get_figure())
+      line_styles = dict(linewidth=1.8)
+      point_styles = dict(alpha=0.6, s=80, linewidths=0)
+
+      ax.plot(train, label='train', color='blue', linestyle='-', **line_styles)
+      ax.scatter(np.argmin(train), np.min(train), c='blue', **point_styles)
+
+      ax.plot(valid,
+              label='valid',
+              color='orange',
+              linestyle='--',
+              **line_styles)
+      ax.scatter(np.argmin(valid), np.min(valid), c='orange', **point_styles)
+
+      # ax.set_ylabel("Loss")
+      ax.set_xlabel("#Epoch")
+      # convert all the xticks to integer and remove overlapping
+      xticks = ax.get_xticks()
+      ax.set_xticks(list(set([int(i) for i in xticks])))
+
+      ax.legend()
+      ax.set_title('[metric: %s]' % m, fontsize=14)
+
+    fig.suptitle(self.name)
+    with catch_warnings_ignore(UserWarning):
+      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    self.add_figure('learning_curves_%s' % m, ax.get_figure())
     return self
 
   # ******************** Correlation scores ******************** #
@@ -806,11 +900,15 @@ class Posterior(Visualizer):
   # ******************** Protein analysis ******************** #
   def plot_protein_predicted_series(self,
                                     fontsize=10,
+                                    proteins=None,
                                     y_true_new=None,
                                     y_pred_new=None,
                                     labels_new=None):
     if not self.is_semi_supervised:
       return self
+    if proteins is not None:
+      proteins = [standardize_protein_name(i).lower() for i in proteins]
+
     y_pred, y_true = self.y_pred, self.y_true
     if not self.is_binary_classes:
       y_true = log_norm(y_true, axis=1).numpy()
@@ -821,7 +919,10 @@ class Posterior(Visualizer):
     if y_pred_new is not None:
       y_pred = y_pred_new
 
-    n_protein = len(labels)
+    n_protein = len(labels if proteins is None else
+                    [i for i in labels if i.lower() in proteins])
+    if n_protein == 0:
+      return self
     colors = sns.color_palette(n_colors=2)
 
     #######
@@ -837,13 +938,17 @@ class Posterior(Visualizer):
     #######
     else:
       fig = plt.figure(figsize=(12, n_protein * 4))
-      for cidx, (name, pred, true) in enumerate(zip(labels, y_pred.T,
-                                                    y_true.T)):
+      cidx = 0
+      for (name, pred, true) in zip(labels, y_pred.T, y_true.T):
+        if proteins is not None and name.lower() not in proteins:
+          continue
+        cidx += 1
+
         assert pred.shape == true.shape
         ids = np.argsort(true)
         # TODO: handle different type of normalization for protein levels
         # e.g. if self.ynorm == 'prob':
-        ax = plt.subplot(n_protein, 1, cidx + 1)
+        ax = plt.subplot(n_protein, 1, cidx)
 
         ax.plot(true[ids],
                 linewidth=2,

@@ -123,9 +123,9 @@ def streamline_classifier(Z_train,
                           Z_test,
                           y_test,
                           labels_name,
-                          train_results=False,
                           mode='ovr',
                           title='',
+                          plot_train_results=False,
                           show_plot=True,
                           return_figure=False):
   """ Return a dictionary of scores
@@ -177,14 +177,13 @@ def streamline_classifier(Z_train,
       # ====== return ====== #
       from sklearn.exceptions import UndefinedMetricWarning
       with catch_warnings_ignore(UndefinedMetricWarning):
-        if train_results:
-          results_train = plot_evaluate_classifier(
-              y_pred=classifier.predict(Z_train),
-              y_true=y_train,
-              labels=labels_name,
-              title='[train]' + title,
-              show_plot=show_plot,
-              return_figure=True)
+        results_train = plot_evaluate_classifier(
+            y_pred=classifier.predict(Z_train),
+            y_true=y_train,
+            labels=labels_name,
+            title='[train]' + title,
+            show_plot=show_plot and plot_train_results,
+            return_figure=True)
         results_test = plot_evaluate_classifier(
             y_pred=classifier.predict(Z_test),
             y_true=y_test,
@@ -194,21 +193,19 @@ def streamline_classifier(Z_train,
             return_figure=True)
 
       if show_plot:
-        if train_results:
+        if plot_train_results:
           results_train, fig_train = results_train[0], results_train[1]
+        else:
+          fig_train = None
         results_test, fig_test = results_test[0], results_test[1]
-
+      results_train = OrderedDict(
+          sorted(results_train.items(), key=lambda x: x[0]))
       results_test = OrderedDict(
           sorted(results_test.items(), key=lambda x: x[0]))
-      if train_results:
-        results_train = OrderedDict(
-            sorted(results_train.items(), key=lambda x: x[0]))
-        results = (results_train, results_test)
-      else:
-        results = results_test
+      results = (results_train, results_test)
 
       if show_plot and return_figure:
-        return results, (fig_train, fig_test) if train_results else fig_test
+        return results, (fig_train, fig_test)
       return results
 
 
