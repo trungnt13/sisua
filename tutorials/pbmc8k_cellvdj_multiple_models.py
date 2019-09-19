@@ -180,7 +180,9 @@ def save_data(arrays, prefix, dataset):
       mean = np.mean(mean, axis=0)
     outpath = os.path.join(path, '%s_%s_%s' % (prefix, name, dataset))
     print("Write data %s %s to path: %s" % (name, mean.shape, outpath))
-    mmwrite(outpath, mean.astype('float32'))
+    # everything must be COO sparse matrix
+    mean = coo_matrix(mean, dtype='float32')
+    mmwrite(outpath, mean)
 
 
 if pbmc8k_predict:
