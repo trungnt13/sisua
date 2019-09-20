@@ -78,21 +78,21 @@ def _read_scvi_dataset(name, clazz_name, override, verbose):
   return ds
 
 
-def read_Cortex(override, verbose):
+def read_Cortex(override=False, verbose=False):
   return _read_scvi_dataset(name="CORTEX",
                             clazz_name='CortexDataset',
                             override=override,
                             verbose=verbose)
 
 
-def read_PBMC(override, verbose):
+def read_PBMC(override=False, verbose=False):
   return _read_scvi_dataset(name="PBMC_scVI",
                             clazz_name='PbmcDataset',
                             override=override,
                             verbose=verbose)
 
 
-def read_Retina(override, verbose):
+def read_Retina(override=False, verbose=False):
   return _read_scvi_dataset(name="RETINA",
                             clazz_name='RetinaDataset',
                             override=override,
@@ -102,7 +102,7 @@ def read_Retina(override, verbose):
 # ===========================================================================
 # HEMATO dataset
 # ===========================================================================
-def read_Hemato(override, verbose):
+def read_Hemato(override=False, verbose=False):
   preprocessed_path = select_path(os.path.join(PREPROCESSED_BASE_DIR,
                                                'HEMATO_preprocessed'),
                                   create_new=True)
