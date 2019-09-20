@@ -4,7 +4,7 @@ import sys
 import pip
 from setuptools import setup, find_packages
 
-_SISUA_VERSION = '0.4.2'
+_SISUA_VERSION = '0.4.3'
 
 if not (sys.version_info.major == 3 and sys.version_info.minor == 6):
   raise RuntimeError("Sorry, we only support Python=3.6!")

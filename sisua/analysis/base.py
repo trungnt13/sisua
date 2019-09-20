@@ -312,6 +312,8 @@ class Posterior(Visualizer):
     return self
 
   def plot_latents_distance_heatmap(self, legend=True, ax=None, fig=(8, 8)):
+    """ Heatmap of the distance among latents vector from different classes
+    """
     ax = to_axis2D(ax, fig)
     z, y = self.Z, self.y_true
     title = self.name
@@ -461,6 +463,9 @@ class Posterior(Visualizer):
     proteins : {None, 'marker', list of string}
 
     """
+    ax = to_axis2D(ax=None, fig=fig)
+    fig = ax.get_figure()
+
     correlations = self.get_correlation_all_pairs(data_type=data_type)
     y = self.y_true
     if data_type == 'V':

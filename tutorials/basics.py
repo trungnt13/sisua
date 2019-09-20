@@ -8,7 +8,6 @@ import tensorflow as tf
 from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 
-from odin.visual import plot_save
 from sisua.analysis import Posterior
 from sisua.data import get_dataset, standardize_protein_name
 from sisua.models import (SCVI, DeepCountAutoencoder, MultitaskVAE,
@@ -36,12 +35,30 @@ n_genes = x.shape[1]
 n_prots = y.shape[1]
 
 # ===========================================================================
+# Model configuration and training
+# ===========================================================================
+# The configurations for SISUA paper are:
+# nlayers = 1
+# hdim = 128
+# zdim = 32
+# However, it is recommended to keep this number as is if you run the code
+# on Google Colab
+nlayers = 1
+hdim = 64
+zdim = 16
+epochs = 1
+
+# ===========================================================================
 # Create and train unsupervised model
 # ===========================================================================
-scvae = VariationalAutoEncoder(units=n_genes, xdist='zinb')
+scvae = VariationalAutoEncoder(units=n_genes,
+                               xdist='zinb',
+                               nlayers=nlayers,
+                               hdim=hdim,
+                               zdim=zdim)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
-scvae.fit(x_train, epochs=2, verbose=True)
+scvae.fit(x_train, epochs=epochs, verbose=True)
 
 imputation, latent = scvae.predict(x_test)
 # instead of getting a single imputation, we get a distribution of
@@ -57,8 +74,9 @@ pos.plot_learning_curves(metrics=['loss', 'klqp', 'loss_x', 'nllk_x'],
 # the analysis of marker proteins (if available)
 proteins = ['cd4', 'cd8']
 pos.plot_correlation_marker_pairs(imputed=True, proteins=proteins)
-pos.plot_correlation_top_pairs(n=5, proteins=proteins)
-pos.plot_correlation_bottom_pairs(n=5, proteins=proteins)
+#
+pos.plot_correlation_top_pairs(n=5, proteins=proteins, fig=(16, 6))
+pos.plot_correlation_bottom_pairs(n=5, proteins=proteins, fig=(16, 6))
 
 # the analysis of latent space
 pos.plot_latents_binary_scatter()
@@ -71,13 +89,21 @@ pos.plot_classifier_F1(x_train=x_train, y_train=y_train)
 # The DeepCountAutoencoder could have deterministic or stochastic loss
 # ===========================================================================
 # deterministic loss
-dca_detr = DeepCountAutoencoder(units=n_genes, xdist='mse')
-dca_detr.fit(x_train, epochs=2, verbose=False)
+dca_detr = DeepCountAutoencoder(units=n_genes,
+                                xdist='mse',
+                                nlayers=nlayers,
+                                hdim=hdim,
+                                zdim=zdim)
+dca_detr.fit(x_train, epochs=epochs, verbose=False)
 imputation_dca1, latent_dca1 = dca_detr.predict(x_test)
 
 # stochastic loss
-dca_stch = DeepCountAutoencoder(units=n_genes, xdist='zinb')
-dca_stch.fit(x_train, epochs=2, verbose=False)
+dca_stch = DeepCountAutoencoder(units=n_genes,
+                                xdist='zinb',
+                                nlayers=nlayers,
+                                hdim=hdim,
+                                zdim=zdim)
+dca_stch.fit(x_train, epochs=epochs, verbose=False)
 imputation_dca2, latent_dca2 = dca_stch.predict(x_test)
 
 # both model return a distribution, which is well generalized by the SISUA
@@ -136,8 +162,8 @@ for fig_id, (model_name, sample) in enumerate([("DCA-deterministic", sample1),
 # ===========================================================================
 # Another parameterization of Negative Binomial distribution must be used
 # for scVI, i.e. Negative Binomial with mean and 'D'ispersion parameters
-scvi = SCVI(units=n_genes, xdist='zinbd')
-scvi.fit(x_train, epochs=2, verbose=False)
+scvi = SCVI(units=n_genes, xdist='zinbd', nlayers=nlayers, hdim=hdim, zdim=zdim)
+scvi.fit(x_train, epochs=epochs, verbose=False)
 imputation, (latent, log_library) = scvi.predict(x_test)
 print(imputation)
 print(latent)
@@ -162,10 +188,14 @@ ax.legend()
 # ===========================================================================
 # Create and train semi-supervised model
 # ===========================================================================
-sisua = MultitaskVAE(units=[n_genes, n_prots], xdist=['zinb', 'nb'])
+sisua = MultitaskVAE(units=[n_genes, n_prots],
+                     xdist=['zinb', 'nb'],
+                     nlayers=nlayers,
+                     hdim=hdim,
+                     zdim=zdim)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
-sisua.fit([x_train, y_train], epochs=2, verbose=True)
+sisua.fit([x_train, y_train], epochs=epochs, verbose=True)
 
 (imputation, protein), latent = sisua.predict(x_test)
 print(imputation)
@@ -177,4 +207,4 @@ pos = Posterior(sisua, gene=x_test, protein=y_test, verbose=True)
 pos.plot_protein_predicted_series(proteins=['cd4', 'cd8'])
 pos.plot_protein_scatter(protein_name='CD4')
 pos.plot_protein_scatter(protein_name='CD8')
-pos.save_figures()
+# pos.save_figures()
