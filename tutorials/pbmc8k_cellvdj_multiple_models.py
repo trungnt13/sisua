@@ -43,6 +43,7 @@ path = '/tmp/pbmc8k_cellvdj'
 if os.path.exists(path) and override:
   print("Overriding path: %s" % path)
   shutil.rmtree(path)
+
 if not os.path.exists(path):
   os.mkdir(path)
 if os.path.isfile(path):
