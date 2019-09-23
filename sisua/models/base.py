@@ -103,6 +103,7 @@ _MAXIMUM_CACHE_SIZE = 2
 
 # ===========================================================================
 # SingleCell model
+# TODO: add support for MDN (mixture density network)
 # ===========================================================================
 @add_metaclass(ABCMeta)
 class SingleCellModel(AdvanceModel):

@@ -46,7 +46,7 @@ n_prots = y.shape[1]
 nlayers = 1
 hdim = 64
 zdim = 16
-epochs = 1
+epochs = 500
 
 # ===========================================================================
 # Create and train unsupervised model
