@@ -69,11 +69,12 @@ print(latent)
 pos = Posterior(scvae, gene=x_test, protein=y_test, verbose=True)
 # inspecting training process
 pos.plot_learning_curves(metrics=['loss', 'klqp', 'loss_x', 'nllk_x'],
+                         ignore_missing=True,
                          fig=(12, 4))
 
 # the analysis of marker proteins (if available)
 proteins = ['cd4', 'cd8']
-pos.plot_correlation_marker_pairs(imputed=True, proteins=proteins)
+pos.plot_correlation_marker_pairs(imputed=True, proteins=proteins, fig=(12, 10))
 #
 pos.plot_correlation_top_pairs(n=5, proteins=proteins, fig=(16, 6))
 pos.plot_correlation_bottom_pairs(n=5, proteins=proteins, fig=(16, 6))
@@ -81,8 +82,8 @@ pos.plot_correlation_bottom_pairs(n=5, proteins=proteins, fig=(16, 6))
 # the analysis of latent space
 pos.plot_latents_binary_scatter()
 pos.plot_latents_distance_heatmap()
-pos.plot_latents_protein_pairs()
-pos.plot_classifier_F1(x_train=x_train, y_train=y_train)
+pos.plot_latents_protein_pairs(figsize=(12, 4))
+pos.plot_classifier_F1(x_train=x_train, y_train=y_train, figsize=(12, 12))
 # all figure and analysis could be saved to pdf file for later inspectation
 # pos.save_figures('/tmp/tmp.pdf')
 # ===========================================================================

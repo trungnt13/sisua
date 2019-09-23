@@ -127,8 +127,17 @@ def streamline_classifier(Z_train,
                           title='',
                           plot_train_results=False,
                           show_plot=True,
-                          return_figure=False):
-  """ Return a dictionary of scores
+                          return_figure=False,
+                          figsize=None):
+  """
+  Parameters
+  ----------
+  figsize : (`float`, `float`), optional (default=`None`)
+    width, height in inches
+
+  Return
+  ------
+  Return a dictionary of scores
   {
       F1micro=f1_micro * 100,
       F1macro=f1_macro * 100,
@@ -183,14 +192,16 @@ def streamline_classifier(Z_train,
             labels=labels_name,
             title='[train]' + title,
             show_plot=show_plot and plot_train_results,
-            return_figure=True)
+            return_figure=True,
+            figsize=figsize)
         results_test = plot_evaluate_classifier(
             y_pred=classifier.predict(Z_test),
             y_true=y_test,
             labels=labels_name,
             title='[test]' + title,
             show_plot=show_plot,
-            return_figure=True)
+            return_figure=True,
+            figsize=figsize)
 
       if show_plot:
         if plot_train_results:
@@ -353,7 +364,8 @@ def plot_latents_multiclasses(Z,
                               elev=None,
                               azim=None,
                               use_PCA=False,
-                              show_colorbar=False):
+                              show_colorbar=False,
+                              figsize=None):
   """ Label `y` is multi-classes
   i.e. each samples could belong to multiple classes at once
 
@@ -362,6 +374,8 @@ def plot_latents_multiclasses(Z,
   fig : matplotlib.Figure or None
       if no pair found, return None, otherwise, the
       figure used to plot all protein pairs
+  figsize : (`float`, `float`), optional (default=`None`)
+    width, height in inches
 
   """
   from sisua.data.utils import standardize_protein_name
@@ -415,7 +429,11 @@ def plot_latents_multiclasses(Z,
   # we could handle 5 pairs in 1 row, no problem
   ncol = min(5, n_pairs)
   nrow = int(np.ceil(n_pairs / ncol))
-  fig = plt.figure(figsize=(ncol * 4, nrow * 4))
+
+  if figsize is None:
+    fig = plt.figure(figsize=(ncol * 4, nrow * 4))
+  else:
+    fig = plt.figure(figsize=figsize)
 
   for idx, labels_name in enumerate(pairs):
     ax = plt.subplot(nrow, ncol, idx + 1)
@@ -486,9 +504,10 @@ def plot_latents_binary(Z,
       Z = fast_pca(Z, n_components=2, random_state=87654321)
   # ====== clustering metrics ====== #
   if show_scores:
-    scores = clustering_scores(latent=Z,
-                               labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
-                               n_labels=num_classes)
+    scores = clustering_scores(
+        latent=Z,
+        labels=np.argmax(y, axis=-1) if y.ndim == 2 else y,
+        n_labels=num_classes)
     title += '\n'
     for k, v in sorted(scores.items(), key=lambda x: x[0]):
       title += '%s:%.2f ' % (k, v)

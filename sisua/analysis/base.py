@@ -296,9 +296,16 @@ class Posterior(Visualizer):
     return outputs, latents, y_train
 
   # ******************** Latent space analysis ******************** #
-  def plot_latents_protein_pairs(self, legend=True, pca=False):
+  def plot_latents_protein_pairs(self, legend=True, pca=False, figsize=None):
     """ Using marker gene/protein to select mutual exclusive protein
-    pairs for comparison """
+    pairs for comparison
+
+    Parameters
+    ----------
+    figsize : (`float`, `float`), optional (default=`None`)
+      width, height in inches
+
+    """
     z, y = self.Z, self.y_true
     title = self.name
     fig = plot_latents_multiclasses(Z=z,
@@ -306,7 +313,8 @@ class Posterior(Visualizer):
                                     labels_name=self.protein_name,
                                     title=title,
                                     use_PCA=bool(pca),
-                                    show_colorbar=bool(legend))
+                                    show_colorbar=bool(legend),
+                                    figsize=figsize)
     if fig is not None:
       self.add_figure('latents_protein_pairs', fig)
     return self
@@ -362,10 +370,17 @@ class Posterior(Visualizer):
                          x_train: Optional[SingleCellOMIC] = None,
                          y_train: Optional[SingleCellOMIC] = None,
                          plot_train_results=False,
+                         figsize=None,
                          mode='ovr'):
     """
-    ovr - one vs rest
-    ovo - one vs one
+    Parameters
+    ----------
+    mode : {'ovr', 'ovo'}
+      ovr - one vs rest
+      ovo - one vs one
+    figsize : (`float`, `float`), optional (default=`None`)
+      width, height in inches
+
     """
     if mode == 'ovo':
       raise NotImplementedError
@@ -386,7 +401,9 @@ class Posterior(Visualizer):
         plot_train_results=plot_train_results,
         labels_name=self.protein_name,
         show_plot=True,
-        return_figure=True)
+        return_figure=True,
+        figsize=figsize)
+
     if plot_train_results:
       self.add_figure('streamline_f1_%s' % 'train', fig_train)
     self.add_figure('streamline_f1_%s' % 'test', fig_test)
@@ -607,6 +624,9 @@ class Posterior(Visualizer):
 
     if fig is None:
       fig = plt.figure(figsize=(15, 5 * n_pair), constrained_layout=True)
+    else:
+      ax = to_axis2D(ax=None, fig=fig)
+      fig = ax.get_figure()
     assert isinstance(fig, plt.Figure), \
     "fig must be instance of matplotlib.Figure"
 
@@ -622,7 +642,7 @@ class Posterior(Visualizer):
 
       for j, (name, series) in enumerate(
           (("Original", original_gene), ("Imputed", imputed_gene))):
-        ax = fig.add_subplot(grids[idx, width * j:(width * j + width - 1)])
+        ax = plt.subplot(grids[idx, width * j:(width * j + width - 1)])
 
         # plot the points
         ax.scatter(y, series, s=25, alpha=0.6, linewidths=0)
