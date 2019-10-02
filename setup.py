@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import sys
-import pip
-from setuptools import setup, find_packages
 
-_SISUA_VERSION = '0.4.3'
+import pip
+from setuptools import find_packages, setup
+
+_SISUA_VERSION = '0.4.4'
 
 if not (sys.version_info.major == 3 and sys.version_info.minor == 6):
   raise RuntimeError("Sorry, we only support Python=3.6!")
@@ -23,10 +24,11 @@ with open('README.rst') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai==1.1.1",
+    "odin-ai==1.2.0",
     "seaborn>=0.9",
     "pandas",
-    'scanpy==1.4.4',
+    "scanpy==1.4.4",
+    "hyperopt==0.1.2"
 ]
 
 setup(
@@ -49,8 +51,7 @@ setup(
     description="SemI-SUpervised generative Autoencoder for single cell data",
     long_description=readme,
     long_description_content_type='text/x-rst',
-    scripts=['bin/sisua-train',
-             'bin/sisua-analyze'],
+    scripts=['bin/sisua-train', 'bin/sisua-analyze'],
     setup_requires=['pip>=19.0'],
     install_requires=requirements,
     license="MIT license",

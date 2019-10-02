@@ -5,7 +5,11 @@ channels:
 dependencies:
   - python=3.6
   - pip>=19.0
+  - seaborn>=0.9
+  - pandas
 
   - pip:
     - git+https://github.com/imito/odin-ai@master
     - git+https://github.com/trungnt13/sisua@master
+    - scanpy==1.4.4
+    - hyperopt==0.1.2
