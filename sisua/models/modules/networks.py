@@ -6,8 +6,7 @@ from tensorflow.python.keras.layers import (Activation, BatchNormalization,
 
 
 class DenseNetwork(Sequential):
-  """ Multi-layer fully connected neural network
-  """
+  r""" Multi-layer fully connected neural network """
 
   def __init__(self,
                n_units=128,
@@ -39,8 +38,7 @@ class DenseNetwork(Sequential):
     super(DenseNetwork, self).__init__(layers=layers, name=name)
 
 
-class RecurrentNetwork(Model):
+class ConvolutionNetwork(Sequential):
 
   def __init__(self, name=None):
-    super(RecurrentNetwork, self).__init__(name=name)
-    raise NotImplementedError
+    super().__init__(name=name)

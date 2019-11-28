@@ -9,13 +9,22 @@ from sisua.models.base import SingleCellModel
 from sisua.models.modules import create_encoder_decoder, get_latent
 
 
-class VariationalAutoEncoder(SingleCellModel):
-  """ Variational Auto Encoder """
+class SCALE(SingleCellModel):
+  r""" Tensorflow implementation of SCALE
+
+   Author: Lei Xiong - https://github.com/jsxlei
+   License: https://github.com/jsxlei/SCALE/blob/master/LICENSE
+
+   Reference:
+    Xiong, L., Xu, K., Tian, K., et al., 2019. SCALE method for single-cell
+    ATAC-seq analysis via latent feature extraction. Nature Communications.
+    https://www.nature.com/articles/s41467-019-12630-7
+  """
 
   def __init__(self,
                outputs,
                zdim=32,
-               zdist='diag',
+               zcomponents=8,
                hdim=128,
                nlayers=2,
                xdrop=0.3,
@@ -25,10 +34,11 @@ class VariationalAutoEncoder(SingleCellModel):
                batchnorm=True,
                linear_decoder=False,
                **kwargs):
+    kwargs['analytic'] = False
     super().__init__(outputs, **kwargs)
     self.encoder, self.decoder = create_encoder_decoder(seed=self.seed,
                                                         **locals())
-    self.latent = get_latent(zdist, zdim)
+    self.latent = get_latent('mixdiag', zdim, n_components=int(zcomponents))
 
   def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
     # applying encoding

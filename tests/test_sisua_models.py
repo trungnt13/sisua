@@ -49,35 +49,35 @@ assert np.all(x_test.obs['cellid'] == y_test.obs['cellid'])
 
 #############
 mae = MultitaskAutoEncoder()
-mae.fit([x, y], epochs=8, n_samples=1)
+mae.fit([x, y], epochs=8, n_mcmc=1)
 mae.predict([x, y])
 
 ae = DeepCountAutoencoder(loss='mse')
-ae.fit(x, epochs=8, n_samples=1)
+ae.fit(x, epochs=8, n_mcmc=1)
 ae.predict(x)
 
 ae = DeepCountAutoencoder(loss='poisson')
-ae.fit(x, epochs=8, n_samples=1)
+ae.fit(x, epochs=8, n_mcmc=1)
 ae.predict(x)
 
 ae = DeepCountAutoencoder(loss='nb')
-ae.fit(x, epochs=8, n_samples=1)
+ae.fit(x, epochs=8, n_mcmc=1)
 ae.predict(x)
 
 # DeepCountAutoencoder.fit_hyper(x, max_evals=20, fit_kwargs={'epochs': 2})
 #############
 vld = VariationalAutoEncoder(linear_decoder=True)
-vld.fit(x, epochs=8, n_samples=1)
+vld.fit(x, epochs=8, n_mcmc=1)
 vld.predict(x)
 
 vae = VariationalAutoEncoder()
-vae.fit(x, epochs=8, n_samples=1)
+vae.fit(x, epochs=8, n_mcmc=1)
 vae.predict(x)
 
 mvae = MultitaskVAE()
-mvae.fit([x, y], epochs=8, n_samples=1)
+mvae.fit([x, y], epochs=8, n_mcmc=1)
 mvae.predict([x, y])
 
 mvld = MultitaskVAE(linear_decoder=True)
-mvld.fit([x, y], epochs=8, n_samples=1)
+mvld.fit([x, y], epochs=8, n_mcmc=1)
 mvld.predict([x, y])

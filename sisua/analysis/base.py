@@ -53,7 +53,7 @@ class Posterior(Visualizer):
   ----------
   scm : {`sisua.models.SingleCellModel`, string}
 
-  n_samples : int
+  n_mcmc : int
     number of MCMC samples for evaluation
 
   verbose : bool
@@ -90,11 +90,11 @@ class Posterior(Visualizer):
                gene: SingleCellOMIC,
                protein: Optional[SingleCellOMIC] = None,
                batch_size=16,
-               n_samples=10,
+               n_mcmc=10,
                verbose=True):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
-    self.n_samples = int(n_samples)
+    self.n_mcmc = int(n_mcmc)
     self.batch_size = int(batch_size)
 
     if isinstance(scm, string_types):
@@ -132,7 +132,7 @@ class Posterior(Visualizer):
     # save some processing time here
     # outputs_clean, latents_clean = scm.predict(gene,
     #                                            apply_corruption=False,
-    #                                            n_samples=self.n_samples,
+    #                                            n_mcmc=self.n_mcmc,
     #                                            batch_size=self.batch_size,
     #                                            enable_cache=False,
     #                                            verbose=self.verbose)
@@ -145,7 +145,7 @@ class Posterior(Visualizer):
 
     outputs_corrupt, latents_corrupt = scm.predict(gene_corrupt,
                                                    apply_corruption=False,
-                                                   n_samples=self.n_samples,
+                                                   n_mcmc=self.n_mcmc,
                                                    batch_size=self.batch_size,
                                                    enable_cache=False,
                                                    verbose=self.verbose)
@@ -284,7 +284,7 @@ class Posterior(Visualizer):
                               corruption_dist=self.scm.corruption_dist,
                               inplace=False)
     outputs, latents = self.scm.predict(x_train,
-                                        n_samples=self.n_samples,
+                                        n_mcmc=self.n_mcmc,
                                         batch_size=self.batch_size,
                                         enable_cache=False,
                                         verbose=self.verbose)

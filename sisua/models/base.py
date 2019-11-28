@@ -4,43 +4,35 @@ import inspect
 import multiprocessing as mpi
 import os
 import string
+import types
 from abc import ABCMeta, abstractmethod, abstractproperty
 from collections import OrderedDict, defaultdict
 from functools import partial
 from typing import Iterable, List, Text, Union
 
-import dill
 import numpy as np
 import tensorflow as tf
 from six import add_metaclass, string_types
+from tensorflow import keras
 from tensorflow.python.keras.callbacks import (Callback, CallbackList,
                                                LambdaCallback,
                                                LearningRateScheduler,
                                                ModelCheckpoint)
-from tensorflow.python.keras.engine import base_layer_utils
-from tensorflow.python.keras.layers import Layer
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
+from odin.backend.interpolation import Interpolation
 from odin.backend.keras_callbacks import EarlyStopping
+from odin.bay import kl_divergence
 from odin.bay.distribution_alias import parse_distribution
-from odin.bay.distribution_layers import VectorDeterministicLayer
+from odin.bay.distribution_layers import (CategoricalLayer,
+                                          OneHotCategoricalLayer,
+                                          VectorDeterministicLayer)
 from odin.bay.distributions import concat_distribution
-from odin.networks import AdvanceModel
+from odin.networks import DenseDistribution, MixtureDensityNetwork
 from odin.utils import cache_memory, classproperty
 from sisua.data import SingleCellOMIC
-from sisua.models import latents as sisua_latents
-from sisua.models import networks as sisua_networks
-
-try:
-  from hyperopt import hp, fmin, Trials, STATUS_OK, STATUS_FAIL
-  from hyperopt.tpe import suggest as tpe_suggest
-  from hyperopt.rand import suggest as rand_suggest
-  from hyperopt.pyll import scope
-except ImportError as e:
-  raise RuntimeError(
-      "Cannot import hyperopt for hyper-parameters tuning, error: %s" % str(e))
 
 
 # ===========================================================================
@@ -77,140 +69,165 @@ def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
   return ds
 
 
-def _get_loss_and_distribution(loss):
-  # note: loss function always return keepdims=True
-  loss = str(loss).lower()
-  # ====== simple loss function from tensorflow ====== #
-  if loss in dir(tf.losses):
-    output_layer = VectorDeterministicLayer
-    activation = 'relu'
-    loss_fn = lambda y_true, y_pred: tf.expand_dims(tf.losses.get(str(loss))
-                                                    (y_true, y_pred),
-                                                    axis=-1)
-  # ====== probabilistic loss ====== #
-  else:
-    output_layer = parse_distribution(loss)[0]
-    activation = 'linear'
-    loss_fn = lambda y_true, y_pred: tf.expand_dims(-y_pred.log_prob(y_true),
-                                                    axis=-1)
-  # post-processing the loss function to be more universal
-  return output_layer, activation, loss_fn
-
-
 _CACHE_PREDICT = defaultdict(dict)
 _MAXIMUM_CACHE_SIZE = 2
 
 
 # ===========================================================================
-# SingleCell model
-# TODO: add support for MDN (mixture density network)
+# Input description
 # ===========================================================================
-@add_metaclass(ABCMeta)
-class SingleCellModel(AdvanceModel):
-  """
+class KLinterpolation:
 
-  I/O
-  ---
-  >>> import dill
-  >>> c, w = model.get_config(), model.get_weights()
-  >>> with open('/tmp/model', 'wb') as f:
-  >>>   dill.dump((c, w), f)
-  ...
-  >>> with open('/tmp/model', 'rb') as f:
-  >>>   (c, w) = dill.load(f)
-  >>> model = SingleCellModel.from_config(c)
-  >>> model.set_weights(w)
+  def __init__(self,
+               interpolate=Interpolation.exp10In,
+               min_value=0.,
+               max_value=10.,
+               epoch_warmup=50,
+               analytic=True):
+    self.interpolate = interpolate
+    self.min_value = min_value
+    self.max_value = max_value
+    self.epoch_warmup = epoch_warmup
+    self.analytic = analytic
+
+  def __call__(self, epoch):
+    epoch = tf.maximum(tf.cast(epoch, 'float32'), 1.)
+    alpha = tf.minimum(epoch / self.epoch_warmup, 1.)
+    return self.interpolate(alpha, self.min_value, self.max_value)
 
 
-  Note
-  ----
-  It is recommend to call `tensorflow.random.set_seed` for reproducible results
+class OmicOutput:
+  r""" Placeholder for OMIC data """
+
+  def __init__(self, dim, posterior='nb', name=None, **kwargs):
+    if isinstance(dim, SingleCellOMIC):
+      dim = dim.shape[1]
+    self.name = name
+    self.dim = int(dim)
+    self.posterior = str(posterior)
+    self.kwargs = kwargs
+
+  def __str__(self):
+    return "<OmicOutput dim:%d name:%s posterior:%s>" % \
+      (self.dim, str(self.name), self.posterior)
+
+  def __repr__(self):
+    return self.__str__()
+
+  @property
+  def is_zero_inflated(self):
+    return 'zi' == self.posterior[:2].lower()
+
+  @property
+  def input_shape(self):
+    return (self.dim,)
+
+  def create_posterior(self):
+    # ====== simple loss function from tensorflow ====== #
+    if self.posterior in dir(tf.losses):
+      distribution = VectorDeterministicLayer
+      activation = 'relu'
+      fn = tf.losses.get(str(self.posterior))
+      llk_fn = lambda self, y_true: tf.expand_dims(
+          -fn(y_true, self.posterior.mean()), axis=-1)
+    # ====== probabilistic loss ====== #
+    else:
+      if self.posterior in ('mdn', 'mixdiag', 'mixfull'):
+        distribution = None
+      else:
+        distribution = parse_distribution(self.posterior)[0]
+      activation = 'linear'
+      llk_fn = lambda self, y_true: tf.expand_dims(
+          self.posterior.log_prob(y_true), axis=-1)
+    # ====== create distribution layers ====== #
+    kwargs = dict(self.kwargs)
+    activation = kwargs.pop('activation', activation)
+    if self.posterior in ('mdn', 'mixdiag', 'mixfull'):
+      kwargs.pop('covariance_type', None)
+      layer = MixtureDensityNetwork(self.dim,
+                                    activation=activation,
+                                    covariance_type=dict(
+                                        mdn='none',
+                                        mixdiag='diag',
+                                        mixfull='full')[self.posterior],
+                                    name=self.name,
+                                    **kwargs)
+    else:
+      layer = DenseDistribution(self.dim,
+                                posterior=distribution,
+                                activation=activation,
+                                posterior_kwargs=kwargs,
+                                name=self.name)
+    layer.log_prob = types.MethodType(llk_fn, layer)
+    return layer
+
+
+# ===========================================================================
+# SingleCell model
+# ===========================================================================
+class SingleCellModel(keras.Model):
+  r"""
+  Note:
+    It is recommend to call `tensorflow.random.set_seed` for reproducible
+    results.
   """
 
   def __init__(self,
-               units,
-               xdist,
-               dispersion,
-               parameters,
-               kl_analytic=True,
-               kl_weight=1.,
-               kl_warmup=50,
+               outputs: [OmicOutput, Iterable[OmicOutput]],
+               analytic=True,
+               kl_interpolate=KLinterpolation(),
                log_norm=True,
                seed=8,
                name=None):
-    if name is None:
-      name = self.__class__.__name__
-    parameters.update(locals())
-    super(SingleCellModel, self).__init__(parameters=parameters, name=name)
-    self._epochs = self.add_weight(
+    super(SingleCellModel, self).__init__(name=name)
+    self._epoch = self.add_weight(
         name='epochs',
         shape=(),
         initializer=tf.initializers.Constant(value=0.),
         trainable=False,
         dtype='float32')
     # parameters for ELBO
-    self._kl_analytic = bool(kl_analytic)
-    self._kl_weight = tf.convert_to_tensor(kl_weight, dtype='float32')
-    self._kl_warmup = tf.convert_to_tensor(kl_warmup, dtype='float32')
+    self._analytic = bool(analytic)
+    assert isinstance(kl_interpolate, KLinterpolation)
+    self._kl_interpolate = kl_interpolate
+    # parameters for fitting
     self._seed = int(seed)
     self._is_fitting = False
     self._corruption_rate = 0
     self._corruption_dist = 'binomial'
     self._log_norm = bool(log_norm)
-    # dispersion
-    dispersion = str(dispersion).lower()
-    assert dispersion in ('full', 'share', 'single')
-    self.dispersion = dispersion
-    # parsing the units
-    if not isinstance(units, (tuple, list)):
-      units = [units]
-    units = [int(i) for i in units]
-    self._units = units
-    # parsing the input distribution
-    if not isinstance(xdist, (tuple, list)):
-      xdist = [xdist]
-    # check length of units is matching xdist,
-    # i.e. consistent number of outputs
-    assert len(units) == len(xdist), \
-      "Given %d output(s) in 'units' which differnt from  " % len(units) + \
-        "%d distribution(s) given in 'xdist'" % len(xdist)
-    # check if mRNA output is zero inflated
-    if 'zi' == xdist[0][:2].lower():
-      self._is_zero_inflated = True
-    else:
-      self._is_zero_inflated = False
+    # parsing the inputs
+    outputs = tf.nest.flatten(outputs)
+    assert all(isinstance(i, OmicOutput) for i in outputs), \
+      "Inputs must be instance of OmicOutput but give: %s" % \
+        ','.join([str(type(i)) for i in outputs])
     # check if is semi-supervised
-    self._is_semi_supervised = True if len(xdist) > 1 else False
-    # for initializing the output layers
-    self.xdist = []
-    self.xloss = []
-    self.xactiv = []
-    for i in xdist:
-      fn_dist, activation, fn_loss = _get_loss_and_distribution(i)
-      self.xloss.append(fn_loss)
-      self.xdist.append(fn_dist)
-      self.xactiv.append(activation)
+    self._is_semi_supervised = True if len(outputs) > 1 else False
+    self._omic_outputs = outputs
+    # create all the output distributions
+    # we must set the attribute directly so the Model will manage
+    # the output layer, once all the output layers are initialized
+    # the number of outputs will match `n_outputs`
+    for idx, omic in enumerate(self._omic_outputs):
+      name = 'output_%d' % idx
+      post = omic.create_posterior()
+      setattr(self, name, post)
 
   @property
-  def units(self):
-    """ Always return a list of units for all outputs """
-    return tuple(self._units)
+  def posteriors(self):
+    return [getattr(self, 'output_%d' % i) for i in range(self.n_outputs)]
 
   @property
   def n_outputs(self):
-    return len(self.xdist)
+    return len(self._omic_outputs)
 
   @property
   def log_norm(self):
     return self._log_norm
 
   @property
-  def custom_objects(self):
-    return [sisua_latents, sisua_networks]
-
-  @property
   def is_zero_inflated(self):
-    return self._is_zero_inflated
+    return self._omic_outputs[0].is_zero_inflated
 
   @property
   def is_semi_supervised(self):
@@ -225,58 +242,47 @@ class SingleCellModel(AdvanceModel):
     return self._corruption_dist
 
   @property
-  def epochs(self):
-    return int(self._epochs.numpy())
+  def epoch(self):
+    return int(self._epoch.numpy())
 
   @property
-  def kl_analytic(self):
-    return self._kl_analytic
-
-  @property
-  def kl_warmup(self):
-    return self._kl_warmup
+  def analytic(self):
+    return self._analytic
 
   @property
   def kl_weight(self):
-    warmup_weight = tf.minimum(
-        tf.maximum(self._epochs, 1.) / self.kl_warmup, 1.)
-    return warmup_weight * self._kl_weight
+    return self._kl_interpolate(self._epoch)
 
   @property
   def seed(self):
     return self._seed
 
-  @property
-  def parameters(self):
-    return self._parameters
-
   @abstractmethod
-  def _call(self, x, lmean, lvar, t, y, masks, training=None, n_samples=None):
-    """
-    x : [batch_size, n_genes]
-      input gene-expression matrix (multiple inputs can be given)
-    lmean : [batch_size]
-      mean of library size
-    lvar : [batch_size]
-      variance of library size
-    t : [batch_size, n_genes]
-      target for reconstruction of gene-expression matrix (can be different
-      from `x`)
-    y : [batch_size, n_protein]
-      input for semi-supervised learning
-    masks : [batch_size, 1]
-      binary mask for semi-supervised training
-    training : `bool`
-      flag mark training progress
-    n_samples : {`None`, `int`}
-      number of MCMC samples
+  def _call(self, x, lmean, lvar, t, y, mask, training=None, n_mcmc=None):
+    r"""
+    Arguments:
+      x : [batch_size, n_genes]
+        input gene-expression matrix (multiple inputs can be given)
+      lmean : [batch_size]
+        mean of library size
+      lvar : [batch_size]
+        variance of library size
+      t : [batch_size, n_genes]
+        target for reconstruction of gene-expression matrix (can be different
+        from `x`)
+      y : [batch_size, n_protein]
+        input for semi-supervised learning
+      mask : [batch_size, 1]
+        binary mask for semi-supervised training
+      training : `bool`
+        flag mark training progress
+      n_mcmc : {`None`, `int`}
+        number of MCMC samples
     """
     raise NotImplementedError
 
-  def call(self, inputs, training=None, n_samples=None):
+  def call(self, inputs, training=None, n_mcmc=1):
     # check arguments
-    if n_samples is None:
-      n_samples = 1
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
     else:
@@ -288,65 +294,98 @@ class SingleCellModel(AdvanceModel):
         (inputs[1].shape[1] != 1 or inputs[2].shape[1] != 1)) or \
       len(inputs) < 3:
       if isinstance(inputs[0], SingleCellOMIC):
-        inputs = [inputs[0].X, inputs[0].local_mean, inputs[0].local_var
+        inputs = [inputs[0].numpy(), inputs[0].local_mean, inputs[0].local_var
                  ] + inputs[1:]
       else:
         inputs = [
-            inputs,
-            tf.zeros(shape=(inputs.shape[0], 1)),
-            tf.zeros(shape=(inputs.shape[0], 1))
+            inputs[0],
+            tf.zeros(shape=(inputs[0].shape[0], 1)),
+            tf.zeros(shape=(inputs[0].shape[0], 1))
         ] + inputs[1:]
 
-    # Preprocessing the inputs for semi-supervised training
     x, lmean, lvar = inputs[:3]
+    # Preprocessing the inputs for semi-supervised training
     if self._is_fitting:
       y = list(inputs[3:-1])  # y1, y2, ...
-      masks = [inputs[-1]] * len(y)  # same mask for all y
+      mask = [inputs[-1]] * len(y)  # same mask for all y
+    # Eager call
     else:
-      y = list(inputs[3:])  # y1, y2, ...
-      masks = []
-
-    # check log normalization
+      y = [
+          i.numpy() if isinstance(i, SingleCellOMIC) else i for i in inputs[3:]
+      ]  # y1, y2, ...
+      mask = [1.] * len(y)
+    # log normalization the input
     t = x
     if self.log_norm:
       x = tf.math.log1p(x)
-
     # postprocessing the returns
-    outputs, latents = self._call(x, lmean, lvar, t, y, masks, training,
-                                  n_samples)
-    if not self.is_semi_supervised and isinstance(outputs, (tuple, list)):
-      outputs = outputs[0]
-    return outputs, latents
+    pX, qZ = self._call(x, lmean, lvar, t, y, mask, training, n_mcmc)
+    # Add Log-likelihood, don't forget to apply mask for semi-supervised loss
+    # we have to use the log_prob function from DenseDistribution class, not
+    # the one in pX
+    llk_x = self.posteriors[0].log_prob(t)
+    llk_y = tf.convert_to_tensor(0, dtype=x.dtype)
+    track_llky = []
+    for i_true, m, post in zip(y, mask, self.posteriors[1:]):
+      llk = post.log_prob(i_true) * m
+      track_llky.append((llk, post.name.lower()))
+      llk_y += llk
+    # calculating the KL
+    kl = tf.convert_to_tensor(0, dtype=x.dtype)
+    track_kl = []
+    for idx, qz in enumerate(tf.nest.flatten(qZ)):
+      div = qz.KL_divergence(analytic=self.analytic)
+      if self.analytic:  # add mcmc dimension if used close-form KL
+        div = tf.expand_dims(div, axis=0)
+        if n_mcmc > 1:
+          div = tf.tile(div, [n_mcmc] + [1] * (div.shape.ndims - 1))
+      track_kl.append((div, 'z%s' % qz.event_shape[0]))
+      kl += div
+    # Final ELBO
+    beta = self.kl_weight
+    self.add_metric(beta, 'mean', 'beta')
+    elbo = (llk_x + llk_y) - kl * beta
+    elbo = tf.reduce_logsumexp(elbo, axis=0)
+    loss = tf.reduce_mean(-elbo)
+    if training:
+      self.add_loss(loss)
+    self.add_metric(llk_x, 'mean', "llk_%s" % self.posteriors[0].name)
+    for llk_val, name in track_llky:
+      self.add_metric(llk_val, 'mean', "llk_%s" % name)
+    for kl_val, name in track_kl:
+      self.add_metric(kl_val, 'mean', "klqp_%s" % name)
+    # post-processing the return
+    if not self.is_semi_supervised and isinstance(pX, (tuple, list)):
+      pX = pX[0]
+    return pX, qZ
 
-  def evaluate(self, inputs, n_samples=1, batch_size=128, verbose=1):
+  def evaluate(self, inputs, n_mcmc=1, batch_size=128, verbose=1):
     raise Exception(
         "This method is not support, please use sisua.analysis.Posterior")
 
   def predict(self,
               inputs,
-              n_samples=1,
+              n_mcmc=1,
               batch_size=64,
               apply_corruption=False,
               enable_cache=True,
               verbose=1):
-    """
-    Parameters
-    ----------
-    apply_corruption : `bool` (default=`False`)
-      if `True` applying corruption on data before prediction to match the
-      condition during fitting.
-    enable_cache : `bool` (default=`True`)
-      if `True` store the "footprint" of the input arguments to return the
-      cached outputs
+    r"""
+    Arguments:
+      apply_corruption : `bool` (default=`False`)
+        if `True` applying corruption on data before prediction to match the
+        condition during fitting.
+      enable_cache : `bool` (default=`True`)
+        if `True` store the "footprint" of the input arguments to return the
+        cached outputs
 
-    Return
-    ------
-    X : `Distribution` or tuple of `Distribution`
-      output distribution, multiple distribution is return in case of
-      multiple outputs
-    Z : `Distribution` or tuple of `Distribution`
-      latent distribution, multiple distribution is return in case of
-      multiple latents
+    Return:
+      X : `Distribution` or tuple of `Distribution`
+        output distribution, multiple distribution is return in case of
+        multiple outputs
+      Z : `Distribution` or tuple of `Distribution`
+        latent distribution, multiple distribution is return in case of
+        multiple latents
     """
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
@@ -359,7 +398,7 @@ class SingleCellModel(AdvanceModel):
     # during monitoring of fitting process
     self_id = id(self)
     footprint = ''.join([str(id(i.X)) for i in inputs]) + \
-      str(n_samples) + str(apply_corruption) + str(self.epochs)
+      str(n_mcmc) + str(apply_corruption) + str(self.epoch)
     if enable_cache and footprint in _CACHE_PREDICT[id(self)]:
       return _CACHE_PREDICT[self_id][footprint]
 
@@ -379,9 +418,9 @@ class SingleCellModel(AdvanceModel):
                       shuffle=False,
                       epochs=1)
 
-    kw = {'n_samples': int(n_samples)}
-    if 'n_samples' not in self._call_fn_args:
-      del kw['n_samples']
+    kw = {'n_mcmc': int(n_mcmc)}
+    if 'n_mcmc' not in self._call_fn_args:
+      del kw['n_mcmc']
 
     X, Z = [], []
     for inputs in tqdm(data,
@@ -433,7 +472,7 @@ class SingleCellModel(AdvanceModel):
       optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
       learning_rate=1e-4,
       clipnorm=100,
-      n_samples=1,
+      n_mcmc=1,
       semi_percent=0.8,
       semi_weight=10,
       corruption_rate=0.25,
@@ -444,21 +483,22 @@ class SingleCellModel(AdvanceModel):
       validation_split=0.1,
       validation_freq=1,
       min_delta=0.5,  # for early stopping
+      min_epoch=50,  # for early stopping
       patience=25,  # for early stopping
       allow_rollback=True,  # for early stopping
       terminate_on_nan=True,  # for early stopping
       checkpoint=None,
       shuffle=True,
       verbose=1):
-    """ This fit function is the combination of both
+    r""" This fit function is the combination of both
     `Model.compile` and `Model.fit` """
     # check signature of `call` function
-    # inputs, training=None, n_samples=1
+    # inputs, training=None, n_mcmc=1
     specs = inspect.getfullargspec(self.call)
-    if specs.args != ['self', 'inputs', 'training', 'n_samples']:
+    if specs.args != ['self', 'inputs', 'training', 'n_mcmc']:
       raise ValueError(
           "call method must have following arguments %s; bug given %s" %
-          (['self', 'inputs', 'training', 'n_samples'], specs.args))
+          (['self', 'inputs', 'training', 'n_mcmc'], specs.args))
 
     # check arguments
     assert 0.0 <= semi_percent <= 1.0
@@ -511,7 +551,7 @@ class SingleCellModel(AdvanceModel):
 
     # prepare callback
     update_epoch = LambdaCallback(
-        on_epoch_end=lambda *args, **kwargs: self._epochs.assign_add(1))
+        on_epoch_end=lambda *args, **kwargs: self._epoch.assign_add(1))
     if callbacks is None:
       callbacks = [update_epoch]
     elif isinstance(callbacks, Callback):
@@ -524,6 +564,7 @@ class SingleCellModel(AdvanceModel):
       callbacks.append(
           EarlyStopping(monitor='val_loss',
                         min_delta=min_delta,
+                        min_epoch=min_epoch,
                         patience=patience,
                         verbose=verbose,
                         mode='min',
@@ -560,8 +601,8 @@ class SingleCellModel(AdvanceModel):
 
     # start training loop
     org_fn = self.call
-    if 'n_samples' in self._call_fn_args:
-      self.call = partial(self.call, n_samples=n_samples)
+    if 'n_mcmc' in self._call_fn_args:
+      self.call = partial(self.call, n_mcmc=n_mcmc)
     self._is_fitting = True
 
     # prepare the logging
@@ -594,10 +635,10 @@ class SingleCellModel(AdvanceModel):
                                      validation_data=valid_data,
                                      validation_freq=validation_freq,
                                      callbacks=callbacks,
-                                     initial_epoch=self.epochs,
+                                     initial_epoch=self.epoch,
                                      steps_per_epoch=steps_per_epoch,
                                      validation_steps=validation_steps,
-                                     epochs=self.epochs + epochs,
+                                     epochs=self.epoch + epochs,
                                      verbose=verbose)
     logging.set_verbosity(curr_log)
 
@@ -610,7 +651,7 @@ class SingleCellModel(AdvanceModel):
 
   def __str__(self):
     return "<[%s]%s fitted:%s epoch:%s semi:%s>" % (
-        self.__class__.__name__, self.name, self.epochs > 0, self.epochs,
+        self.__class__.__name__, self.name, self.epoch > 0, self.epoch,
         self.is_semi_supervised)
 
   @classproperty
@@ -621,171 +662,3 @@ class SingleCellModel(AdvanceModel):
       if i.isupper():
         name += i
     return name.lower()
-
-  @classmethod
-  def fit_hyper(
-      cls,
-      inputs: Union[SingleCellOMIC, Iterable[SingleCellOMIC]],
-      params: dict = {
-          'nlayers': scope.int(hp.choice('nlayers', [1, 2, 3, 4])),
-          'hdim': scope.int(hp.choice('hdim', [32, 64, 128, 256, 512])),
-          'zdim': scope.int(hp.choice('zdim', [32, 64, 128, 256, 512])),
-      },
-      loss_name: Text = 'val_loss',
-      max_evals: int = 100,
-      model_kwargs: dict = {},
-      fit_kwargs: dict = {
-          'epochs': 64,
-          'batch_size': 128
-      },
-      algorithm: Text = 'bayes',
-      seed: int = 8,
-      save_path: Text = '/tmp/{model:s}_{data:s}_{loss:s}_{params:s}.hp',
-      override: bool = True,
-      verbose: bool = False):
-    """ Hyper-parameters optimization for given SingleCellModel
-    Parameters
-    ----------
-    model_kwargs : `dict`
-      keyword arguments for model construction
-    fit_kwargs : `dict`
-      keyword arguments for `fit` method
-
-    Example
-    -------
-    >>> callbacks = [
-    >>>     NegativeLogLikelihood(),
-    >>>     ImputationError(),
-    >>>     CorrelationScores(extras=y_train)
-    >>> ]
-    >>> i, j = DeepCountAutoencoder.fit_hyper(x_train,
-    >>>                                       kwargs={'loss': 'zinb'},
-    >>>                                       fit_kwargs={
-    >>>                                           'callbacks': callbacks,
-    >>>                                           'epochs': 64,
-    >>>                                           'batch_size': 128
-    >>>                                       },
-    >>>                                       loss_name='pearson_mean',
-    >>>                                       algorithm='bayes',
-    >>>                                       max_evals=100,
-    >>>                                       seed=8)
-    """
-    if isinstance(loss_name, string_types):
-      loss_name = [loss_name]
-    loss_name = [str(i) for i in loss_name]
-
-    algorithm = str(algorithm.lower())
-    assert algorithm in ('rand', 'grid', 'bayes'), \
-      "Only support 3 algorithm: rand, grid and bayes; given %s" % algorithm
-    # force to turn of keras verbose, it is a big mess to show
-    # 2 progress bar at once
-    fit_kwargs.update({'verbose': 0})
-
-    # remove unncessary params
-    args = inspect.getfullargspec(cls.__init__)
-    params = {i: j for i, j in params.items() if i in args.args}
-
-    # processing save_path
-    fmt = {}
-    for (_, key, spec, _) in string.Formatter().parse(save_path):
-      if spec is not None:
-        fmt[key] = None
-    if isinstance(inputs, (tuple, list)):
-      dsname = inputs[0].name if hasattr(inputs[0],
-                                         'name') else 'x%d' % len(inputs)
-    else:
-      dsname = inputs.name if hasattr(inputs, 'name') else 'x'
-    kw = {
-        'model':
-            cls.id,
-        'data':
-            dsname.replace('_', ''),
-        'loss':
-            '_'.join(
-                [i.replace('val_', '').replace('_', '') for i in loss_name]),
-        'params':
-            '_'.join(sorted([i.replace('_', '') for i in params.keys()]))
-    }
-    kw = {i: j for i, j in kw.items() if i in fmt}
-    save_path = save_path.format(**kw)
-    if os.path.exists(save_path) and not override:
-      raise RuntimeError("Cannot override path: %s" % save_path)
-
-    # ====== verbose mode ====== #
-    if verbose:
-      print(" ======== Tunning: %s ======== " % cls.__name__)
-      print("Save path:", save_path)
-      print("Model config:", model_kwargs)
-      print("Fit config  :", fit_kwargs)
-      print("Loss name   :", loss_name)
-      print("Algorithm   :", algorithm)
-      print("Max evals   :", max_evals)
-      print("Search space:")
-      for i, j in params.items():
-        print("  ", i, j)
-
-    def fit_and_evaluate(*args):
-      kw = args[0]
-      kw.update(model_kwargs)
-      obj = cls(**kw)
-      obj.fit(inputs, **fit_kwargs)
-      history = obj.history.history
-      all_loss = [history[name] for name in loss_name]
-      # get min, variance and status, if NaN set to Inf
-      loss = 0
-      loss_variance = 0
-      is_nan = False
-      for l in all_loss:
-        if np.any(np.isnan(l)):
-          is_nan = True
-          loss = np.inf
-          loss_variance = np.inf
-          break
-        else:  # first epoch doesn't count
-          loss += np.min(l[1:])
-          loss_variance += np.var(l[1:])
-      loss = loss / len(all_loss)
-      loss_variance = loss_variance / len(all_loss)
-      return {
-          'loss': loss,
-          'loss_variance': loss_variance,
-          'history': history,
-          'status': STATUS_FAIL if is_nan else STATUS_OK,
-      }
-
-    def hyperopt_run():
-      trials = Trials()
-      results = fmin(fit_and_evaluate,
-                     space=params,
-                     algo=tpe_suggest if algorithm == 'bayes' else rand_suggest,
-                     max_evals=int(max_evals),
-                     trials=trials,
-                     rstate=np.random.RandomState(seed),
-                     verbose=verbose)
-      history = []
-      for t in trials:
-        r = t['result']
-        history.append({
-            'loss': r['loss'],
-            'loss_variance': r['loss_variance'],
-            'params': {i: j[0] for i, j in t['misc']['vals'].items()},
-            'history': r['history'],
-            'status': r['status'],
-        })
-      with open(save_path, 'wb') as f:
-        print("Saving hyperopt results to: %s" % save_path)
-        dill.dump((results, history), f)
-
-    p = mpi.Process(target=hyperopt_run)
-    p.start()
-    p.join()
-
-    try:
-      with open(save_path, 'rb') as f:
-        results, history = dill.load(f)
-    except FileNotFoundError:
-      results, history = {}, {}
-
-    if verbose:
-      print("Best:", results)
-    return results, history

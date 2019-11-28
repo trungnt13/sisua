@@ -1,18 +1,17 @@
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function
 
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import numpy as np
 
+import scanpy as sc
+from bigarray import MmapArray
+from odin.utils import UnitTimer
 from sisua import data
 from sisua.data import SingleCellOMIC
-from sisua.models.variational_autoencoder import (
-  VariationalAutoencoder)
-import scanpy as sc
+from sisua.models.variational_autoencoder import VariationalAutoencoder
 
-from odin.fuel import MmapArray
-from odin.utils import UnitTimer
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 x, y = data.get_dataset('pbmc8k_ly', override=False)
 
@@ -31,8 +30,8 @@ d = x.normalize(total_counts=True, log1p=True, scale=True, inplace=False)
 x.calculate_qc_metrics()
 # y.probabilistic_embedding()
 
-assert np.all(m.obs.iloc[:, 0].values ==  y.obs.iloc[:, 0].values)
-assert np.all(n.obs.iloc[:, 0].values ==  z.obs.iloc[:, 0].values)
+assert np.all(m.obs.iloc[:, 0].values == y.obs.iloc[:, 0].values)
+assert np.all(n.obs.iloc[:, 0].values == z.obs.iloc[:, 0].values)
 
 print(x)
 print(y)

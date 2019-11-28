@@ -85,7 +85,7 @@ all_8k_latents = []
 if pbmc8k_predict:
   for m in all_models:
     outputs, latents = m.predict(x_test,
-                                 n_samples=n_mcmc_prediction,
+                                 n_mcmc=n_mcmc_prediction,
                                  batch_size=batch_size_pred,
                                  apply_corruption=False,
                                  enable_cache=False)
@@ -124,7 +124,7 @@ all_vdj_latents = []
 if cellvdj_predict:
   for m in all_models:
     outputs, latents = m.predict(x,
-                                 n_samples=n_mcmc_prediction,
+                                 n_mcmc=n_mcmc_prediction,
                                  batch_size=batch_size_pred,
                                  apply_corruption=False,
                                  enable_cache=False)

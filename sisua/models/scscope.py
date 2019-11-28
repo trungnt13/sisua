@@ -55,5 +55,5 @@ class SCScope(SingleCellModel):
                                            activation='linear',
                                            name='Latent')
 
-  def _call(self, x, lmean, lvar, t, y, masks, training=None, n_samples=None):
+  def _call(self, x, lmean, lvar, t, y, masks, training=None, n_mcmc=None):
     exit()

@@ -119,7 +119,7 @@ def run_scoring(args):
                      x_test,
                      y_test,
                      batch_size=16,
-                     n_samples=10,
+                     n_mcmc=10,
                      verbose=False)
     pearson = np.mean(list(post.scores_pearson().values()))
     spearman = np.mean(list(post.scores_spearman().values()))

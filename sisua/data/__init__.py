@@ -285,11 +285,10 @@ def get_dataset_summary(return_html=False):
 
 def get_dataset(dataset_name, override=False,
                 verbose=False) -> Tuple[SingleCellOMIC, SingleCellOMIC]:
-  """ Check `get_dataset_meta` for more information
-
-  Return
-  ------
-  dataset: `odin.fuel.dataset.Dataset` contains original data
+  f""" Check `get_dataset_meta` for more information
+  Return:
+    mRNA data : `SingleCellOMIC`
+    label data: `SingleCellOMIC`. If label data is not availabel, then None
   """
   data_meta = get_dataset_meta()
   # ====== special case: get all dataset ====== #

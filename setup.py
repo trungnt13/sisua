@@ -5,7 +5,7 @@ import sys
 import pip
 from setuptools import find_packages, setup
 
-_SISUA_VERSION = '0.4.4'
+_SISUA_VERSION = '0.4.5'
 
 if not (sys.version_info.major == 3 and sys.version_info.minor == 6):
   raise RuntimeError("Sorry, we only support Python=3.6!")
@@ -24,10 +24,7 @@ with open('README.rst') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai==1.2.0",
-    "seaborn>=0.9",
-    "pandas",
-    "scanpy==1.4.4",
+    "odin-ai==1.2.1", "seaborn>=0.9", "pandas", "scanpy==1.4.4",
     "hyperopt==0.1.2"
 ]
 

@@ -6,15 +6,15 @@ from copy import deepcopy
 from typing import Optional, Tuple
 
 import numpy as np
-import scanpy as sc
 import scipy as sp
 import tensorflow as tf
-from anndata.core.alignedmapping import AxisArrays
 from scipy.sparse import issparse
 from six import string_types
 
+import scanpy as sc
+from anndata.core.alignedmapping import AxisArrays
+from bigarray import MmapArrayWriter
 from odin import visual as vs
-from odin.fuel import MmapArrayWriter
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import (as_tuple, batching, cache_memory, catch_warnings_ignore,
                         ctext)
@@ -200,6 +200,9 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     self._name = str(name)
     self._indices = np.arange(self.X.shape[0], dtype='int32')
     self._calculate_library_info()
+
+  def numpy(self):
+    return self.X
 
   @property
   def X(self):

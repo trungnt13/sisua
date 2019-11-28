@@ -9,7 +9,8 @@ import shutil
 
 import numpy as np
 
-from odin.fuel import Dataset, MmapArrayWriter
+from bigarray import MmapArrayWriter
+from odin.fuel import Dataset
 from odin.stats import describe
 from odin.utils import batching, ctext, get_file, one_hot, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum

@@ -8,7 +8,8 @@ import numpy as np
 from scipy import sparse
 from six import string_types
 
-from odin.fuel import Dataset, MmapArrayWriter
+from bigarray import MmapArrayWriter
+from odin.fuel import Dataset
 from odin.utils import as_tuple, ctext
 
 

@@ -43,18 +43,18 @@ class MultitaskMDN(Model):
                                              covariance_type='none',
                                              name="Protein")
 
-  def call(self, inputs, training=None, n_samples=1):
+  def call(self, inputs, training=None, n_mcmc=1):
     x, y = inputs
 
     e = self.encoder(tf.math.log1p(x))
     qZ = self.latent(e)
-    z = qZ.sample(n_samples)
+    z = qZ.sample(n_mcmc)
     d = self.decoder(z)
 
     pX = self.output_gene(d)
     pY = self.output_prot(d)
 
-    kl = self.latent.kl_divergence(analytic_kl=True)
+    kl = self.latent.kl_divergence(analytic=True)
     llk_x = tf.expand_dims(pX.log_prob(x), axis=-1)
     llk_y = tf.convert_to_tensor(0, dtype=llk_x.dtype)
     llk_y = tf.expand_dims(pY.log_prob(y), axis=-1)
