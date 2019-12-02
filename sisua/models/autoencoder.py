@@ -19,7 +19,7 @@ class DeepCountAutoencoder(SingleCellModel):
 
   def __init__(self,
                outputs,
-               hdim=128,
+               hdim=64,
                zdim=32,
                latent_bias=False,
                nlayers=2,
@@ -29,10 +29,12 @@ class DeepCountAutoencoder(SingleCellModel):
                ddrop=0,
                batchnorm=True,
                linear_decoder=False,
+               pyramid=False,
+               use_conv=False,
                **kwargs):
     super().__init__(outputs, **kwargs)
-    self.encoder, self.decoder = create_encoder_decoder(seed=self.seed,
-                                                        **locals())
+    self.encoder, self.decoder = create_encoder_decoder(
+        input_dim=self.omic_outputs[0].dim, seed=self.seed, **locals())
     self.latent_layer = DenseDeterministic(zdim,
                                            use_bias=bool(latent_bias),
                                            activation='linear',

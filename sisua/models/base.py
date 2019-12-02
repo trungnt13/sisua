@@ -82,22 +82,34 @@ class KLinterpolation:
                interpolate=Interpolation.exp10In,
                min_value=0.,
                max_value=10.,
-               epoch_warmup=50,
-               analytic=True):
+               epoch_warmup=50):
     self.interpolate = interpolate
     self.min_value = min_value
     self.max_value = max_value
     self.epoch_warmup = epoch_warmup
-    self.analytic = analytic
 
   def __call__(self, epoch):
     epoch = tf.maximum(tf.cast(epoch, 'float32'), 1.)
     alpha = tf.minimum(epoch / self.epoch_warmup, 1.)
     return self.interpolate(alpha, self.min_value, self.max_value)
 
+  def __repr__(self):
+    return self.__str__()
+
+  def __str__(self):
+    return "<KL interpolate:%d min:%.2f max:%.2f warmup:%d>" % \
+      (str(self.interpolate), self.min_value, self.max_value, self.epoch_warmup)
+
 
 class OmicOutput:
-  r""" Placeholder for OMIC data """
+  r""" Description of OMIC as output for models
+  Arguments:
+    dim : Integer, number of features (all OMIC data must be 2-D)
+    posterior : alias for posterior distribution
+    name : identity of the OMIC
+    kwargs : keyword arguments for initializing the `DistributionLambda`
+      of the posterior.
+  """
 
   def __init__(self, dim, posterior='nb', name=None, **kwargs):
     if isinstance(dim, SingleCellOMIC):
@@ -108,8 +120,8 @@ class OmicOutput:
     self.kwargs = kwargs
 
   def __str__(self):
-    return "<OmicOutput dim:%d name:%s posterior:%s>" % \
-      (self.dim, str(self.name), self.posterior)
+    return "<OMIC dim:%d name:%s posterior:%s zi:%s>" % \
+      (self.dim, str(self.name), self.posterior, self.is_zero_inflated)
 
   def __repr__(self):
     return self.__str__()
@@ -143,10 +155,10 @@ class OmicOutput:
     kwargs = dict(self.kwargs)
     activation = kwargs.pop('activation', activation)
     if self.posterior in ('mdn', 'mixdiag', 'mixfull'):
-      kwargs.pop('covariance_type', None)
+      kwargs.pop('covariance', None)
       layer = MixtureDensityNetwork(self.dim,
                                     activation=activation,
-                                    covariance_type=dict(
+                                    covariance=dict(
                                         mdn='none',
                                         mixdiag='diag',
                                         mixfull='full')[self.posterior],
@@ -197,7 +209,10 @@ class SingleCellModel(keras.Model):
     self._corruption_dist = 'binomial'
     self._log_norm = bool(log_norm)
     # parsing the inputs
-    outputs = tf.nest.flatten(outputs)
+    outputs = [
+        o if isinstance(o, OmicOutput) else OmicOutput(o)
+        for o in tf.nest.flatten(outputs)
+    ]
     assert all(isinstance(i, OmicOutput) for i in outputs), \
       "Inputs must be instance of OmicOutput but give: %s" % \
         ','.join([str(type(i)) for i in outputs])
@@ -216,6 +231,10 @@ class SingleCellModel(keras.Model):
   @property
   def posteriors(self):
     return [getattr(self, 'output_%d' % i) for i in range(self.n_outputs)]
+
+  @property
+  def omic_outputs(self):
+    return list(self._omic_outputs)
 
   @property
   def n_outputs(self):
@@ -483,7 +502,7 @@ class SingleCellModel(keras.Model):
       validation_split=0.1,
       validation_freq=1,
       min_delta=0.5,  # for early stopping
-      min_epoch=50,  # for early stopping
+      min_epoch=80,  # for early stopping
       patience=25,  # for early stopping
       allow_rollback=True,  # for early stopping
       terminate_on_nan=True,  # for early stopping

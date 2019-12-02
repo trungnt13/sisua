@@ -17,7 +17,7 @@ class NormalDiagLatent(DenseDistribution):
   def __init__(self, units, **kwargs):
     super().__init__(units,
                      posterior=MultivariateNormalLayer,
-                     posterior_kwargs=dict(covariance_type='diag',
+                     posterior_kwargs=dict(covariance='diag',
                                            scale_activation='softplus1'),
                      prior=MultivariateNormalDiag(loc=tf.zeros(shape=units),
                                                   scale_identity_multiplier=1),
@@ -51,7 +51,7 @@ class LogNormalLatent(DenseDistribution):
 class MixtureNormalLatent(MixtureDensityNetwork):
 
   def __init__(self, units, n_components=8, **kwargs):
-    kwargs['covariance_type'] = 'none'
+    kwargs['covariance'] = 'none'
     kwargs['n_components'] = int(n_components)
     super().__init__(units, **kwargs)
     self.set_prior()
@@ -60,7 +60,7 @@ class MixtureNormalLatent(MixtureDensityNetwork):
 class MixtureDiagLatent(MixtureDensityNetwork):
 
   def __init__(self, units, n_components=8, **kwargs):
-    kwargs['covariance_type'] = 'diag'
+    kwargs['covariance'] = 'diag'
     kwargs['n_components'] = int(n_components)
     super().__init__(units, **kwargs)
     self.set_prior()
@@ -69,7 +69,7 @@ class MixtureDiagLatent(MixtureDensityNetwork):
 class MixtureFullLatent(MixtureDensityNetwork):
 
   def __init__(self, units, n_components=8, **kwargs):
-    kwargs['covariance_type'] = 'full'
+    kwargs['covariance'] = 'full'
     kwargs['n_components'] = int(n_components)
     super().__init__(units, **kwargs)
     self.set_prior()

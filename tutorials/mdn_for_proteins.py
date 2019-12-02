@@ -40,7 +40,7 @@ class MultitaskMDN(Model):
         name='Gene')
     self.output_prot = MixtureDensityNetwork(units=units[1],
                                              n_components=n_components,
-                                             covariance_type='none',
+                                             covariance='none',
                                              name="Protein")
 
   def call(self, inputs, training=None, n_mcmc=1):
