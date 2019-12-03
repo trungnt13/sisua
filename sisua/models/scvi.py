@@ -2,15 +2,15 @@ from __future__ import absolute_import, division, print_function
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.keras.layers import Dense
+from tensorflow.python import keras
 from tensorflow_probability.python.distributions import Independent, Normal
 
 from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
                                           ZINegativeBinomialDispLayer)
 from odin.networks import DenseDistribution, Identity
 from sisua.models.base import SingleCellModel
-from sisua.models.modules import (DenseNetwork, create_encoder_decoder,
-                                  get_latent)
+from sisua.models.modules import (ConvNetwork, DenseNetwork,
+                                  create_encoder_decoder, get_latent)
 
 
 class SCVI(SingleCellModel):
@@ -32,7 +32,7 @@ class SCVI(SingleCellModel):
                zdim=32,
                zdist='diag',
                ldist='normal',
-               hdim=128,
+               hdim=64,
                nlayers=2,
                xdrop=0.3,
                edrop=0,
@@ -41,33 +41,45 @@ class SCVI(SingleCellModel):
                clip_library=1e4,
                batchnorm=True,
                linear_decoder=False,
+               pyramid=False,
+               use_conv=False,
+               kernel=5,
+               stride=2,
                **kwargs):
     super(SCVI, self).__init__(outputs=outputs, **kwargs)
     # initialize the autoencoder
-    self.encoder_z, self.decoder = create_encoder_decoder(seed=self.seed,
-                                                          **locals())
-    self.encoder_l = DenseNetwork(n_units=1,
-                                  nlayers=1,
-                                  activation='relu',
-                                  batchnorm=batchnorm,
-                                  input_dropout=xdrop,
-                                  output_dropout=edrop,
-                                  seed=self.seed,
-                                  name='EncoderL')
+    self.encoder_z, self.decoder = create_encoder_decoder(
+        input_dim=self.omic_outputs[0].dim, seed=self.seed, **locals())
+    if use_conv or not use_conv:
+      # TODO: support encoder_l convolution
+      self.encoder_l = DenseNetwork(units=1,
+                                    nlayers=1,
+                                    activation='relu',
+                                    batchnorm=batchnorm,
+                                    input_dropout=xdrop,
+                                    output_dropout=edrop,
+                                    seed=self.seed,
+                                    name='EncoderL')
     self.latent = get_latent(zdist, zdim)
     self.library = get_latent(ldist, 1)
     self.clip_library = float(clip_library)
     n_dims = self.posteriors[0].event_shape[0]
     # mean gamma (logits value, applying softmax later)
-    self.px_scale = Dense(units=n_dims, activation='linear', name="MeanScale")
+    self.px_scale = keras.layers.Dense(units=n_dims,
+                                       activation='linear',
+                                       name="MeanScale")
     # dropout logits value
     if self.is_zero_inflated:
-      self.px_dropout = Dense(n_dims, activation='linear', name="DropoutLogits")
+      self.px_dropout = keras.layers.Dense(n_dims,
+                                           activation='linear',
+                                           name="DropoutLogits")
     else:
       self.px_dropout = Identity(name="DropoutLogits")
     # dispersion (NOTE: while this is different implementation, it ensures the
     # same method as scVI, i.e. cell-gene, gene dispersion)
-    self.px_r = Dense(n_dims, activation='linear', name='Dispersion')
+    self.px_r = keras.layers.Dense(n_dims,
+                                   activation='linear',
+                                   name='Dispersion')
     # since we feed the params directly, the DenseDistribution parameters won't
     # be used
     self.posteriors[0].trainable = False

@@ -24,6 +24,7 @@ from tqdm import tqdm
 
 from odin.backend.interpolation import Interpolation
 from odin.backend.keras_callbacks import EarlyStopping
+from odin.backend.keras_helpers import layer2text
 from odin.bay import kl_divergence
 from odin.bay.distribution_alias import parse_distribution
 from odin.bay.distribution_layers import (CategoricalLayer,
@@ -368,7 +369,7 @@ class SingleCellModel(keras.Model):
     loss = tf.reduce_mean(-elbo)
     if training:
       self.add_loss(loss)
-    self.add_metric(llk_x, 'mean', "llk_%s" % self.posteriors[0].name)
+    self.add_metric(llk_x, 'mean', "llk_%s" % self.posteriors[0].name.lower())
     for llk_val, name in track_llky:
       self.add_metric(llk_val, 'mean', "llk_%s" % name)
     for kl_val, name in track_kl:
@@ -681,3 +682,17 @@ class SingleCellModel(keras.Model):
       if i.isupper():
         name += i
     return name.lower()
+
+  def summary(self):
+    text = ''
+    for key, val in sorted(inspect.getmembers(self)):
+      if isinstance(val, keras.layers.Layer):
+        text += '%s:\n' % key
+        if isinstance(val, keras.Sequential):
+          for l in val.layers:
+            text += '  %s\n' % layer2text(l)
+        elif isinstance(val, DenseDistribution):
+          text += '  %s\n' % str(val)
+        else:
+          text += '  %s\n' % layer2text(val)
+    return text

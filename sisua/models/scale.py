@@ -25,7 +25,7 @@ class SCALE(SingleCellModel):
                outputs,
                zdim=32,
                zcomponents=8,
-               hdim=128,
+               hdim=64,
                nlayers=2,
                xdrop=0.3,
                edrop=0,
@@ -33,11 +33,15 @@ class SCALE(SingleCellModel):
                ddrop=0,
                batchnorm=True,
                linear_decoder=False,
+               pyramid=False,
+               use_conv=False,
+               kernel=5,
+               stride=2,
                **kwargs):
     kwargs['analytic'] = False
     super().__init__(outputs, **kwargs)
-    self.encoder, self.decoder = create_encoder_decoder(seed=self.seed,
-                                                        **locals())
+    self.encoder, self.decoder = create_encoder_decoder(
+        input_dim=self.omic_outputs[0].dim, seed=self.seed, **locals())
     self.latent = get_latent('mixdiag', zdim, n_components=int(zcomponents))
 
   def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):

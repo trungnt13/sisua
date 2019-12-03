@@ -16,7 +16,7 @@ class VariationalAutoEncoder(SingleCellModel):
                outputs,
                zdim=32,
                zdist='diag',
-               hdim=128,
+               hdim=64,
                nlayers=2,
                xdrop=0.3,
                edrop=0,
@@ -24,10 +24,14 @@ class VariationalAutoEncoder(SingleCellModel):
                ddrop=0,
                batchnorm=True,
                linear_decoder=False,
+               pyramid=False,
+               use_conv=False,
+               kernel=5,
+               stride=2,
                **kwargs):
     super().__init__(outputs, **kwargs)
-    self.encoder, self.decoder = create_encoder_decoder(seed=self.seed,
-                                                        **locals())
+    self.encoder, self.decoder = create_encoder_decoder(
+        input_dim=self.omic_outputs[0].dim, seed=self.seed, **locals())
     self.latent = get_latent(zdist, zdim)
 
   def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
@@ -62,6 +66,10 @@ class SISUA(VariationalAutoEncoder):
                ddrop=0,
                batchnorm=True,
                linear_decoder=False,
+               pyramid=False,
+               use_conv=False,
+               kernel=5,
+               stride=2,
                **kwargs):
     rna = OmicOutput(dim=rna_dim,
                      posterior='zinbd' if alternative_nb else 'zinb',
@@ -70,7 +78,23 @@ class SISUA(VariationalAutoEncoder):
                      posterior='onehot' if is_adt_probability else
                      ('nbd' if alternative_nb else 'nb'),
                      name='ADT')
-    super().__init__(outputs=[rna, adt], log_norm=True, **kwargs)
+    super().__init__(outputs=[rna, adt],
+                     log_norm=True,
+                     zdim=zdim,
+                     zdist=zdist,
+                     hdim=hdim,
+                     nlayers=nlayers,
+                     xdrop=xdrop,
+                     edrop=edrop,
+                     zdrop=zdrop,
+                     ddrop=ddrop,
+                     batchnorm=batchnorm,
+                     linear_decoder=linear_decoder,
+                     pyramid=pyramid,
+                     use_conv=use_conv,
+                     kernel=kernel,
+                     stride=stride,
+                     **kwargs)
 
 
 class MISA(VariationalAutoEncoder):
@@ -95,6 +119,10 @@ class MISA(VariationalAutoEncoder):
                ddrop=0,
                batchnorm=True,
                linear_decoder=False,
+               pyramid=False,
+               use_conv=False,
+               kernel=5,
+               stride=2,
                **kwargs):
     rna = OmicOutput(dim=rna_dim,
                      posterior='zinbd' if alternative_nb else 'zinb',
@@ -106,4 +134,20 @@ class MISA(VariationalAutoEncoder):
                      posterior='mixgaussian' if mixture_gaussian else 'mixnb',
                      name='ADT',
                      **kw)
-    super().__init__(outputs=[rna, adt], log_norm=True, **kwargs)
+    super().__init__(outputs=[rna, adt],
+                     log_norm=True,
+                     zdim=zdim,
+                     zdist=zdist,
+                     hdim=hdim,
+                     nlayers=nlayers,
+                     xdrop=xdrop,
+                     edrop=edrop,
+                     zdrop=zdrop,
+                     ddrop=ddrop,
+                     batchnorm=batchnorm,
+                     linear_decoder=linear_decoder,
+                     pyramid=pyramid,
+                     use_conv=use_conv,
+                     kernel=kernel,
+                     stride=stride,
+                     **kwargs)

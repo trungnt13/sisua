@@ -31,6 +31,8 @@ class DeepCountAutoencoder(SingleCellModel):
                linear_decoder=False,
                pyramid=False,
                use_conv=False,
+               kernel=5,
+               stride=2,
                **kwargs):
     super().__init__(outputs, **kwargs)
     self.encoder, self.decoder = create_encoder_decoder(
