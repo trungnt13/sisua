@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 
 from sisua.analysis import Posterior
 from sisua.data import get_dataset, standardize_protein_name
-from sisua.models import (SCVI, DeepCountAutoencoder, MultitaskVAE,
+from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, OmicOutput,
                           VariationalAutoEncoder)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -33,33 +33,30 @@ x_test.assert_matching_cells(y_test)
 
 n_genes = x.shape[1]
 n_prots = y.shape[1]
+gene_omic = OmicOutput(n_genes, posterior='zinb')
+prot_omic = OmicOutput(n_prots, posterior='nb')
 
 # ===========================================================================
 # Model configuration and training
 # ===========================================================================
-# The configurations for SISUA paper are:
-# nlayers = 1
-# hdim = 128
-# zdim = 32
-# However, it is recommended to keep this number as is if you run the code
-# on Google Colab
 nlayers = 1
 hdim = 64
 zdim = 16
-epochs = 500
-
+epochs = 3
+pyramid = True
+analytic = False
 # ===========================================================================
 # Create and train unsupervised model
 # ===========================================================================
-scvae = VariationalAutoEncoder(units=n_genes,
-                               xdist='zinb',
+scvae = VariationalAutoEncoder(outputs=gene_omic,
                                nlayers=nlayers,
                                hdim=hdim,
-                               zdim=zdim)
+                               zdim=zdim,
+                               pyramid=pyramid,
+                               analytic=analytic)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
 scvae.fit(x_train, epochs=epochs, verbose=True)
-
 imputation, latent = scvae.predict(x_test)
 # instead of getting a single imputation, we get a distribution of
 # the imputation, which is much more helpful
@@ -90,29 +87,28 @@ pos.plot_classifier_F1(x_train=x_train, y_train=y_train, figsize=(12, 12))
 # The DeepCountAutoencoder could have deterministic or stochastic loss
 # ===========================================================================
 # deterministic loss
-dca_detr = DeepCountAutoencoder(units=n_genes,
-                                xdist='mse',
+dca_detr = DeepCountAutoencoder(outputs=gene_omic.copy('mse'),
                                 nlayers=nlayers,
                                 hdim=hdim,
-                                zdim=zdim)
+                                zdim=zdim,
+                                pyramid=pyramid,
+                                analytic=analytic)
 dca_detr.fit(x_train, epochs=epochs, verbose=False)
 imputation_dca1, latent_dca1 = dca_detr.predict(x_test)
-
 # stochastic loss
-dca_stch = DeepCountAutoencoder(units=n_genes,
-                                xdist='zinb',
+dca_stch = DeepCountAutoencoder(outputs=gene_omic,
                                 nlayers=nlayers,
                                 hdim=hdim,
-                                zdim=zdim)
+                                zdim=zdim,
+                                pyramid=pyramid,
+                                analytic=analytic)
 dca_stch.fit(x_train, epochs=epochs, verbose=False)
 imputation_dca2, latent_dca2 = dca_stch.predict(x_test)
-
 # both model return a distribution, which is well generalized by the SISUA
 # framework, however, there is important different when you sampling from
 # imputation distribution
 print(imputation_dca1)
 print(imputation_dca2)
-
 # sample and plot the differences
 n = 4
 sample1 = imputation_dca1.sample(n).numpy()
@@ -163,7 +159,12 @@ for fig_id, (model_name, sample) in enumerate([("DCA-deterministic", sample1),
 # ===========================================================================
 # Another parameterization of Negative Binomial distribution must be used
 # for scVI, i.e. Negative Binomial with mean and 'D'ispersion parameters
-scvi = SCVI(units=n_genes, xdist='zinbd', nlayers=nlayers, hdim=hdim, zdim=zdim)
+scvi = SCVI(outputs=gene_omic.copy('zinbd'),
+            nlayers=nlayers,
+            hdim=hdim,
+            zdim=zdim,
+            pyramid=pyramid,
+            analytic=analytic)
 scvi.fit(x_train, epochs=epochs, verbose=False)
 imputation, (latent, log_library) = scvi.predict(x_test)
 print(imputation)
@@ -189,15 +190,16 @@ ax.legend()
 # ===========================================================================
 # Create and train semi-supervised model
 # ===========================================================================
-sisua = MultitaskVAE(units=[n_genes, n_prots],
-                     xdist=['zinb', 'nb'],
-                     nlayers=nlayers,
-                     hdim=hdim,
-                     zdim=zdim)
+sisua = SISUA(rna_dim=n_genes,
+              adt_dim=n_prots,
+              nlayers=nlayers,
+              hdim=hdim,
+              zdim=zdim,
+              pyramid=pyramid,
+              analytic=analytic)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
 sisua.fit([x_train, y_train], epochs=epochs, verbose=True)
-
 (imputation, protein), latent = sisua.predict(x_test)
 print(imputation)
 print(protein)

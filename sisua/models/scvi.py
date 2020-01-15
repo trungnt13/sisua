@@ -1,5 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
+from typing import List
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.python import keras
@@ -7,8 +9,8 @@ from tensorflow_probability.python.distributions import Independent, Normal
 
 from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
                                           ZINegativeBinomialDispLayer)
-from odin.networks import DenseDistribution, Identity
-from sisua.models.base import SingleCellModel
+from odin.bay.layers import DenseDistribution
+from sisua.models.base import OmicOutput, SingleCellModel
 from sisua.models.modules import (ConvNetwork, DenseNetwork,
                                   create_encoder_decoder, get_latent)
 
@@ -28,7 +30,7 @@ class SCVI(SingleCellModel):
   """
 
   def __init__(self,
-               outputs,
+               outputs: List[OmicOutput],
                zdim=32,
                zdist='diag',
                ldist='normal',

@@ -8,8 +8,8 @@ from tensorflow_probability.python.distributions import (Independent, LogNormal,
                                                          Normal)
 
 from odin.bay.distribution_layers import (LogNormalLayer,
-                                          MultivariateNormalLayer, NormalLayer)
-from odin.networks import DenseDistribution, MixtureDensityNetwork
+                                         MultivariateNormalLayer, NormalLayer)
+from odin.bay.layers import DenseDistribution, MixtureDensityNetwork
 
 
 class NormalDiagLatent(DenseDistribution):

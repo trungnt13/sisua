@@ -3,14 +3,14 @@
 # Modification by Trung Ngo 2019
 from __future__ import absolute_import, division, print_function
 
-from typing import Iterable
+from typing import List
 
 import tensorflow as tf
 from tensorflow.python.keras.layers import Dense, Layer
 
-from odin.networks import (DenseDeterministic, DenseDistribution, Identity,
-                           Parallel)
-from sisua.models.base import SingleCellModel
+from odin.bay.layers import DenseDeterministic, DenseDistribution
+from odin.networks import Identity, Parallel
+from sisua.models.base import OmicOutput, SingleCellModel
 from sisua.models.modules import create_encoder_decoder
 
 
@@ -18,7 +18,7 @@ class DeepCountAutoencoder(SingleCellModel):
   r""" Deep Count Autoencoder """
 
   def __init__(self,
-               outputs,
+               outputs: List[OmicOutput],
                hdim=64,
                zdim=32,
                latent_bias=False,

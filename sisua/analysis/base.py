@@ -39,7 +39,7 @@ from sisua.data import SingleCellOMIC, apply_artificial_corruption, get_dataset
 from sisua.data.path import EXP_DIR
 from sisua.data.utils import standardize_protein_name
 from sisua.models.base import SingleCellModel
-from sisua.models.scvi_models import SCVI
+from sisua.models.scvi import SCVI
 from sisua.utils import filtering_experiment_path
 
 
@@ -47,7 +47,7 @@ from sisua.utils import filtering_experiment_path
 # The Posterior
 # ===========================================================================
 class Posterior(Visualizer):
-  """ Posterior
+  r""" Posterior class for analysis
 
   Parameters
   ----------
@@ -128,16 +128,12 @@ class Posterior(Visualizer):
     gene_corrupt = self.gene_corrupt
     protein = self.protein
 
-    # NOTE: for now we haven't find the use of input clean yet
-    # save some processing time here
-    # outputs_clean, latents_clean = scm.predict(gene,
-    #                                            apply_corruption=False,
-    #                                            n_mcmc=self.n_mcmc,
-    #                                            batch_size=self.batch_size,
-    #                                            enable_cache=False,
-    #                                            verbose=self.verbose)
-    outputs_clean = []
-    latents_clean = []
+    outputs_clean, latents_clean = scm.predict(gene,
+                                               apply_corruption=False,
+                                               n_mcmc=self.n_mcmc,
+                                               batch_size=self.batch_size,
+                                               enable_cache=False,
+                                               verbose=self.verbose)
     if not isinstance(outputs_clean, (tuple, list)):
       outputs_clean = [outputs_clean]
     if not isinstance(latents_clean, (tuple, list)):
@@ -767,7 +763,7 @@ class Posterior(Visualizer):
                            ignore_case=True,
                            ignore_missing=True,
                            fig=(8, 8)):
-    """ Plotting the loss or metrics returned during training progress
+    r""" Plotting the loss or metrics returned during training progress
 
     Parameters
     ----------

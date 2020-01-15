@@ -31,7 +31,7 @@ from odin.bay.distribution_layers import (CategoricalLayer,
                                           OneHotCategoricalLayer,
                                           VectorDeterministicLayer)
 from odin.bay.distributions import concat_distribution
-from odin.networks import DenseDistribution, MixtureDensityNetwork
+from odin.bay.layers import DenseDistribution, MixtureDensityNetwork
 from odin.utils import cache_memory, classproperty
 from sisua.data import SingleCellOMIC
 
@@ -78,35 +78,57 @@ _MAXIMUM_CACHE_SIZE = 2
 # Input description
 # ===========================================================================
 class KLinterpolation:
+  r"""
+  Arguments:
+    interpolate : Interpolation.exp10In
+    min_value : 0.
+    max_value : 10.
+    epoch_warmup : 50
+    cyclical : False
+  """
 
   def __init__(self,
                interpolate=Interpolation.exp10In,
-               min_value=0.,
-               max_value=10.,
-               epoch_warmup=50):
+               vmin=0.,
+               vmax=10.,
+               warmup=50,
+               cyclical=False,
+               delay=0):
     self.interpolate = interpolate
-    self.min_value = min_value
-    self.max_value = max_value
-    self.epoch_warmup = epoch_warmup
+    self.vmin = vmin
+    self.vmax = vmax
+    self.warmup = warmup
+    self.cyclical = bool(cyclical)
+    self.delay = delay
 
   def __call__(self, epoch):
     epoch = tf.maximum(tf.cast(epoch, 'float32'), 1.)
-    alpha = tf.minimum(epoch / self.epoch_warmup, 1.)
-    return self.interpolate(alpha, self.min_value, self.max_value)
+    return self.interpolate(epoch,
+                            self.vmin,
+                            self.vmax,
+                            norm=self.warmup,
+                            cyclical=self.cyclical,
+                            delay=self.delay)
 
   def __repr__(self):
     return self.__str__()
 
   def __str__(self):
-    return "<KL interpolate:%d min:%.2f max:%.2f warmup:%d>" % \
-      (str(self.interpolate), self.min_value, self.max_value, self.epoch_warmup)
+    return "<KL interpolate:%d min:%.2f max:%.2f warmup:%d cyclical:%s delay:%d>" % \
+      (str(self.interpolate), self.vmin, self.vmax,
+       self.warmup, self.cyclical, self.delay)
 
 
 class OmicOutput:
   r""" Description of OMIC as output for models
+
   Arguments:
     dim : Integer, number of features (all OMIC data must be 2-D)
-    posterior : alias for posterior distribution
+    posterior : alias for posterior distribution, or loss function named in
+      `tensorflow.losses`, for examples:
+      - 'nb' : negative binomial
+      - 'nbd' : negative binomial using mean-dispersion parameterization
+      - 'mse' : deterministic distribution with mean squared error log_prob
     name : identity of the OMIC
     kwargs : keyword arguments for initializing the `DistributionLambda`
       of the posterior.
@@ -119,6 +141,11 @@ class OmicOutput:
     self.dim = int(dim)
     self.posterior = str(posterior)
     self.kwargs = kwargs
+
+  def copy(self, posterior=None, **kwargs):
+    posterior = self.posterior if posterior is not None else posterior
+    kwargs.update(self.kwargs)
+    return OmicOutput(self.dim, posterior=posterior, name=self.name, **kwargs)
 
   def __str__(self):
     return "<OMIC dim:%d name:%s posterior:%s zi:%s>" % \
@@ -186,9 +213,9 @@ class SingleCellModel(keras.Model):
   """
 
   def __init__(self,
-               outputs: [OmicOutput, Iterable[OmicOutput]],
+               outputs: [OmicOutput, List[OmicOutput]],
+               kl_interpolate: KLinterpolation = KLinterpolation(),
                analytic=True,
-               kl_interpolate=KLinterpolation(),
                log_norm=True,
                seed=8,
                name=None):
@@ -228,6 +255,16 @@ class SingleCellModel(keras.Model):
       name = 'output_%d' % idx
       post = omic.create_posterior()
       setattr(self, name, post)
+
+  @property
+  def train_history(self):
+    hist = self.history.history
+    return {k: v for k, v in hist.items() if 'val_' != k[:4]}
+
+  @property
+  def valid_history(self):
+    hist = self.history.history
+    return {k: v for k, v in hist.items() if 'val_' == k[:4]}
 
   @property
   def posteriors(self):
@@ -301,7 +338,7 @@ class SingleCellModel(keras.Model):
     """
     raise NotImplementedError
 
-  def call(self, inputs, training=None, n_mcmc=1):
+  def prepare_inputs(self, inputs):
     # check arguments
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
@@ -338,6 +375,10 @@ class SingleCellModel(keras.Model):
     t = x
     if self.log_norm:
       x = tf.math.log1p(x)
+    return x, lmean, lvar, t, y, mask
+
+  def call(self, inputs, training=None, n_mcmc=1):
+    x, lmean, lvar, t, y, mask = self.prepare_inputs(inputs)
     # postprocessing the returns
     pX, qZ = self._call(x, lmean, lvar, t, y, mask, training, n_mcmc)
     # Add Log-likelihood, don't forget to apply mask for semi-supervised loss
@@ -355,7 +396,8 @@ class SingleCellModel(keras.Model):
     track_kl = []
     for idx, qz in enumerate(tf.nest.flatten(qZ)):
       div = qz.KL_divergence(analytic=self.analytic)
-      if self.analytic:  # add mcmc dimension if used close-form KL
+      # add mcmc dimension if used close-form KL
+      if tf.rank(div) > 0 and self.analytic:
         div = tf.expand_dims(div, axis=0)
         if n_mcmc > 1:
           div = tf.tile(div, [n_mcmc] + [1] * (div.shape.ndims - 1))
@@ -364,11 +406,14 @@ class SingleCellModel(keras.Model):
     # Final ELBO
     beta = self.kl_weight
     self.add_metric(beta, 'mean', 'beta')
-    elbo = (llk_x + llk_y) - kl * beta
+    elbo = (llk_x + llk_y) - tf.expand_dims(kl, axis=-1) * beta
     elbo = tf.reduce_logsumexp(elbo, axis=0)
     loss = tf.reduce_mean(-elbo)
-    if training:
-      self.add_loss(loss)
+    # add loss and metrics
+    self.add_loss(
+        tf.cond(training,
+                true_fn=lambda: loss,
+                false_fn=lambda: tf.stop_gradient(loss)))
     self.add_metric(llk_x, 'mean', "llk_%s" % self.posteriors[0].name.lower())
     for llk_val, name in track_llky:
       self.add_metric(llk_val, 'mean', "llk_%s" % name)
@@ -438,10 +483,6 @@ class SingleCellModel(keras.Model):
                       shuffle=False,
                       epochs=1)
 
-    kw = {'n_mcmc': int(n_mcmc)}
-    if 'n_mcmc' not in self._call_fn_args:
-      del kw['n_mcmc']
-
     X, Z = [], []
     for inputs in tqdm(data,
                        desc="Predicting",
@@ -449,7 +490,12 @@ class SingleCellModel(keras.Model):
                        disable=not bool(verbose)):
       # the _to_tfddata will return (x, y) tuple for `fit` methods,
       # y=None and we only need x here.
-      x, z = self(inputs[0], training=False, **kw)
+      x, z = self._call(*self.prepare_inputs(inputs[0]),
+                        training=False,
+                        n_mcmc=int(n_mcmc))
+      # post-processing the return
+      if not self.is_semi_supervised and isinstance(x, (tuple, list)):
+        x = x[0]
       X.append(x)
       Z.append(z)
 
@@ -682,6 +728,62 @@ class SingleCellModel(keras.Model):
       if i.isupper():
         name += i
     return name.lower()
+
+  def plot_learning_curves(self):
+    name = [name for name in self.history.history.keys() if 'val_' != name[:4]]
+    from matplotlib import pyplot as plt
+    import seaborn as sns
+    sns.set()
+    n = len(name)
+    plt.figure(figsize=(6, 3 * n))
+    mima = lambda s: (np.argmin(s), np.min(s), np.argmax(s), np.max(s))
+    for i, key in enumerate(name):
+      plt.subplot(n, 1, i + 1)
+      train = self.history.history[key]
+      valid = self.history.history['val_' + key]
+
+      xmin, ymin, xmax, ymax = mima(train)
+      plt.plot(train, label='Train', color='blue')
+      plt.scatter(xmin, ymin, color='blue', s=48, alpha=0.5)
+      plt.scatter(xmax, ymax, color='blue', s=48, alpha=0.5)
+      plt.text(xmin,
+               ymin,
+               'Min:%.2f' % ymin,
+               color='blue',
+               fontsize=8,
+               ha='right',
+               va='top')
+      plt.text(xmax,
+               ymax,
+               'Max:%.2f' % ymax,
+               color='blue',
+               fontsize=8,
+               ha='right',
+               va='top')
+
+      xmin, ymin, xmax, ymax = mima(valid)
+      plt.plot(valid, label='Valid', color='salmon')
+      plt.scatter(xmin, ymin, color='salmon', s=48, alpha=0.5)
+      plt.scatter(xmax, ymax, color='salmon', s=48, alpha=0.5)
+      plt.text(xmin,
+               ymin,
+               'Min:%.2f' % ymin,
+               color='salmon',
+               fontsize=8,
+               va='bottom')
+      plt.text(xmax,
+               ymax,
+               'Max:%.2f' % ymax,
+               color='salmon',
+               fontsize=8,
+               va='bottom')
+
+      plt.legend()
+      plt.title(key)
+    plt.tight_layout()
+
+  def plot_latents(self):
+    pass
 
   def summary(self):
     text = ''

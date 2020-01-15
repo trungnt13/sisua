@@ -421,9 +421,9 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     return ds
 
   # ******************** transformation ******************** #
-  def split(self, seed=8, train_percent=0.8) -> Tuple['SingleCellOMIC',
+  def split(self, train_percent=0.8, seed=8) -> Tuple['SingleCellOMIC',
                                                       'SingleCellOMIC']:
-    """ Spliting the data into training and test dataset
+    r""" Spliting the data into training and test dataset
 
     Parameters
     ----------

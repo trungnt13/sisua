@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 import inspect
+from typing import List
 
 import tensorflow as tf
 
@@ -13,7 +14,7 @@ class VariationalAutoEncoder(SingleCellModel):
   r""" Variational Auto Encoder """
 
   def __init__(self,
-               outputs,
+               outputs: List[OmicOutput],
                zdim=32,
                zdist='diag',
                hdim=64,
@@ -47,8 +48,14 @@ class VariationalAutoEncoder(SingleCellModel):
 
 class SISUA(VariationalAutoEncoder):
   r""" SemI-SUpervised Autoencoder
-  rna : mRNA-sequence
-  adt : antibody-derived-tag
+
+  Arguments:
+    rna_dim : Integer, number of input dimension for scRNA-seq.
+    adt_dim : Integer, number of input dimension for ADT.
+    is_adt_probability : Boolean, if True, use `Bernoulli` for modeling the ADT,
+      otherwise, use `NegativeBinomial`.
+    alternative_nb : Boolean, if True, use mean-dispersion parameterization
+      for negative binomial distribution.
   """
 
   def __init__(self,
@@ -100,8 +107,13 @@ class SISUA(VariationalAutoEncoder):
 class MISA(VariationalAutoEncoder):
   r""" MIxture Semi-supervised Autoencoder
 
-  rna : mRNA-sequence
-  adt : antibody-derived-tag
+  Arguments:
+    rna_dim : Integer, number of input dimension for scRNA-seq.
+    adt_dim : Integer, number of input dimension for ADT.
+    mixture_gaussian : Boolean, if True, use GMM for modeling the ADT,
+      otherwise, use mixture of `NegativeBinomial`.
+    alternative_nb : Boolean, if True, use mean-dispersion parameterization
+      for negative binomial distribution.
   """
 
   def __init__(self,

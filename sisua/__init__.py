@@ -7,4 +7,3 @@ def set_verbose(is_verbose_on):
 
 def is_verbose():
   return bool(_VERBOSE)
-
