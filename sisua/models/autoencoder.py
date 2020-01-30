@@ -6,45 +6,31 @@ from __future__ import absolute_import, division, print_function
 from typing import List
 
 import tensorflow as tf
-from tensorflow.python.keras.layers import Dense, Layer
+from tensorflow.python import keras
 
 from odin.bay.layers import DenseDeterministic, DenseDistribution
 from odin.networks import Identity, Parallel
-from sisua.models.base import OmicOutput, SingleCellModel
-from sisua.models.modules import create_encoder_decoder
+from sisua.models.base import SingleCellModel
+from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 class DeepCountAutoencoder(SingleCellModel):
   r""" Deep Count Autoencoder """
 
   def __init__(self,
-               outputs: List[OmicOutput],
-               hdim=64,
-               zdim=32,
-               latent_bias=False,
-               nlayers=2,
-               xdrop=0.3,
-               edrop=0,
-               zdrop=0,
-               ddrop=0,
-               batchnorm=True,
-               linear_decoder=False,
-               pyramid=False,
-               use_conv=False,
-               kernel=5,
-               stride=2,
+               outputs: List[RandomVariable],
+               latent_dim=10,
+               network=NetworkConfig(),
                **kwargs):
-    super().__init__(outputs, **kwargs)
-    self.encoder, self.decoder = create_encoder_decoder(
-        input_dim=self.omic_outputs[0].dim, seed=self.seed, **locals())
-    self.latent_layer = DenseDeterministic(zdim,
-                                           use_bias=bool(latent_bias),
-                                           activation='linear',
-                                           name='Latent')
+    # force a deterministic latent space:
+    latents = kwargs.pop('latents', None)
+    if latents is None:
+      latents = RandomVariable(latent_dim, 'relu', 'latent'),
+    super().__init__(outputs, latents, network, **kwargs)
 
   def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
     e = self.encoder(x, training=training)
-    qZ = self.latent_layer(e, n_mcmc=n_mcmc)
+    qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
     # the first dimension always the MCMC sample dimension
     d = self.decoder(qZ.sample(n_mcmc), training=training)
     pX = [p(d, training=training) for p in self.posteriors]

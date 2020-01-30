@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 
 from sisua.analysis import Posterior
 from sisua.data import get_dataset, standardize_protein_name
-from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, OmicOutput,
+from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, RandomVariable,
                           VariationalAutoEncoder)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -33,8 +33,8 @@ x_test.assert_matching_cells(y_test)
 
 n_genes = x.shape[1]
 n_prots = y.shape[1]
-gene_omic = OmicOutput(n_genes, posterior='zinb')
-prot_omic = OmicOutput(n_prots, posterior='nb')
+gene_omic = RandomVariable(n_genes, posterior='zinb')
+prot_omic = RandomVariable(n_prots, posterior='nb')
 
 # ===========================================================================
 # Model configuration and training

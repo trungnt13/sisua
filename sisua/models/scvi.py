@@ -7,12 +7,11 @@ import tensorflow as tf
 from tensorflow.python import keras
 from tensorflow_probability.python.distributions import Independent, Normal
 
-from odin.bay.distribution_layers import (NegativeBinomialDispLayer,
-                                          ZINegativeBinomialDispLayer)
-from odin.bay.layers import DenseDistribution
-from sisua.models.base import OmicOutput, SingleCellModel
-from sisua.models.modules import (ConvNetwork, DenseNetwork,
-                                  create_encoder_decoder, get_latent)
+from odin.bay.layers import (DenseDistribution, NegativeBinomialDispLayer,
+                             ZINegativeBinomialDispLayer)
+from odin.networks import DenseNetwork, Identity
+from sisua.models.base import SingleCellModel
+from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 class SCVI(SingleCellModel):
@@ -30,40 +29,30 @@ class SCVI(SingleCellModel):
   """
 
   def __init__(self,
-               outputs: List[OmicOutput],
-               zdim=32,
-               zdist='diag',
-               ldist='normal',
-               hdim=64,
-               nlayers=2,
-               xdrop=0.3,
-               edrop=0,
-               zdrop=0,
-               ddrop=0,
+               outputs: List[RandomVariable],
+               latent_dim=10,
+               network=NetworkConfig(),
                clip_library=1e4,
-               batchnorm=True,
-               linear_decoder=False,
-               pyramid=False,
-               use_conv=False,
-               kernel=5,
-               stride=2,
                **kwargs):
-    super(SCVI, self).__init__(outputs=outputs, **kwargs)
-    # initialize the autoencoder
-    self.encoder_z, self.decoder = create_encoder_decoder(
-        input_dim=self.omic_outputs[0].dim, seed=self.seed, **locals())
-    if use_conv or not use_conv:
-      # TODO: support encoder_l convolution
-      self.encoder_l = DenseNetwork(units=1,
-                                    nlayers=1,
-                                    activation='relu',
-                                    batchnorm=batchnorm,
-                                    input_dropout=xdrop,
-                                    output_dropout=edrop,
-                                    seed=self.seed,
-                                    name='EncoderL')
-    self.latent = get_latent(zdist, zdim)
-    self.library = get_latent(ldist, 1)
+    latents = kwargs.pop('latents', None)
+    if latents is None:
+      latents = [
+          RandomVariable(latent_dim, 'diag', 'latent'),
+          RandomVariable(1, 'gaus', 'library')
+      ]
+    super().__init__(outputs=outputs,
+                     latents=latents,
+                     network=network,
+                     **kwargs)
+    self.encoder_l = DenseNetwork(
+        units=tf.nest.flatten(self.network_config.hidden_dim)[0],
+        activation=self.network_config.activation,
+        batchnorm=self.network_config.batchnorm,
+        input_dropout=self.network_config.input_dropout,
+        output_dropout=self.network_config.encoder_dropout,
+        name='EncoderL')
+    self.latent = self.latents[0]
+    self.library = self.latents[1]
     self.clip_library = float(clip_library)
     n_dims = self.posteriors[0].event_shape[0]
     # mean gamma (logits value, applying softmax later)
@@ -88,7 +77,7 @@ class SCVI(SingleCellModel):
 
   def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
     # applying encoding
-    e_z = self.encoder_z(x, training=training)
+    e_z = self.encoder(x, training=training)
     e_l = self.encoder_l(x, training=training)
     # latent spaces
     qZ = self.latent(e_z, training=training, n_mcmc=n_mcmc)
@@ -99,12 +88,13 @@ class SCVI(SingleCellModel):
                           Normal(loc=lmean, scale=tf.math.sqrt(lvar)), 1))
     Z_samples = qZ
     # clipping L value to avoid overflow, softplus(12) = 12
-    L_samples = tf.clip_by_value(qL, 0, self.clip_library)
+    L_samples = tf.clip_by_value(qL, 0., self.clip_library)
     # decoding the latent
     d = self.decoder(Z_samples, training=training)
+    # ====== parameterizing the distribution ====== #
     # mean parameterizations
     px_scale = tf.nn.softmax(self.px_scale(d), axis=1)
-    px_scale = tf.clip_by_value(px_scale, 1e-8, 1 - 1e-8)
+    px_scale = tf.clip_by_value(px_scale, 1e-8, 1. - 1e-8)
     # NOTE: scVI use exp but we use softplus here
     px_rate = tf.nn.softplus(L_samples) * px_scale
     # dispersion parameterizations

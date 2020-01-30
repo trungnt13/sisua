@@ -4,7 +4,6 @@ import inspect
 import multiprocessing as mpi
 import os
 import string
-import types
 from abc import ABCMeta, abstractmethod, abstractproperty
 from collections import OrderedDict, defaultdict
 from functools import partial
@@ -19,21 +18,16 @@ from tensorflow.python.keras.callbacks import (Callback, CallbackList,
                                                LearningRateScheduler,
                                                ModelCheckpoint)
 from tensorflow.python.platform import tf_logging as logging
-from tensorflow_probability.python import distributions as tfd
 from tqdm import tqdm
 
-from odin.backend.interpolation import Interpolation
+from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
-from odin.bay import kl_divergence
-from odin.bay.distribution_alias import parse_distribution
-from odin.bay.distribution_layers import (CategoricalLayer,
-                                          OneHotCategoricalLayer,
-                                          VectorDeterministicLayer)
 from odin.bay.distributions import concat_distribution
-from odin.bay.layers import DenseDistribution, MixtureDensityNetwork
 from odin.utils import cache_memory, classproperty
+from odin.visual import Visualizer
 from sisua.data import SingleCellOMIC
+from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 # ===========================================================================
@@ -75,137 +69,9 @@ _MAXIMUM_CACHE_SIZE = 2
 
 
 # ===========================================================================
-# Input description
-# ===========================================================================
-class KLinterpolation:
-  r"""
-  Arguments:
-    interpolate : Interpolation.exp10In
-    min_value : 0.
-    max_value : 10.
-    epoch_warmup : 50
-    cyclical : False
-  """
-
-  def __init__(self,
-               interpolate=Interpolation.exp10In,
-               vmin=0.,
-               vmax=10.,
-               warmup=50,
-               cyclical=False,
-               delay=0):
-    self.interpolate = interpolate
-    self.vmin = vmin
-    self.vmax = vmax
-    self.warmup = warmup
-    self.cyclical = bool(cyclical)
-    self.delay = delay
-
-  def __call__(self, epoch):
-    epoch = tf.maximum(tf.cast(epoch, 'float32'), 1.)
-    return self.interpolate(epoch,
-                            self.vmin,
-                            self.vmax,
-                            norm=self.warmup,
-                            cyclical=self.cyclical,
-                            delay=self.delay)
-
-  def __repr__(self):
-    return self.__str__()
-
-  def __str__(self):
-    return "<KL interpolate:%d min:%.2f max:%.2f warmup:%d cyclical:%s delay:%d>" % \
-      (str(self.interpolate), self.vmin, self.vmax,
-       self.warmup, self.cyclical, self.delay)
-
-
-class OmicOutput:
-  r""" Description of OMIC as output for models
-
-  Arguments:
-    dim : Integer, number of features (all OMIC data must be 2-D)
-    posterior : alias for posterior distribution, or loss function named in
-      `tensorflow.losses`, for examples:
-      - 'nb' : negative binomial
-      - 'nbd' : negative binomial using mean-dispersion parameterization
-      - 'mse' : deterministic distribution with mean squared error log_prob
-    name : identity of the OMIC
-    kwargs : keyword arguments for initializing the `DistributionLambda`
-      of the posterior.
-  """
-
-  def __init__(self, dim, posterior='nb', name=None, **kwargs):
-    if isinstance(dim, SingleCellOMIC):
-      dim = dim.shape[1]
-    self.name = name
-    self.dim = int(dim)
-    self.posterior = str(posterior)
-    self.kwargs = kwargs
-
-  def copy(self, posterior=None, **kwargs):
-    posterior = self.posterior if posterior is not None else posterior
-    kwargs.update(self.kwargs)
-    return OmicOutput(self.dim, posterior=posterior, name=self.name, **kwargs)
-
-  def __str__(self):
-    return "<OMIC dim:%d name:%s posterior:%s zi:%s>" % \
-      (self.dim, str(self.name), self.posterior, self.is_zero_inflated)
-
-  def __repr__(self):
-    return self.__str__()
-
-  @property
-  def is_zero_inflated(self):
-    return 'zi' == self.posterior[:2].lower()
-
-  @property
-  def input_shape(self):
-    return (self.dim,)
-
-  def create_posterior(self):
-    # ====== simple loss function from tensorflow ====== #
-    if self.posterior in dir(tf.losses):
-      distribution = VectorDeterministicLayer
-      activation = 'relu'
-      fn = tf.losses.get(str(self.posterior))
-      llk_fn = lambda self, y_true: tf.expand_dims(
-          -fn(y_true, self.posterior.mean()), axis=-1)
-    # ====== probabilistic loss ====== #
-    else:
-      if self.posterior in ('mdn', 'mixdiag', 'mixfull'):
-        distribution = None
-      else:
-        distribution = parse_distribution(self.posterior)[0]
-      activation = 'linear'
-      llk_fn = lambda self, y_true: tf.expand_dims(
-          self.posterior.log_prob(y_true), axis=-1)
-    # ====== create distribution layers ====== #
-    kwargs = dict(self.kwargs)
-    activation = kwargs.pop('activation', activation)
-    if self.posterior in ('mdn', 'mixdiag', 'mixfull'):
-      kwargs.pop('covariance', None)
-      layer = MixtureDensityNetwork(self.dim,
-                                    activation=activation,
-                                    covariance=dict(
-                                        mdn='none',
-                                        mixdiag='diag',
-                                        mixfull='full')[self.posterior],
-                                    name=self.name,
-                                    **kwargs)
-    else:
-      layer = DenseDistribution(self.dim,
-                                posterior=distribution,
-                                activation=activation,
-                                posterior_kwargs=kwargs,
-                                name=self.name)
-    layer.log_prob = types.MethodType(llk_fn, layer)
-    return layer
-
-
-# ===========================================================================
 # SingleCell model
 # ===========================================================================
-class SingleCellModel(keras.Model):
+class SingleCellModel(keras.Model, Visualizer):
   r"""
   Note:
     It is recommend to call `tensorflow.random.set_seed` for reproducible
@@ -213,8 +79,10 @@ class SingleCellModel(keras.Model):
   """
 
   def __init__(self,
-               outputs: [OmicOutput, List[OmicOutput]],
-               kl_interpolate: KLinterpolation = KLinterpolation(),
+               outputs: [RandomVariable, List[RandomVariable]],
+               latents=RandomVariable(10, 'diag'),
+               network=NetworkConfig(),
+               kl_interpolate=interpolation.const(vmax=1),
                analytic=True,
                log_norm=True,
                seed=8,
@@ -226,9 +94,15 @@ class SingleCellModel(keras.Model):
         initializer=tf.initializers.Constant(value=0.),
         trainable=False,
         dtype='float32')
+    self._history = defaultdict(list)
     # parameters for ELBO
     self._analytic = bool(analytic)
-    assert isinstance(kl_interpolate, KLinterpolation)
+    assert isinstance(kl_interpolate, interpolation.Interpolation), \
+      'kl_interpolate must be instance of odin.backend.interpolation.Interpolation,' + \
+        'but given type: %s' % str(type(kl_interpolate))
+    if kl_interpolate.norm is None and kl_interpolate != interpolation.const:
+      raise ValueError("interpolation normalization constant (i.e. 'norm') "
+                       "must be provided.")
     self._kl_interpolate = kl_interpolate
     # parameters for fitting
     self._seed = int(seed)
@@ -236,13 +110,13 @@ class SingleCellModel(keras.Model):
     self._corruption_rate = 0
     self._corruption_dist = 'binomial'
     self._log_norm = bool(log_norm)
-    # parsing the inputs
+    # ====== parsing the outputs ====== #
     outputs = [
-        o if isinstance(o, OmicOutput) else OmicOutput(o)
+        o if isinstance(o, RandomVariable) else RandomVariable(o)
         for o in tf.nest.flatten(outputs)
     ]
-    assert all(isinstance(i, OmicOutput) for i in outputs), \
-      "Inputs must be instance of OmicOutput but give: %s" % \
+    assert all(isinstance(i, RandomVariable) for i in outputs), \
+      "Inputs must be instance of `sisua.models.RandomVariable` but give: %s" % \
         ','.join([str(type(i)) for i in outputs])
     # check if is semi-supervised
     self._is_semi_supervised = True if len(outputs) > 1 else False
@@ -255,15 +129,41 @@ class SingleCellModel(keras.Model):
       name = 'output_%d' % idx
       post = omic.create_posterior()
       setattr(self, name, post)
+    # ====== latents ====== #
+    latents = [
+        l if isinstance(l, RandomVariable) else RandomVariable(l)
+        for l in tf.nest.flatten(latents)
+    ]
+    assert all(isinstance(i, RandomVariable) for i in latents), \
+      "Inputs must be instance of `sisua.models.RandomVariable` but give: %s" % \
+        ','.join([str(type(i)) for i in latents])
+    self._latents = latents
+    for idx, z in enumerate(self._latents):
+      name = 'latent_%d' % idx
+      post = z.create_posterior()
+      setattr(self, name, post)
+    # ====== network config ====== #
+    assert isinstance(network, NetworkConfig), \
+      "network must be instance of sisua.models.NetworkConfig, " + \
+        "but given type: %s" % str(type(network))
+    self._network_config = network
+    self.encoder, self.decoder = network.create_network(
+        input_dim=self._omic_outputs[0].dim,
+        latent_dim=self._latents[0].dim,
+        name=self.name)
+
+  @property
+  def network_config(self):
+    return self._network_config
 
   @property
   def train_history(self):
-    hist = self.history.history
+    hist = self._history
     return {k: v for k, v in hist.items() if 'val_' != k[:4]}
 
   @property
   def valid_history(self):
-    hist = self.history.history
+    hist = self._history
     return {k: v for k, v in hist.items() if 'val_' == k[:4]}
 
   @property
@@ -271,8 +171,16 @@ class SingleCellModel(keras.Model):
     return [getattr(self, 'output_%d' % i) for i in range(self.n_outputs)]
 
   @property
+  def latents(self):
+    return [getattr(self, 'latent_%d' % i) for i in range(self.n_latents)]
+
+  @property
   def omic_outputs(self):
     return list(self._omic_outputs)
+
+  @property
+  def n_latents(self):
+    return len(self._latents)
 
   @property
   def n_outputs(self):
@@ -404,7 +312,7 @@ class SingleCellModel(keras.Model):
       track_kl.append((div, 'z%s' % qz.event_shape[0]))
       kl += div
     # Final ELBO
-    beta = self.kl_weight
+    beta = self.kl_weight if training else 1.
     self.add_metric(beta, 'mean', 'beta')
     elbo = (llk_x + llk_y) - tf.expand_dims(kl, axis=-1) * beta
     elbo = tf.reduce_logsumexp(elbo, axis=0)
@@ -506,13 +414,16 @@ class SingleCellModel(keras.Model):
     # multiple outputs
     if isinstance(X[0], (tuple, list)):
       X = tuple([
-          concat_distribution([x[idx]
-                               for x in X], axis=merging_axis)
+          concat_distribution([x[idx] for x in X], \
+                              axis=merging_axis,
+                              name=self.posteriors[idx].name)
           for idx in range(len(X[0]))
       ])
     # single output
     else:
-      X = concat_distribution(X, axis=merging_axis)
+      X = concat_distribution(X,
+                              axis=merging_axis,
+                              name=self.posteriors[0].name)
 
     # multiple latents
     if isinstance(Z[0], (tuple, list)):
@@ -675,37 +586,43 @@ class SingleCellModel(keras.Model):
     curr_log = logging.get_verbosity()
     logging.set_verbosity(logging.ERROR)
     # compiling and setting the optimizer
-    if not self._is_compiled and self.optimizer is None:
-      # prepare optimizer
-      if isinstance(optimizer, string_types):
-        config = dict(learning_rate=learning_rate)
-        if clipnorm is not None:
-          config['clipnorm'] = clipnorm
-        optimizer = tf.optimizers.get({
-            'class_name': optimizer,
-            'config': config
-        })
-      elif isinstance(optimizer, tf.optimizers.Optimizer):
-        pass
-      elif isinstance(optimizer, type) and issubclass(optimizer,
-                                                      tf.optimizers.Optimizer):
-        optimizer = optimizer(learning_rate=learning_rate) \
-          if clipnorm is None else \
-          optimizer(learning_rate=learning_rate, clipnorm=clipnorm)
-      else:
-        raise ValueError("No support for optimizer: %s" % str(optimizer))
+    if not self._is_compiled:
+      if self.optimizer is None:
+        # prepare optimizer
+        if isinstance(optimizer, string_types):
+          config = dict(learning_rate=learning_rate)
+          if clipnorm is not None:
+            config['clipnorm'] = clipnorm
+          optimizer = tf.optimizers.get({
+              'class_name': optimizer,
+              'config': config
+          })
+        elif isinstance(optimizer, tf.optimizers.Optimizer):
+          pass
+        elif isinstance(optimizer, type) and issubclass(
+            optimizer, tf.optimizers.Optimizer):
+          optimizer = optimizer(learning_rate=learning_rate) \
+            if clipnorm is None else \
+            optimizer(learning_rate=learning_rate, clipnorm=clipnorm)
+        else:
+          raise ValueError("No support for optimizer: %s" % str(optimizer))
+      elif isinstance(optimizer, string_types):
+        optimizer = self.optimizer
       super(SingleCellModel, self).compile(optimizer,
                                            experimental_run_tf_function=False)
     # fitting
-    super(SingleCellModel, self).fit(x=train_data,
-                                     validation_data=valid_data,
-                                     validation_freq=validation_freq,
-                                     callbacks=callbacks,
-                                     initial_epoch=self.epoch,
-                                     steps_per_epoch=steps_per_epoch,
-                                     validation_steps=validation_steps,
-                                     epochs=self.epoch + epochs,
-                                     verbose=verbose)
+    logs = super(SingleCellModel, self).fit(x=train_data,
+                                            validation_data=valid_data,
+                                            validation_freq=validation_freq,
+                                            callbacks=callbacks,
+                                            initial_epoch=self.epoch,
+                                            steps_per_epoch=steps_per_epoch,
+                                            validation_steps=validation_steps,
+                                            epochs=self.epoch + epochs,
+                                            verbose=verbose)
+    # store the history
+    for key, val in logs.history.items():
+      self._history[key] += val
     logging.set_verbosity(curr_log)
 
     # reset to original state
@@ -729,18 +646,19 @@ class SingleCellModel(keras.Model):
         name += i
     return name.lower()
 
-  def plot_learning_curves(self):
-    name = [name for name in self.history.history.keys() if 'val_' != name[:4]]
+  def plot_learning_curves(self, fig=None):
+    name = [name for name in self._history.keys() if 'val_' != name[:4]]
     from matplotlib import pyplot as plt
     import seaborn as sns
     sns.set()
     n = len(name)
-    plt.figure(figsize=(6, 3 * n))
+    if fig is None:
+      fig = plt.figure(figsize=(6, 3 * n))
     mima = lambda s: (np.argmin(s), np.min(s), np.argmax(s), np.max(s))
     for i, key in enumerate(name):
       plt.subplot(n, 1, i + 1)
-      train = self.history.history[key]
-      valid = self.history.history['val_' + key]
+      train = self._history[key]
+      valid = self._history['val_' + key]
 
       xmin, ymin, xmax, ymax = mima(train)
       plt.plot(train, label='Train', color='blue')
@@ -781,20 +699,29 @@ class SingleCellModel(keras.Model):
       plt.legend()
       plt.title(key)
     plt.tight_layout()
+    self.add_figure('learning_curves', fig)
 
   def plot_latents(self):
+    # TODO
     pass
 
   def summary(self):
-    text = ''
-    for key, val in sorted(inspect.getmembers(self)):
-      if isinstance(val, keras.layers.Layer):
-        text += '%s:\n' % key
-        if isinstance(val, keras.Sequential):
-          for l in val.layers:
-            text += '  %s\n' % layer2text(l)
-        elif isinstance(val, DenseDistribution):
-          text += '  %s\n' % str(val)
-        else:
-          text += '  %s\n' % layer2text(val)
+    data = ['']
+
+    def print_fn(text):
+      data[0] += text + '\n'
+
+    text = '======== Encoder ========\n'
+    self.encoder.summary(print_fn=print_fn)
+    text += data[0]
+    data[0] = ''
+    text += '======== Decoder ========\n'
+    self.decoder.summary(print_fn=print_fn)
+    text += data[0]
+    text += '======== Latents ========\n'
+    for i in self.latents:
+      text += str(i) + '\n'
+    text += '======== Outputs ========\n'
+    for i in self.posteriors:
+      text += str(i) + '\n'
     return text
