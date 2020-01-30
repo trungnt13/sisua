@@ -124,7 +124,7 @@ def get_library_size(X, return_log_count=False):
 # OMICS
 # ===========================================================================
 class SingleCellOMIC(sc.AnnData, Visualizer):
-  """ An annotated data matrix.
+  r""" An annotated data matrix.
 
   Parameters
   ----------
@@ -722,13 +722,12 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
                               ci_threshold=-0.68,
                               seed=8,
                               pbe: Optional[ProbabilisticEmbedding] = None):
-    """ Fit a GMM on each feature column to get the probability or binary
+    r""" Fit a GMM on each feature column to get the probability or binary
     representation of the features
 
-    Parameters
-    ----------
-    pbe : {`sisua.ProbabilisticEmbedding`, `None`}
-      pretrained instance of `ProbabilisticEmbedding` if given
+    Arguments:
+      pbe : {`sisua.ProbabilisticEmbedding`, `None`}
+        pretrained instance of `ProbabilisticEmbedding` if given
     """
     # We turn-off default log_norm here since the data can be normalized
     # separately in advance.

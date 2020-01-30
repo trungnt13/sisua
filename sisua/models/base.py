@@ -451,7 +451,7 @@ class SingleCellModel(keras.Model, Visualizer):
       clipnorm=100,
       n_mcmc=1,
       semi_percent=0.8,
-      semi_weight=10,
+      semi_weight=10.,
       corruption_rate=0.25,
       corruption_dist='binomial',
       batch_size=64,
@@ -469,6 +469,8 @@ class SingleCellModel(keras.Model, Visualizer):
       verbose=1):
     r""" This fit function is the combination of both
     `Model.compile` and `Model.fit` """
+    if epochs <= 0:
+      return self
     # check signature of `call` function
     # inputs, training=None, n_mcmc=1
     specs = inspect.getfullargspec(self.call)

@@ -119,6 +119,7 @@ clean_folder(BASE_DIR, lambda f: '.pdf' == f[-4:])
 for MODEL in all_models:
   for network in all_configs:
     for is_semi in (True, False):
+      # ====== prepare the paths ====== #
       path = os.path.join(
           BASE_DIR,
           '%s_%s_%s_%s' % \
@@ -137,8 +138,6 @@ for MODEL in all_models:
         with open(log_path, 'rb') as f:
           log = pickle.load(f)
         model = load(path)
-        model.plot_learning_curves()
-        model.save_figures(hist_path)
         # assert model.summary() == log['summary'], "Summary mismatch"
         # assert get_weight_md5(model) == log['weight_md5'], "Weights mismatch"
         # test statistics
@@ -174,7 +173,12 @@ for MODEL in all_models:
             plt.title('Loaded')
         plt.tight_layout()
         vs.plot_save(pca_path, dpi=120, clear_all=True, log=True)
-        # model.fit(x_train, epochs=2)
+        #
+        model.fit([x_train, y_train] if is_semi else x_train,
+                  epochs=2,
+                  verbose=False)
+        model.plot_learning_curves()
+        model.save_figures(hist_path)
       # ====== training mode ====== #
       else:
         clean_folder(path)

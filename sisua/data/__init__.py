@@ -285,10 +285,18 @@ def get_dataset_summary(return_html=False):
 
 def get_dataset(dataset_name, override=False,
                 verbose=False) -> Tuple[SingleCellOMIC, SingleCellOMIC]:
-  f""" Check `get_dataset_meta` for more information
+  r""" Check `get_dataset_meta` for more information
+
   Return:
     mRNA data : `SingleCellOMIC`
     label data: `SingleCellOMIC`. If label data is not availabel, then None
+
+  Example:
+    gene, prot = get_dataset('pbmc8kly')
+    x_train, x_test = gene.split(train_percent=0.9)
+    y_train, y_test = prot.split(train_percent=0.9)
+    x_train.assert_matching_cells(y_train)
+    x_test.assert_matching_cells(y_test)
   """
   data_meta = get_dataset_meta()
   # ====== special case: get all dataset ====== #

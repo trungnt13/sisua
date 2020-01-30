@@ -28,11 +28,35 @@ def _recover_mcmc_dim(self, inputs, training=None, mask=None):
 
 
 class NetworkConfig(dict):
+  r""" A dictionary for storing the networks (encoder and decoder)
+  configuration
+
+  Arguments:
+    hidden_dim : An Integer, number of hidden units for each hidden layers
+    nlayers : An Integer, number of hidden layers
+    activation : a String, alias of activation function
+    input_dropout : A Scalar [0., 1.], dropout rate, if 0., turn-off dropout.
+      this rate is applied for input layer.
+     - encoder_dropout : for the encoder output
+     - latent_dropout : for the decoder input (right after the latent)
+     - decoder_dropout : for the decoder output
+     - layer_dropout : for each hidden layer
+    batchnorm : A Boolean, batch normalization
+    linear_decoder : A Boolean, if `True`, use an `Identity` (i.e. Linear)
+      decoder
+    pyramid : A Boolean, if `True`, use pyramid structure where the number of
+      hidden units decrease as the depth increase
+    use_conv : A Boolean, if `True`, use convolutional encoder and decoder
+    kernel_size : An Integer, kernel size for convolution network
+    strides : An Integer, stride step for convoltion
+    conv_proj : An Integer, number of hidden units for the `Dense` projection
+      layer right after convolutional network.
+  """
 
   def __init__(self,
                hidden_dim=64,
-               activation='relu',
                nlayers=2,
+               activation='relu',
                input_dropout=0.,
                encoder_dropout=0.,
                latent_dropout=0.,

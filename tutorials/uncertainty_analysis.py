@@ -1,70 +1,113 @@
 from __future__ import absolute_import, division, print_function
 
+import os
+from functools import partial
+
 import numpy as np
+import seaborn as sns
+import tensorflow as tf
+from matplotlib import pyplot as plt
 
 from odin import visual as vs
-from odin.ml import fast_pca, fast_tsne
-from sisua.data import get_dataset
-from sisua.inference import InferenceSCVAE, InferenceSCVI, InferenceSISUA
+from odin.backend import interpolation
+from odin.ml import fast_pca, fast_tsne, fast_umap
+from sisua.data import get_dataset, standardize_protein_name
 from sisua.label_threshold import ProbabilisticEmbedding
+from sisua.models import (SCALE, SCVI, SISUA, DeepCountAutoencoder,
+                          NetworkConfig, RandomVariable, VariationalAutoEncoder)
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+
+tf.random.set_seed(8)
+np.random.seed(8)
+
+sns.set()
 # ===========================================================================
 # Configuration
 # ===========================================================================
-SAVE_FIGURE_PATH = '/tmp/tmp.pdf'
-fn_dim_reduction = fast_tsne  # or fast_pca
+SAVE_PATH = '/tmp/uncertainty'
+if not os.path.exist(SAVE_PATH):
+  os.mkdir(SAVE_PATH)
 
-train_config = dict(
-    batch_size=66,
-    n_epoch=200,
-    detail_logging=True,
-)
+# or fast_pca, or fast_umap, or fast_tsne
+fn_dim_reduction = partial(fast_umap, n_components=2)
+train_config = dict(batch_size=64, epochs=200, verbose=True)
 n_mcmc = 4
+latent_dim = 10
 
+network = NetworkConfig()
+kl = interpolation.const(vmax=1)
+# kl = interpolation.linear(vmin=0,
+#                           vmax=10,
+#                           norm=20,
+#                           cyclical=True,
+#                           delayOut=5,
+#                           delayIn=5)
 # maximum amount of data points for testing (visualization)
-n_samples_visualization = 2000
+n_samples_visualization = 200
+DS_NAME = 'pbmc8kly'
 # ===========================================================================
 # Load data
 # ===========================================================================
-ds, gene, prot = get_dataset('pbmc8k_ly')
-print(ds)
+gene, prot = get_dataset(DS_NAME)
+X_train, X_test = gene.split()
+y_train, y_test = prot.split()
+print("Labels:", prot.var)
 
-X_train = gene.get_data('train')
-X_test = gene.get_data('test')
+gene_rv = RandomVariable(gene.n_vars, posterior='zinbd', name='rna')
+prot_rv = RandomVariable(prot.n_vars, posterior='nb', name='adt')
 
-y_train = prot.get_data('train')
-y_test = prot.get_data('test')
+# ====== prepare the labels ====== #
+labels_name = standardize_protein_name(prot.var.iloc[:, 0].to_numpy())
+if not y_test.is_binary:
+  y_test.probabilistic_embedding()
+  labels = np.argmax(y_test.obsm['X_prob'], axis=-1)
+else:
+  labels = np.argmax(y_test.X, axis=-1)
+labels = np.array([labels_name[i] for i in labels])
 
-labels = ds['y_col']
-print("Labels:", ', '.join(labels))
-
-# ====== preprocessing the labels ====== #
-if not prot.is_binary:
-  pb = ProbabilisticEmbedding()
-  pb.fit(y_test)
-  y_test = pb.predict_proba(y_test)
-y_test = np.array([labels[int(i)] for i in np.argmax(y_test, axis=1)])
-
-# ====== downsampling if necessary ====== #
-np.random.seed(5218)
-ids = np.random.permutation(X_test.shape[0])[:n_samples_visualization]
-X_test = X_test[ids]
-y_test = y_test[ids]
-
+# ====== downsample for visualization ====== #
+if len(X_test) > n_samples_visualization:
+  ids = np.random.permutation(len(X_test))[:n_samples_visualization]
+  X_test = X_test.X[ids]
+  labels = labels[ids]
 # ===========================================================================
 # Create the inference
 # ===========================================================================
+N_MODELS = 4
 # scVI
-scvi = InferenceSCVI(gene_dim=gene.feat_dim)
+scvi = SCVI(outputs=gene_rv,
+            latent_dim=latent_dim,
+            network=network,
+            kl_interpolate=kl)
 scvi.fit(X_train, **train_config)
+scvi.plot_learning_curves().save_figures(os.path.join(SAVE_PATH, 'scvi.pdf'))
+
+# scale
+scale = SCALE(outputs=gene_rv,
+              latent_dim=latent_dim,
+              network=network,
+              kl_interpolate=kl)
+scale.fit(X_train, **train_config)
+scale.plot_learning_curves().save_figures(os.path.join(SAVE_PATH, 'scale.pdf'))
 
 # scVAE
-scvae = InferenceSCVAE(gene_dim=gene.feat_dim)
+scvae = VariationalAutoEncoder(outputs=gene_rv,
+                               latent_dim=latent_dim,
+                               network=network,
+                               kl_interpolate=kl)
 scvae.fit(X_train, **train_config)
+scvae.plot_learning_curves().save_figures(os.path.join(SAVE_PATH, 'scvae.pdf'))
 
 # SISUA
-sisua = InferenceSISUA(gene_dim=gene.feat_dim, prot_dim=prot.feat_dim)
-sisua.fit(X_train, y_train, **train_config)
+sisua = SISUA(rna_dim=gene.n_vars,
+              adt_dim=prot.n_vars,
+              latent_dim=latent_dim,
+              network=network,
+              kl_interpolate=kl)
+sisua.fit([X_train, y_train], **train_config)
+sisua.plot_learning_curves().save_figures(os.path.join(SAVE_PATH, 'sisua.pdf'))
 
 
 # ===========================================================================
@@ -72,14 +115,16 @@ sisua.fit(X_train, y_train, **train_config)
 # ===========================================================================
 # sample API for all models (Inferences)
 def create_sample(model):
-  z = dict(
-      z_mean=model.predict_Z(X_test),
-      z_sample=model.sample_Z(X_test, n_mcmc),
-  )
-  return z
+  pX, pZ = model.predict(X_test, apply_corruption=False, verbose=False)
+  if isinstance(pZ, tuple):
+    pZ = pZ[0]
+  mean = pZ.mean()
+  samples = pZ.sample(n_mcmc)
+  return mean, samples
 
 
 scvi = create_sample(model=scvi)
+scale = create_sample(model=scale)
 scvae = create_sample(model=scvae)
 sisua = create_sample(model=sisua)
 
@@ -87,34 +132,32 @@ sisua = create_sample(model=sisua)
 # Visualization
 # ===========================================================================
 # config for the mean
-fig_config = dict(size=88, grid=False, color=y_test, alpha=1.0, linewidths=0.)
+fig_config = dict(size=66, grid=False, color=labels, alpha=1.0, linewidths=0.)
 # config for the samples
 fig_config1 = dict(fig_config)
 fig_config1['size'] = 20
-fig_config1['alpha'] = 0.4
+fig_config1['alpha'] = 0.5
 fig_config1['linewidths'] = 1.0
 fig_config1['marker'] = 'x'
 
-vs.plot_figure(nrow=12, ncol=18)
+vs.plot_figure(nrow=12, ncol=20)
 
 
 # ====== helper plotting ====== #
 def plot_latent(data, idx, title):
-  z_mean = fn_dim_reduction(data['z_mean'])
-
+  mean, samples = data
   # only the mean
-  ax = vs.subplot(2, 3, idx)
-  vs.plot_scatter(z_mean,
+  ax = vs.subplot(2, N_MODELS, idx)
+  vs.plot_scatter(fn_dim_reduction(mean),
                   ax=ax,
                   title='[Only Mean]' + title,
                   legend_enable=False,
                   **fig_config)
-
   # mean and sample (single t-SNE)
-  ax = vs.subplot(2, 3, idx + 3)
-  z = np.concatenate((np.expand_dims(data['z_mean'], axis=0), data['z_sample']),
-                     axis=0)
-  z = np.reshape(fast_tsne(z.reshape(-1, z.shape[-1])), z.shape[:-1] + (2,))
+  ax = vs.subplot(2, N_MODELS, idx + N_MODELS)
+  z = np.concatenate([np.expand_dims(mean, axis=0), samples], axis=0)
+  z = np.reshape(fn_dim_reduction(z.reshape(-1, z.shape[-1])),
+                 z.shape[:-1] + (2,))
   for i in z[1:]:
     vs.plot_scatter(i, ax=ax, legend_enable=False, **fig_config1)
   vs.plot_scatter(z[0],
@@ -127,7 +170,8 @@ def plot_latent(data, idx, title):
 # ====== plot ====== #
 plot_latent(data=scvi, idx=1, title='scVI')
 plot_latent(data=scvae, idx=2, title='scVAE')
-plot_latent(data=sisua, idx=3, title='SISUA')
-
+plot_latent(data=scale, idx=3, title='SCALE')
+plot_latent(data=sisua, idx=4, title='SISUA')
+plt.suptitle(DS_NAME)
 # ====== save the figure ====== #
-vs.plot_save(SAVE_FIGURE_PATH, log=True)
+vs.plot_save(os.path.join(SAVE_PATH, 'compare.pdf'), log=True)

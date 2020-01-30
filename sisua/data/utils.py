@@ -66,7 +66,9 @@ _protein_name = {
 
 
 def standardize_protein_name(name):
-  """ standardize """
+  r""" standardize """
+  if isinstance(name, (tuple, list, np.ndarray)):
+    return [standardize_protein_name(i) for i in name]
   assert isinstance(name, string_types), "Protein name must be string types"
   name = name.replace('-TotalSeqB', '')
   name = name.strip()

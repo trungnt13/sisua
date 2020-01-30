@@ -10,8 +10,8 @@ from sklearn.decomposition import PCA
 
 from sisua.analysis import Posterior
 from sisua.data import get_dataset, standardize_protein_name
-from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, RandomVariable,
-                          VariationalAutoEncoder)
+from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, NetworkConfig,
+                          RandomVariable, VariationalAutoEncoder)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
@@ -33,26 +33,23 @@ x_test.assert_matching_cells(y_test)
 
 n_genes = x.shape[1]
 n_prots = y.shape[1]
-gene_omic = RandomVariable(n_genes, posterior='zinb')
-prot_omic = RandomVariable(n_prots, posterior='nb')
-
-# ===========================================================================
-# Model configuration and training
-# ===========================================================================
-nlayers = 1
-hdim = 64
-zdim = 16
+gene_omic = RandomVariable(n_genes, posterior='zinb', name='rna')
+prot_omic = RandomVariable(n_prots, posterior='nb', name='adt')
+network = NetworkConfig(nlayers=1,
+                        hidden_dim=64,
+                        pyramid=True,
+                        use_conv=False,
+                        input_dropout=0.)
+latent_dim = 12
 epochs = 3
-pyramid = True
 analytic = False
+
 # ===========================================================================
 # Create and train unsupervised model
 # ===========================================================================
 scvae = VariationalAutoEncoder(outputs=gene_omic,
-                               nlayers=nlayers,
-                               hdim=hdim,
-                               zdim=zdim,
-                               pyramid=pyramid,
+                               latent_dim=latent_dim,
+                               network=network,
                                analytic=analytic)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
@@ -88,20 +85,14 @@ pos.plot_classifier_F1(x_train=x_train, y_train=y_train, figsize=(12, 12))
 # ===========================================================================
 # deterministic loss
 dca_detr = DeepCountAutoencoder(outputs=gene_omic.copy('mse'),
-                                nlayers=nlayers,
-                                hdim=hdim,
-                                zdim=zdim,
-                                pyramid=pyramid,
-                                analytic=analytic)
+                                latent_dim=latent_dim,
+                                network=network)
 dca_detr.fit(x_train, epochs=epochs, verbose=False)
 imputation_dca1, latent_dca1 = dca_detr.predict(x_test)
 # stochastic loss
 dca_stch = DeepCountAutoencoder(outputs=gene_omic,
-                                nlayers=nlayers,
-                                hdim=hdim,
-                                zdim=zdim,
-                                pyramid=pyramid,
-                                analytic=analytic)
+                                latent_dim=latent_dim,
+                                network=network)
 dca_stch.fit(x_train, epochs=epochs, verbose=False)
 imputation_dca2, latent_dca2 = dca_stch.predict(x_test)
 # both model return a distribution, which is well generalized by the SISUA
@@ -160,10 +151,8 @@ for fig_id, (model_name, sample) in enumerate([("DCA-deterministic", sample1),
 # Another parameterization of Negative Binomial distribution must be used
 # for scVI, i.e. Negative Binomial with mean and 'D'ispersion parameters
 scvi = SCVI(outputs=gene_omic.copy('zinbd'),
-            nlayers=nlayers,
-            hdim=hdim,
-            zdim=zdim,
-            pyramid=pyramid,
+            latent_dim=latent_dim,
+            network=network,
             analytic=analytic)
 scvi.fit(x_train, epochs=epochs, verbose=False)
 imputation, (latent, log_library) = scvi.predict(x_test)
@@ -192,10 +181,8 @@ ax.legend()
 # ===========================================================================
 sisua = SISUA(rna_dim=n_genes,
               adt_dim=n_prots,
-              nlayers=nlayers,
-              hdim=hdim,
-              zdim=zdim,
-              pyramid=pyramid,
+              latent_dim=latent_dim,
+              network=network,
               analytic=analytic)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
