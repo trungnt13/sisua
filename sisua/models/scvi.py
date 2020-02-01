@@ -75,7 +75,7 @@ class SCVI(SingleCellModel):
     # be used
     self.posteriors[0].trainable = False
 
-  def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
+  def encode(self, x, lmean, lvar, y, training, n_mcmc):
     # applying encoding
     e_z = self.encoder(x, training=training)
     e_l = self.encoder_l(x, training=training)
@@ -86,6 +86,10 @@ class SCVI(SingleCellModel):
                       n_mcmc=n_mcmc,
                       prior=Independent(
                           Normal(loc=lmean, scale=tf.math.sqrt(lvar)), 1))
+    return qZ, qL
+
+  def decode(self, latents, training):
+    qZ, qL = latents
     Z_samples = qZ
     # clipping L value to avoid overflow, softplus(12) = 12
     L_samples = tf.clip_by_value(qL, 0., self.clip_library)
@@ -113,4 +117,4 @@ class SCVI(SingleCellModel):
     pX = self.posteriors[0](params, training=training, projection=False)
     # for semi-supervised learning
     pY = [p(d, training=training) for p in self.posteriors[1:]]
-    return [pX] + pY, (qZ, qL)
+    return [pX] + pY

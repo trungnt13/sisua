@@ -83,6 +83,7 @@ class SingleCellModel(keras.Model, Visualizer):
                latents=RandomVariable(10, 'diag'),
                network=NetworkConfig(),
                kl_interpolate=interpolation.const(vmax=1),
+               kl_mcmc=1,
                analytic=True,
                log_norm=True,
                seed=8,
@@ -97,6 +98,7 @@ class SingleCellModel(keras.Model, Visualizer):
     self._history = defaultdict(list)
     # parameters for ELBO
     self._analytic = bool(analytic)
+    self._kl_mcmc = int(kl_mcmc)
     assert isinstance(kl_interpolate, interpolation.Interpolation), \
       'kl_interpolate must be instance of odin.backend.interpolation.Interpolation,' + \
         'but given type: %s' % str(type(kl_interpolate))
@@ -223,26 +225,28 @@ class SingleCellModel(keras.Model, Visualizer):
     return self._seed
 
   @abstractmethod
-  def _call(self, x, lmean, lvar, t, y, mask, training=None, n_mcmc=None):
-    r"""
+  def encode(self, x, lmean, lvar, y, training=None, n_mcmc=None):
+    r""" Encode the input matrix into latents
+
     Arguments:
       x : [batch_size, n_genes]
         input gene-expression matrix (multiple inputs can be given)
-      lmean : [batch_size]
-        mean of library size
-      lvar : [batch_size]
-        variance of library size
-      t : [batch_size, n_genes]
-        target for reconstruction of gene-expression matrix (can be different
-        from `x`)
-      y : [batch_size, n_protein]
-        input for semi-supervised learning
-      mask : [batch_size, 1]
-        binary mask for semi-supervised training
-      training : `bool`
-        flag mark training progress
-      n_mcmc : {`None`, `int`}
-        number of MCMC samples
+      lmean : [batch_size], mean of library size
+      lvar : [batch_size], variance of library size
+      y : [batch_size, n_protein], input for semi-supervised learning
+      training : Boolean, flag mark training progress
+      n_mcmc : {`None`, `int`}, number of MCMC samples
+    """
+    raise NotImplementedError
+
+  @abstractmethod
+  def decode(self, z, training=None):
+    r""" Decode the latents into input matrix
+
+    Arguments:
+      z : [batch_size, latent_dim] or [n_mcmc, batch_size, latent_dim], latent
+        codes
+      training : Boolean, flag mark training progress
     """
     raise NotImplementedError
 
@@ -286,24 +290,28 @@ class SingleCellModel(keras.Model, Visualizer):
     return x, lmean, lvar, t, y, mask
 
   def call(self, inputs, training=None, n_mcmc=1):
-    x, lmean, lvar, t, y, mask = self.prepare_inputs(inputs)
+    # target : [batch_size, n_genes], target for reconstruction of gene-expression
+    #   matrix (can be different from `x`)
+    # mask : [batch_size, 1] binary mask for semi-supervised training
+    inputs, lmean, lvar, target, y, mask = self.prepare_inputs(inputs)
     # postprocessing the returns
-    pX, qZ = self._call(x, lmean, lvar, t, y, mask, training, n_mcmc)
+    qZ = self.encode(inputs, lmean, lvar, y, training=training, n_mcmc=n_mcmc)
+    pX = self.decode(qZ, training=training)
     # Add Log-likelihood, don't forget to apply mask for semi-supervised loss
     # we have to use the log_prob function from DenseDistribution class, not
     # the one in pX
-    llk_x = self.posteriors[0].log_prob(t)
-    llk_y = tf.convert_to_tensor(0, dtype=x.dtype)
+    llk_x = self.posteriors[0].log_prob(target)
+    llk_y = tf.convert_to_tensor(0, dtype=inputs.dtype)
     track_llky = []
     for i_true, m, post in zip(y, mask, self.posteriors[1:]):
       llk = post.log_prob(i_true) * m
       track_llky.append((llk, post.name.lower()))
       llk_y += llk
     # calculating the KL
-    kl = tf.convert_to_tensor(0, dtype=x.dtype)
+    kl = tf.convert_to_tensor(0., dtype=inputs.dtype)
     track_kl = []
     for idx, qz in enumerate(tf.nest.flatten(qZ)):
-      div = qz.KL_divergence(analytic=self.analytic)
+      div = qz.KL_divergence(analytic=self.analytic, n_mcmc=self._kl_mcmc)
       # add mcmc dimension if used close-form KL
       if tf.rank(div) > 0 and self.analytic:
         div = tf.expand_dims(div, axis=0)
@@ -661,51 +669,45 @@ class SingleCellModel(keras.Model, Visualizer):
       plt.subplot(n, 1, i + 1)
       train = self._history[key]
       valid = self._history['val_' + key]
+      points = []
+      legend = []
 
       xmin, ymin, xmax, ymax = mima(train)
-      plt.plot(train, label='Train', color='blue')
-      plt.scatter(xmin, ymin, color='blue', s=48, alpha=0.5)
-      plt.scatter(xmax, ymax, color='blue', s=48, alpha=0.5)
-      plt.text(xmin,
-               ymin,
-               'Min:%.2f' % ymin,
-               color='blue',
-               fontsize=8,
-               ha='right',
-               va='top')
-      plt.text(xmax,
-               ymax,
-               'Max:%.2f' % ymax,
-               color='blue',
-               fontsize=8,
-               ha='right',
-               va='top')
+      plt.plot(train, color='blue')
+      points.append(
+          plt.scatter(xmin,
+                      ymin,
+                      color='blue',
+                      s=48,
+                      alpha=0.5,
+                      linewidths=0,
+                      marker='s'))
+      points.append(
+          plt.scatter(xmax, ymax, color='blue', s=48, alpha=0.5, linewidths=0))
+      legend += ['min:train:%.2f' % ymin, 'max:train:%.2f' % ymax]
 
       xmin, ymin, xmax, ymax = mima(valid)
       plt.plot(valid, label='Valid', color='salmon')
-      plt.scatter(xmin, ymin, color='salmon', s=48, alpha=0.5)
-      plt.scatter(xmax, ymax, color='salmon', s=48, alpha=0.5)
-      plt.text(xmin,
-               ymin,
-               'Min:%.2f' % ymin,
-               color='salmon',
-               fontsize=8,
-               va='bottom')
-      plt.text(xmax,
-               ymax,
-               'Max:%.2f' % ymax,
-               color='salmon',
-               fontsize=8,
-               va='bottom')
+      points.append(
+          plt.scatter(xmin,
+                      ymin,
+                      color='salmon',
+                      s=48,
+                      alpha=0.5,
+                      linewidths=0,
+                      marker='s'))
+      points.append(
+          plt.scatter(xmax, ymax, color='salmon', s=48, alpha=0.5,
+                      linewidths=0))
+      legend += [r'min:testt:%.2f' % ymin, r'max:testt:%.2f' % ymax]
 
-      plt.legend()
+      plt.legend(points[::2] + points[1::2],
+                 legend[::2] + legend[1::2],
+                 fontsize=8)
       plt.title(key)
     plt.tight_layout()
     self.add_figure('learning_curves', fig)
-
-  def plot_latents(self):
-    # TODO
-    pass
+    return self
 
   def summary(self):
     data = ['']

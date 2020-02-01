@@ -12,7 +12,6 @@ from sklearn.metrics import (confusion_matrix, explained_variance_score,
                              r2_score)
 
 from odin import backend as K
-from odin.ml import fast_pca, fast_tsne
 from odin.utils import async_mpi, catch_warnings_ignore, ctext, one_hot
 from odin.visual import (generate_random_colors, generate_random_marker,
                          plot_confusion_matrix, plot_figure, plot_gridSpec,

@@ -40,6 +40,7 @@ def save(path: str, model: SingleCellModel, max_to_keep=4):
                 latents=model._latents,
                 network=model._network_config,
                 kl_interpolate=model._kl_interpolate,
+                kl_mcmc=model._kl_mcmc,
                 analytic=model._analytic,
                 log_norm=model._log_norm,
                 seed=model._seed,

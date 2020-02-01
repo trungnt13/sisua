@@ -27,16 +27,16 @@ sns.set()
 # Configuration
 # ===========================================================================
 SAVE_PATH = '/tmp/uncertainty'
-if not os.path.exist(SAVE_PATH):
+if not os.path.exists(SAVE_PATH):
   os.mkdir(SAVE_PATH)
 
 # or fast_pca, or fast_umap, or fast_tsne
 fn_dim_reduction = partial(fast_umap, n_components=2)
 train_config = dict(batch_size=64, epochs=200, verbose=True)
-n_mcmc = 4
+n_mcmc = 2
 latent_dim = 10
 
-network = NetworkConfig()
+network = NetworkConfig(use_conv=True, pyramid=True, conv_proj=128)
 kl = interpolation.const(vmax=1)
 # kl = interpolation.linear(vmin=0,
 #                           vmax=10,
@@ -45,7 +45,7 @@ kl = interpolation.const(vmax=1)
 #                           delayOut=5,
 #                           delayIn=5)
 # maximum amount of data points for testing (visualization)
-n_samples_visualization = 200
+n_samples_visualization = 300
 DS_NAME = 'pbmc8kly'
 # ===========================================================================
 # Load data

@@ -175,21 +175,23 @@ class Posterior(Visualizer):
 
   @property
   def X(self):
-    """ Original gene expression data without artificial corruption """
+    r""" Original gene expression data without artificial corruption """
     return self.gene.X
 
   @property
   def T(self):
-    """ The artificial corrupted gene expression similar to the one
+    r""" The artificial corrupted gene expression similar to the one
     used for fitting the model """
     return self.gene_corrupt.X
 
   @property
   def W(self):
+    r""" The reconstruction of single-cell matrix (with un-imputed genes) """
     return tf.reduce_mean(self.outputs_corrupt[0].mean(), axis=0).numpy()
 
   @property
   def V(self):
+    r""" The imputation of single-cell matrix """
     dist = _preprocess_output_distribution(self.outputs_corrupt[0])
     return tf.reduce_mean(dist.mean(), axis=0).numpy()
 
@@ -292,8 +294,8 @@ class Posterior(Visualizer):
     return outputs, latents, y_train
 
   # ******************** Latent space analysis ******************** #
-  def plot_latents_protein_pairs(self, legend=True, pca=False, figsize=None):
-    """ Using marker gene/protein to select mutual exclusive protein
+  def plot_latents_protein_pairs(self, legend=True, algo='pca', figsize=None):
+    r""" Using marker gene/protein to select mutual exclusive protein
     pairs for comparison
 
     Parameters
@@ -316,7 +318,7 @@ class Posterior(Visualizer):
     return self
 
   def plot_latents_distance_heatmap(self, legend=True, ax=None, fig=(8, 8)):
-    """ Heatmap of the distance among latents vector from different classes
+    r""" Heatmap of the distance among latents vector from different classes
     """
     ax = to_axis2D(ax, fig)
     z, y = self.Z, self.y_true
@@ -337,11 +339,11 @@ class Posterior(Visualizer):
 
   def plot_latents_binary_scatter(self,
                                   legend=True,
-                                  pca=False,
+                                  algo='pca',
                                   size=8,
                                   ax=None,
                                   fig=(8, 8)):
-    """
+    r""" Scatter plot of dimension
     test : if True, plotting latent space of test set, otherwise, use training set
     """
     ax = to_axis2D(ax, fig)

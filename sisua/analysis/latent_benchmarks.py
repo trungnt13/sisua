@@ -22,8 +22,9 @@ from sisua.data.const import (MARKER_GENES, PROTEIN_PAIR_COMPARISON,
                               UNIVERSAL_RANDOM_SEED)
 from sisua.data.utils import standardize_protein_name
 from sisua.label_threshold import ProbabilisticEmbedding
-from sisua.utils.visualization import (downsample_data, fast_pca, fast_scatter,
-                                       fast_tsne, plot_evaluate_classifier)
+from sisua.utils import dimension_reduction
+from sisua.utils.visualization import (downsample_data, fast_scatter,
+                                       plot_evaluate_classifier)
 
 
 # ===========================================================================
@@ -233,7 +234,8 @@ def plot_distance_heatmap(X,
                           fontsize=10,
                           show_colorbar=True,
                           title=None):
-  """
+  r"""
+
   Parameters
   ----------
   X : (n_samples, n_features)
@@ -363,10 +365,10 @@ def plot_latents_multiclasses(Z,
                               title=None,
                               elev=None,
                               azim=None,
-                              use_PCA=False,
+                              algo='tsne',
                               show_colorbar=False,
                               figsize=None):
-  """ Label `y` is multi-classes
+  r""" Label `y` is multi-classes
   i.e. each samples could belong to multiple classes at once
 
   Return
@@ -383,24 +385,14 @@ def plot_latents_multiclasses(Z,
 
   if title is None:
     title = ''
-  title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
+  title = '[%s]%s' % (algo, title)
   # ====== Downsample if the data is huge ====== #
   Z, y = downsample_data(Z, y)
   # ====== checking inputs ====== #
   assert Z.ndim == 2, Z.shape
   assert Z.shape[0] == y.shape[0]
   # ====== preprocessing ====== #
-  if Z.shape[1] > 3:
-    if not use_PCA:
-      Z = fast_tsne(Z,
-                    n_components=2,
-                    perplexity=30.0,
-                    learning_rate=200,
-                    n_iter=1000,
-                    random_state=87654321,
-                    n_jobs=8)
-    else:
-      Z = fast_pca(Z, n_components=2, random_state=87654321)
+  Z = dimension_reduction(Z, algo=algo)
 
   # ====== select proteins ====== #
   def logit(p):
@@ -471,7 +463,7 @@ def plot_latents_binary(Z,
                         title=None,
                         elev=None,
                         azim=None,
-                        use_PCA=False,
+                        algo='tsne',
                         ax=None,
                         show_legend=True,
                         size=12,
@@ -482,7 +474,7 @@ def plot_latents_binary(Z,
   from matplotlib import pyplot as plt
   if title is None:
     title = ''
-  title = '[%s]%s' % ("PCA" if use_PCA else "t-SNE", title)
+  title = '[%s]%s' % (algo, title)
   ax = to_axis(ax)
   # ====== Downsample if the data is huge ====== #
   Z, y = downsample_data(Z, y)
@@ -491,17 +483,7 @@ def plot_latents_binary(Z,
   assert Z.shape[0] == y.shape[0]
   num_classes = len(labels_name)
   # ====== preprocessing ====== #
-  if Z.shape[1] > 3:
-    if not use_PCA:
-      Z = fast_tsne(Z,
-                    n_components=2,
-                    perplexity=30.0,
-                    learning_rate=200,
-                    n_iter=1000,
-                    random_state=87654321,
-                    n_jobs=8)
-    else:
-      Z = fast_pca(Z, n_components=2, random_state=87654321)
+  Z = dimension_reduction(Z, algo=algo)
   # ====== clustering metrics ====== #
   if show_scores:
     scores = clustering_scores(

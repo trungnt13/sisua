@@ -23,15 +23,18 @@ class VariationalAutoEncoder(SingleCellModel):
       latents = RandomVariable(latent_dim, 'diag', 'latent'),
     super().__init__(outputs, latents, network, **kwargs)
 
-  def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
+  def encode(self, x, lmean, lvar, y, training, n_mcmc):
     # applying encoding
     e = self.encoder(x, training=training)
     # latent distribution
     qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
+    return qZ
+
+  def decode(self, z, training):
     # decoding the latent
-    d = self.decoder(qZ, training=training)
+    d = self.decoder(z, training=training)
     pX = [p(d, training=training) for p in self.posteriors]
-    return pX, qZ
+    return pX
 
 
 class SISUA(VariationalAutoEncoder):

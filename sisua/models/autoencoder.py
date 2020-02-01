@@ -28,10 +28,13 @@ class DeepCountAutoencoder(SingleCellModel):
       latents = RandomVariable(latent_dim, 'relu', 'latent'),
     super().__init__(outputs, latents, network, **kwargs)
 
-  def _call(self, x, lmean, lvar, t, y, mask, training, n_mcmc):
+  def encode(self, x, lmean, lvar, y, training, n_mcmc):
     e = self.encoder(x, training=training)
     qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
+    return qZ
+
+  def decode(self, z, training):
     # the first dimension always the MCMC sample dimension
-    d = self.decoder(qZ.sample(n_mcmc), training=training)
+    d = self.decoder(z, training=training)
     pX = [p(d, training=training) for p in self.posteriors]
-    return pX, qZ
+    return pX

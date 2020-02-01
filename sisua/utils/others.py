@@ -1,21 +1,26 @@
-import os
-import re
 import math
+import os
 import pickle
-from six import string_types
+import re
 from collections import OrderedDict, defaultdict
 
 import numpy as np
+from six import string_types
 
-from odin.utils import ctext, as_tuple
 from odin.fuel import Dataset
+from odin.ml import fast_pca, fast_tsne, fast_umap
 from odin.stats import sparsity_percentage
+from odin.utils import as_tuple, ctext
 
-def filtering_experiment_path(ds_name, incl_keywords, excl_keywords,
+
+def filtering_experiment_path(ds_name,
+                              incl_keywords,
+                              excl_keywords,
                               fn_filter=None,
-                              return_dataset=False, print_log=False,
+                              return_dataset=False,
+                              print_log=False,
                               exp_path=''):
-  """
+  r"""
 
   Parameters
   ----------
@@ -77,27 +82,32 @@ def filtering_experiment_path(ds_name, incl_keywords, excl_keywords,
   elif isinstance(incl_keywords, (tuple, list)):
     incl_keywords = as_tuple(incl_keywords, t=str)
   else:
-    raise ValueError("No support for incl_keywords type: %s" % str(type(incl_keywords)))
+    raise ValueError("No support for incl_keywords type: %s" %
+                     str(type(incl_keywords)))
 
   if isinstance(excl_keywords, string_types):
     excl_keywords = [i for i in str(excl_keywords).split(',') if len(i) > 0]
   elif isinstance(excl_keywords, (tuple, list)):
     excl_keywords = as_tuple(excl_keywords, t=str)
   else:
-    raise ValueError("No support for excl_keywords type: %s" % str(type(excl_keywords)))
+    raise ValueError("No support for excl_keywords type: %s" %
+                     str(type(excl_keywords)))
 
-  all_exp = [i for i in all_exp
-             if all(any(j in keyword
-                        for keyword in os.path.basename(i).split('_'))
-                    for j in incl_keywords)]
-  all_exp = [i for i in all_exp
-             if all(all(j not in keyword
-                        for keyword in os.path.basename(i).split('_'))
-                    for j in excl_keywords)]
+  all_exp = [
+      i for i in all_exp if all(
+          any(j in keyword
+              for keyword in os.path.basename(i).split('_'))
+          for j in incl_keywords)
+  ]
+  all_exp = [
+      i for i in all_exp if all(
+          all(j not in keyword
+              for keyword in os.path.basename(i).split('_'))
+          for j in excl_keywords)
+  ]
 
   # filter function
-  all_exp = [i for i in all_exp
-             if fn_filter(os.path.basename(i).split('_'))]
+  all_exp = [i for i in all_exp if fn_filter(os.path.basename(i).split('_'))]
   # ====== logging ====== #
   if bool(print_log):
     print(ctext("Found following experiments:", 'lightyellow'))
@@ -109,6 +119,7 @@ def filtering_experiment_path(ds_name, incl_keywords, excl_keywords,
   if return_dataset:
     return all_exp, ds, gene_ds, prot_ds
   return all_exp
+
 
 def anything2image(x):
   if x.ndim == 1:
@@ -124,6 +135,34 @@ def anything2image(x):
     raise ValueError("No support for image with %d dimensions" % x.ndim)
   return x
 
+
+# ===========================================================================
+# Helper algorithms
+# ===========================================================================
+def dimension_reduction(*x, algo='pca', **kwargs):
+  algo = str(algo).lower()
+  assert algo in ('pca', 'tsne', 'umap'), \
+    "No support for algorithm: '%s'" % algo
+  if x[0].shape[1] < 3:
+    pass
+  elif algo == 'tsne':
+    x = fast_tsne(*x,
+                  n_components=2,
+                  perplexity=30.0,
+                  learning_rate=200,
+                  n_iter=1000,
+                  random_state=1234,
+                  n_jobs=8,
+                  **kwargs)
+  elif algo == 'pca':
+    x = fast_pca(*x, n_components=2, random_state=1234, **kwargs)
+  else:
+    x = fast_umap(*x, random_state=1234, **kwargs)
+  if len(x) == 1:
+    return x[0]
+  return x
+
+
 # ===========================================================================
 # For thresholding based on validation dataset
 # ===========================================================================
@@ -136,6 +175,7 @@ def apply_threshold(x, threshold):
   x = np.where(x < threshold, 0, x)
   x = np.where(np.logical_and(0 < x, x < 1), 1, x).astype('int32')
   return x
+
 
 def thresholding_by_sparsity_matching(T, W, *applying_data):
   """

@@ -31,7 +31,12 @@ _DEFAULT_BATCH_SIZE = 4096
 # ===========================================================================
 # Helper
 # ===========================================================================
-def apply_artificial_corruption(x, dropout, distribution, copy=False, seed=8):
+def apply_artificial_corruption(x,
+                                dropout,
+                                distribution,
+                                copy=False,
+                                seed=8,
+                                corrupt_rate=0.2):
   """
   Parameters
   ----------
@@ -75,7 +80,7 @@ def apply_artificial_corruption(x, dropout, distribution, copy=False, seed=8):
                      replace=False)
     i, j = i[ix], j[ix]
     # only 20% expression captured
-    corrupted = rand.binomial(n=(x[i, j]).astype(np.int32), p=0.2)
+    corrupted = rand.binomial(n=(x[i, j]).astype(np.int32), p=corrupt_rate)
   else:
     raise ValueError(
         "Only support 2 corruption distribution: 'uniform' and 'binomial', "
@@ -421,8 +426,8 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     return ds
 
   # ******************** transformation ******************** #
-  def split(self, train_percent=0.8, seed=8) -> Tuple['SingleCellOMIC',
-                                                      'SingleCellOMIC']:
+  def split(self, train_percent=0.8,
+            seed=8) -> Tuple['SingleCellOMIC', 'SingleCellOMIC']:
     r""" Spliting the data into training and test dataset
 
     Parameters
