@@ -129,12 +129,12 @@ def streamline_classifier(Z_train,
                           plot_train_results=False,
                           show_plot=True,
                           return_figure=False,
-                          figsize=None):
-  """
+                          fig=None):
+  r"""
   Parameters
   ----------
-  figsize : (`float`, `float`), optional (default=`None`)
-    width, height in inches
+    fig : Figure or tuple (`float`, `float`), optional (default=`None`)
+      width, height in inches
 
   Return
   ------
@@ -194,7 +194,7 @@ def streamline_classifier(Z_train,
             title='[train]' + title,
             show_plot=show_plot and plot_train_results,
             return_figure=True,
-            figsize=figsize)
+            fig=fig)
         results_test = plot_evaluate_classifier(
             y_pred=classifier.predict(Z_test),
             y_true=y_test,
@@ -202,7 +202,7 @@ def streamline_classifier(Z_train,
             title='[test]' + title,
             show_plot=show_plot,
             return_figure=True,
-            figsize=figsize)
+            fig=fig)
 
       if show_plot:
         if plot_train_results:

@@ -292,11 +292,11 @@ def get_dataset(dataset_name, override=False,
     label data: `SingleCellOMIC`. If label data is not availabel, then None
 
   Example:
-    gene, prot = get_dataset('pbmc8kly')
-    x_train, x_test = gene.split(train_percent=0.9)
-    y_train, y_test = prot.split(train_percent=0.9)
-    x_train.assert_matching_cells(y_train)
-    x_test.assert_matching_cells(y_test)
+    gene, prot = get_dataset("cortex")
+    X_train, X_test = gene.split(0.8, seed=1234)
+    y_train, y_test = prot.split(0.8, seed=1234)
+    X_train.assert_matching_cells(y_train)
+    X_test.assert_matching_cells(y_test)
   """
   data_meta = get_dataset_meta()
   # ====== special case: get all dataset ====== #

@@ -21,9 +21,12 @@ from sisua.data import SingleCellOMIC
 def _recover_mcmc_dim(self, inputs, training=None, mask=None):
   # This is a little hack to ignore MCMC dimension in the decoder
   shape = tf.shape(inputs)
-  inputs = tf.reshape(inputs, (-1, inputs.shape[-1]))
+  ndims = len(inputs.shape)
+  if ndims > 2:
+    inputs = tf.reshape(inputs, (-1, inputs.shape[-1]))
   outputs = super(keras.Sequential, self).call(inputs, training, mask)
-  outputs = tf.reshape(outputs, (shape[0], shape[1], outputs.shape[-1]))
+  if ndims > 2:
+    outputs = tf.reshape(outputs, (shape[0], shape[1], outputs.shape[-1]))
   return outputs
 
 

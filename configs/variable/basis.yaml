@@ -1,0 +1,9 @@
+latent:
+  dim: 10
+  posterior: 'gaus'
+
+rna:
+  posterior: 'zinb'
+
+adt:
+  posterior: 'nb'

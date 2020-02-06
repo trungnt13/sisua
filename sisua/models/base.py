@@ -225,7 +225,7 @@ class SingleCellModel(keras.Model, Visualizer):
     return self._seed
 
   @abstractmethod
-  def encode(self, x, lmean, lvar, y, training=None, n_mcmc=None):
+  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=None):
     r""" Encode the input matrix into latents
 
     Arguments:
@@ -250,7 +250,7 @@ class SingleCellModel(keras.Model, Visualizer):
     """
     raise NotImplementedError
 
-  def prepare_inputs(self, inputs):
+  def prepare_inputs(self, inputs, without_target=False):
     # check arguments
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
@@ -284,9 +284,12 @@ class SingleCellModel(keras.Model, Visualizer):
       ]  # y1, y2, ...
       mask = [1.] * len(y)
     # log normalization the input
-    t = x
+    t = tf.identity(x)
     if self.log_norm:
       x = tf.math.log1p(x)
+    # return
+    if without_target:
+      return x, lmean, lvar, y
     return x, lmean, lvar, t, y, mask
 
   def call(self, inputs, training=None, n_mcmc=1):
@@ -406,9 +409,9 @@ class SingleCellModel(keras.Model, Visualizer):
                        disable=not bool(verbose)):
       # the _to_tfddata will return (x, y) tuple for `fit` methods,
       # y=None and we only need x here.
-      x, z = self._call(*self.prepare_inputs(inputs[0]),
-                        training=False,
-                        n_mcmc=int(n_mcmc))
+      processed = self.prepare_inputs(inputs[0], without_target=True)
+      z = self.encode(*processed, training=False, n_mcmc=int(n_mcmc))
+      x = self.decode(z, training=False)
       # post-processing the return
       if not self.is_semi_supervised and isinstance(x, (tuple, list)):
         x = x[0]

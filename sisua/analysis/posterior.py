@@ -18,7 +18,6 @@ from six import string_types
 
 from odin.backend import log_norm
 from odin.fuel import Dataset
-from odin.ml import fast_pca, fast_tsne
 from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
                         flatten_list, md5_checksum)
 from odin.utils.mpi import MPI
@@ -40,7 +39,7 @@ from sisua.data.path import EXP_DIR
 from sisua.data.utils import standardize_protein_name
 from sisua.models.base import SingleCellModel
 from sisua.models.scvi import SCVI
-from sisua.utils import filtering_experiment_path
+from sisua.utils import dimension_reduction, filtering_experiment_path
 
 
 # ===========================================================================
@@ -180,8 +179,8 @@ class Posterior(Visualizer):
 
   @property
   def T(self):
-    r""" The artificial corrupted gene expression similar to the one
-    used for fitting the model """
+    r""" Target variables: artificial corrupted gene expression similar
+    to the one used for fitting the model """
     return self.gene_corrupt.X
 
   @property
@@ -294,7 +293,7 @@ class Posterior(Visualizer):
     return outputs, latents, y_train
 
   # ******************** Latent space analysis ******************** #
-  def plot_latents_protein_pairs(self, legend=True, algo='pca', figsize=None):
+  def plot_latents_protein_pairs(self, legend=True, algo='tsne', figsize=None):
     r""" Using marker gene/protein to select mutual exclusive protein
     pairs for comparison
 
@@ -310,7 +309,7 @@ class Posterior(Visualizer):
                                     y=y,
                                     labels_name=self.protein_name,
                                     title=title,
-                                    use_PCA=bool(pca),
+                                    algo=algo,
                                     show_colorbar=bool(legend),
                                     figsize=figsize)
     if fig is not None:
@@ -339,7 +338,7 @@ class Posterior(Visualizer):
 
   def plot_latents_binary_scatter(self,
                                   legend=True,
-                                  algo='pca',
+                                  algo='tsne',
                                   size=8,
                                   ax=None,
                                   fig=(8, 8)):
@@ -357,7 +356,7 @@ class Posterior(Visualizer):
                         fontsize=8,
                         ax=ax,
                         labels_name=self.protein_name,
-                        use_PCA=pca,
+                        algo=algo,
                         enable_argmax=True,
                         enable_separated=False)
     self.add_figure('latents_scatter', ax.get_figure())
@@ -368,15 +367,16 @@ class Posterior(Visualizer):
                          x_train: Optional[SingleCellOMIC] = None,
                          y_train: Optional[SingleCellOMIC] = None,
                          plot_train_results=False,
-                         figsize=None,
+                         fig=None,
                          mode='ovr'):
-    """
+    r"""
+
     Parameters
     ----------
     mode : {'ovr', 'ovo'}
       ovr - one vs rest
       ovo - one vs one
-    figsize : (`float`, `float`), optional (default=`None`)
+    fig : Figure or tuple (`float`, `float`), optional (default=`None`)
       width, height in inches
 
     """
@@ -400,7 +400,7 @@ class Posterior(Visualizer):
         labels_name=self.protein_name,
         show_plot=True,
         return_figure=True,
-        figsize=figsize)
+        fig=fig)
 
     if plot_train_results:
       self.add_figure('streamline_f1_%s' % 'train', fig_train)
@@ -1006,7 +1006,7 @@ class Posterior(Visualizer):
     return self
 
   def plot_protein_scatter(self,
-                           pca=False,
+                           algo='tsne',
                            protein_name='CD4',
                            fig=None,
                            y_true_new=None,
@@ -1017,7 +1017,6 @@ class Posterior(Visualizer):
     if not self.is_semi_supervised:
       return self
 
-    fn_dim = fast_pca if pca else fast_tsne
     protein_name = standardize_protein_name(protein_name).strip().lower()
     fig_name = 'protein_scatter_%s' % protein_name
 
@@ -1040,7 +1039,7 @@ class Posterior(Visualizer):
     assert isinstance(fig, plt.Figure), \
     "fig must be instance of matplotlib.Figure"
 
-    x = fn_dim(Z)
+    x = dimension_reduction(Z, algo=algo)
     ax = plot_scatter_heatmap(x, val=y_true, ax=321, grid=False, colorbar=True)
     ax.set_xlabel('Latent / ProteinOriginal')
     ax = plot_scatter_heatmap(x, val=y_pred, ax=322, grid=False, colorbar=True)

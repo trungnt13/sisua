@@ -9,7 +9,6 @@ from sisua.models.base import SingleCellModel
 from sisua.models.utils import NetworkConfig, RandomVariable
 
 
-
 class SCALE(SingleCellModel):
   r""" Tensorflow implementation of SCALE
 
@@ -36,14 +35,14 @@ class SCALE(SingleCellModel):
                                n_components=int(latent_component))
     super().__init__(outputs, latents, network, **kwargs)
 
-  def encode(self, x, lmean, lvar, y, training, n_mcmc):
+  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=1):
     # applying encoding
     e = self.encoder(x, training=training)
     # latent distribution
     qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
     return qZ
 
-  def decode(self, z, training):
+  def decode(self, z, training=None):
     # decoding the latent
     d = self.decoder(z, training=training)
     pX = [p(d, training=training) for p in self.posteriors]

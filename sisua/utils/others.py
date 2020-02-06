@@ -143,7 +143,10 @@ def dimension_reduction(*x, algo='pca', **kwargs):
   algo = str(algo).lower()
   assert algo in ('pca', 'tsne', 'umap'), \
     "No support for algorithm: '%s'" % algo
-  if x[0].shape[1] < 3:
+  if x[0].shape[1] == 1:
+    raise ValueError("No dimension reduction for input with shape: %s" %
+                     str(x[0].shape))
+  elif x[0].shape[1] == 2:
     pass
   elif algo == 'tsne':
     x = fast_tsne(*x,

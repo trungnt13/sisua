@@ -421,12 +421,13 @@ def plot_evaluate_classifier(y_pred,
                              title,
                              show_plot=True,
                              return_figure=False,
-                             figsize=None):
-  """
+                             fig=None):
+  r"""
+
   Parameters
   ----------
-  figsize : (`float`, `float`), optional (default=`None`)
-    width, height in inches
+    fig : Figure or tuple (`float`, `float`), optional (default=`None`)
+      width, height in inches
 
   Return
   ------
@@ -450,10 +451,10 @@ def plot_evaluate_classifier(y_pred,
     y_true = one_hot(y_true, nb_classes=num_classes)
 
   if show_plot:
-    if figsize is None:
+    if fig is None:
       fig = plot_figure(nrow=4 * nrow + 2, ncol=4 * ncol)
-    else:
-      fig = plot_figure(nrow=figsize[1], ncol=figsize[0])
+    elif isinstance(fig, (tuple, list)):
+      fig = plot_figure(nrow=fig[1], ncol=fig[0])
 
   f1_classes = []
   for i, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):

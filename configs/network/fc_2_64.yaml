@@ -1,0 +1,16 @@
+network:
+  hidden_dim: 64
+  nlayers: 2
+  activation: 'relu'
+  input_dropout: 0.
+  encoder_dropout: 0.
+  latent_dropout: 0.
+  decoder_dropout: 0.
+  layer_dropout: 0.
+  batchnorm: True
+  linear_decoder: False
+  pyramid: False
+  use_conv: False
+  kernel_size: 5
+  strides: 2
+  conv_proj: 128

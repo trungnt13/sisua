@@ -75,20 +75,21 @@ class SCVI(SingleCellModel):
     # be used
     self.posteriors[0].trainable = False
 
-  def encode(self, x, lmean, lvar, y, training, n_mcmc):
+  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=1):
     # applying encoding
     e_z = self.encoder(x, training=training)
     e_l = self.encoder_l(x, training=training)
-    # latent spaces
+    # latent space
     qZ = self.latent(e_z, training=training, n_mcmc=n_mcmc)
-    qL = self.library(e_l,
-                      training=training,
-                      n_mcmc=n_mcmc,
-                      prior=Independent(
-                          Normal(loc=lmean, scale=tf.math.sqrt(lvar)), 1))
+    # library space
+    if lmean is None or lvar is None:
+      pL = None
+    else:
+      pL = Independent(Normal(loc=lmean, scale=tf.math.sqrt(lvar)), 1)
+    qL = self.library(e_l, training=training, n_mcmc=n_mcmc, prior=pL)
     return qZ, qL
 
-  def decode(self, latents, training):
+  def decode(self, latents, training=None):
     qZ, qL = latents
     Z_samples = qZ
     # clipping L value to avoid overflow, softplus(12) = 12

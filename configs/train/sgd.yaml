@@ -1,0 +1,2 @@
+optimizer: 'sgd'
+epochs: 8

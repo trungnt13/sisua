@@ -77,7 +77,7 @@ pos.plot_correlation_bottom_pairs(n=5, proteins=proteins, fig=(16, 6))
 pos.plot_latents_binary_scatter()
 pos.plot_latents_distance_heatmap()
 pos.plot_latents_protein_pairs(figsize=(12, 4))
-pos.plot_classifier_F1(x_train=x_train, y_train=y_train, figsize=(12, 12))
+pos.plot_classifier_F1(x_train=x_train, y_train=y_train)
 # all figure and analysis could be saved to pdf file for later inspectation
 # pos.save_figures('/tmp/tmp.pdf')
 # ===========================================================================
