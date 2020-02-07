@@ -8,7 +8,7 @@ import tensorflow as tf
 from odin.exp import Experimenter, ExperimentManager
 from odin.utils.crypto import md5_checksum
 from sisua.data import get_dataset
-from sisua.models import NetworkConfig, RandomVariable, get
+from sisua.models import NetworkConfig, RandomVariable, get, load, save
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
@@ -45,7 +45,7 @@ class SisuaExperiment(Experimenter):
                           **kwargs)
 
   def on_load_data(self, cfg):
-    gene, prot = get_dataset(cfg.dataset_name)
+    gene, prot = get_dataset(cfg.dataset.name)
     split = float(cfg.get('split', 0.8))
     x_train, x_test = gene.split(split)
     if prot is not None:
@@ -61,7 +61,7 @@ class SisuaExperiment(Experimenter):
     self.rna_dim = x_train.shape[1]
     self.adt_dim = y_train.shape[1] if y_train is not None else None
 
-  def on_load_model(self, cfg):
+  def on_create_model(self, cfg):
     network = NetworkConfig(**cfg.network)
     rv_latent = self.random_variable('latent', cfg)
     rv_rna = self.random_variable('rna', cfg, dim=self.rna_dim)
@@ -72,22 +72,28 @@ class SisuaExperiment(Experimenter):
         network=network)
     self.model = model
 
-  def on_train(self, cfg):
+  def on_load_model(self, path):
+    self.model = load(path, model_index=-1)
+
+  def on_train(self, cfg, model_path):
     kwargs = Experimenter.match_arguments(self.model.fit,
-                                          cfg,
+                                          cfg.train,
                                           ignores=['inputs'])
     self.model.fit(\
       inputs=self.x_train if self.y_train is None else [self.x_train, self.y_train],
       **kwargs)
-
-  def on_clean(self, cfg):
-    pass
+    save(model_path, self.model, max_to_keep=5)
 
 
 exp = SisuaExperiment("/tmp/sisua",
                       "/data1/libs/sisua/configs/base.yaml",
+                      ignore_keys="train",
                       ncpu=2)
-exp.run(overrides=dict(model=['sisua', 'dca'],
-                       dataset_name=['cortex', 'pbmc8kly'],
-                       train=['adam', 'sgd']))
+exp.run(
+    overrides={
+        'model': ['sisua', 'dca'],
+        'dataset.name': ['cortex', 'pbmc8kly'],
+        'train': ['adam', 'sgd'],
+        'train.verbose': False
+    })
 # manager = exp.manager

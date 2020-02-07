@@ -1,11 +1,9 @@
 model: dca
 dataset:
-  dataset_name: cortex
+  name: cortex
   split: 0.8
 
 defaults:
   - network: fc_2_64
   - variable: basis
   - train: adam
-
-verbose: False

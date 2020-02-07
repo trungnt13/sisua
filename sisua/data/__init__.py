@@ -304,7 +304,7 @@ def get_dataset(dataset_name, override=False,
   if dataset_name not in data_meta:
     raise RuntimeError(
         'Cannot find dataset with name: "%s", all dataset include: %s' %
-        (dataset_name, ",".join(list(data_meta.keys()))))
+        (dataset_name, ", ".join(list(data_meta.keys()))))
   ds = data_meta[dataset_name](override=override, verbose=verbose)
   validating_dataset(ds)
   # ******************** return ******************** #

@@ -603,7 +603,7 @@ class SingleCellModel(keras.Model, Visualizer):
       if self.optimizer is None:
         # prepare optimizer
         if isinstance(optimizer, string_types):
-          config = dict(learning_rate=learning_rate)
+          config = dict(learning_rate=float(learning_rate))
           if clipnorm is not None:
             config['clipnorm'] = clipnorm
           optimizer = tf.optimizers.get({
@@ -614,9 +614,9 @@ class SingleCellModel(keras.Model, Visualizer):
           pass
         elif isinstance(optimizer, type) and issubclass(
             optimizer, tf.optimizers.Optimizer):
-          optimizer = optimizer(learning_rate=learning_rate) \
+          optimizer = optimizer(learning_rate=float(learning_rate)) \
             if clipnorm is None else \
-            optimizer(learning_rate=learning_rate, clipnorm=clipnorm)
+            optimizer(learning_rate=float(learning_rate), clipnorm=clipnorm)
         else:
           raise ValueError("No support for optimizer: %s" % str(optimizer))
       elif isinstance(optimizer, string_types):

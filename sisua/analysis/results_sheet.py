@@ -19,7 +19,7 @@ from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
 from odin.visual import (plot_aspect, plot_confusion_matrix, plot_figure,
                          plot_frame, plot_save, plot_scatter,
                          plot_scatter_heatmap, to_axis2D)
-from sisua.analysis.base import Posterior
+
 from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
