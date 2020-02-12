@@ -646,9 +646,9 @@ class SingleCellModel(keras.Model, Visualizer):
     return self.__str__()
 
   def __str__(self):
-    return "<[%s]%s fitted:%s epoch:%s semi:%s>" % (
+    return "<[%s]%s fitted:%s epoch:%s semi:%s elbo:%s>" % (
         self.__class__.__name__, self.name, self.epoch > 0, self.epoch,
-        self.is_semi_supervised)
+        self.is_semi_supervised, str(self._kl_interpolate))
 
   @classproperty
   def id(cls):

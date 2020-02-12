@@ -1,7 +1,19 @@
 model: dca
+
 dataset:
   name: cortex
   split: 0.8
+
+elbo:
+  interpolation: const
+  vmin: 0.
+  vmax: 1.
+  norm: 50
+  cyclical: False
+  delayIn: 0
+  delayOut: 0
+  mcmc: 1
+  analytic: True
 
 defaults:
   - network: fc_2_64

@@ -6,7 +6,7 @@
 import os
 from os.path import expanduser
 
-from odin.utils import select_path
+from odin.utils import get_script_path, select_path
 
 DEFAULT_BASE_DIR = expanduser("~")
 
@@ -31,5 +31,16 @@ if 'SISUA_EXP' in os.environ:
   elif os.path.isfile(EXP_DIR):
     raise RuntimeError("Experiment path at '%s' must be a folder" % EXP_DIR)
 else:
-  EXP_DIR = select_path(os.path.join(DEFAULT_BASE_DIR, 'bio_log'),
+  EXP_DIR = select_path(os.path.join(DEFAULT_BASE_DIR, 'bio_exp'),
                         create_new=True)
+
+# ====== path for yaml configurations ====== #
+if 'SISUA_CFG' in os.environ:
+  CONFIG_PATH = os.path.abspath(os.environ['SISUA_CFG'])
+else:
+  CONFIG_PATH = os.path.abspath(
+      os.path.join(get_script_path(__name__, return_dir=True), '..', '..',
+                   'configs', 'base.yaml'))
+if not os.path.isfile(CONFIG_PATH):
+  raise RuntimeError("Cannot find configuration .yaml files at: %s" %
+                     CONFIG_PATH)

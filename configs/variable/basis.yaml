@@ -1,5 +1,5 @@
 latent:
-  dim: 10
+  dim: 12
   posterior: 'gaus'
 
 rna:

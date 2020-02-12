@@ -12,6 +12,7 @@ from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import cache_memory, ctext, one_hot
 from sisua.data import normalization_recipes
 from sisua.data.const import UNIVERSAL_RANDOM_SEED
+from sisua.data.path import CONFIG_PATH, DATA_DIR, EXP_DIR
 from sisua.data.single_cell_dataset import (SingleCellOMIC,
                                             apply_artificial_corruption,
                                             get_library_size)
@@ -39,7 +40,7 @@ def get_dataset_meta():
       read_PBMCcross_ecc_8k, read_PBMCcross_remove_protein)
   from sisua.data.data_loader.centenarian import read_centenarian
   data_meta = {
-      "centenarian":
+      "100yo":
           read_centenarian,
       # ====== PBMC 10x ====== #
       "neuron10k":
@@ -66,13 +67,13 @@ def get_dataset_meta():
               spec='filtered',
               override=override,
               verbose=verbose),
-      'pbmc5k':
+      '5k':
           lambda override=False, verbose=False: read_dataset10x_cellexp(
               name='5k_pbmc_protein_v3',
               spec='filtered',
               override=override,
               verbose=verbose),
-      'pbmc5kgem':
+      '5kgem':
           lambda override=False, verbose=False: read_dataset10x_cellexp(
               name='5k_pbmc_protein_v3_nextgem',
               spec='filtered',
@@ -80,37 +81,37 @@ def get_dataset_meta():
               verbose=verbose),
 
       # ====== pbmc 8k ====== #
-      'pbmc8klyfull':
+      '8klyall':
           lambda override=False, verbose=False: read_PBMC8k(subset='ly',
                                                             override=override,
                                                             verbose=verbose,
                                                             filtered_genes=False
                                                            ),
-      'pbmc8kmyfull':
+      '8kmyall':
           lambda override=False, verbose=False: read_PBMC8k(subset='my',
                                                             override=override,
                                                             verbose=verbose,
                                                             filtered_genes=False
                                                            ),
-      'pbmc8kly':
+      '8kly':
           lambda override=False, verbose=False: read_PBMC8k(subset='ly',
                                                             override=override,
                                                             verbose=verbose,
                                                             filtered_genes=True
                                                            ),
-      'pbmc8kmy':
+      '8kmy':
           lambda override=False, verbose=False: read_PBMC8k(subset='my',
                                                             override=override,
                                                             verbose=verbose,
                                                             filtered_genes=True
                                                            ),
-      'pbmc8k':
+      '8k':
           lambda override=False, verbose=False: read_PBMC8k(subset='full',
                                                             override=override,
                                                             verbose=verbose,
                                                             filtered_genes=True
                                                            ),
-      'pbmc8kfull':
+      '8kall':
           lambda override=False, verbose=False: read_PBMC8k(subset='full',
                                                             override=override,
                                                             verbose=verbose,
@@ -118,53 +119,69 @@ def get_dataset_meta():
                                                            ),
 
       # ====== PBMC ECC ====== #
-      'pbmcecclyfull':
+      'ecclyall':
           lambda override=False, verbose=False: read_PBMCeec(subset='ly',
                                                              override=override,
                                                              verbose=verbose,
                                                              filtered_genes=
                                                              False),
-      # 'pbmcecc_myfull': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=False),
-      'pbmceccly':
+      'eccly':
           lambda override=False, verbose=False: read_PBMCeec(subset='ly',
                                                              override=override,
                                                              verbose=verbose,
                                                              filtered_genes=True
                                                             ),
-      # 'pbmcecc_my': lambda override: read_PBMCeec(subset='my', override=override, filtered_genes=True),
-      # 'pbmcecc': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=True),
-      # 'pbmcecc_full': lambda override: read_PBMCeec(subset='full', override=override, filtered_genes=False),
+      'eccmyall':
+          lambda override: read_PBMCeec(subset='my',
+                                        override=override,
+                                        verbose=verbose,
+                                        filtered_genes=False),
+      'eccmy':
+          lambda override: read_PBMCeec(subset='my',
+                                        override=override,
+                                        verbose=verbose,
+                                        filtered_genes=True),
+      'ecc':
+          lambda override: read_PBMCeec(subset='full',
+                                        override=override,
+                                        verbose=verbose,
+                                        filtered_genes=True),
+      'eccall':
+          lambda override: read_PBMCeec(subset='full',
+                                        override=override,
+                                        verbose=verbose,
+                                        filtered_genes=False),
 
       # ====== cross PBMC ====== #
-      'cross8klyfull':
+      '8klyallx':
           lambda override=False, verbose=False: read_PBMCcross_ecc_8k(
               subset='ly',
               return_ecc=False,
               override=override,
               verbose=verbose,
               filtered_genes=False),
-      'cross8kly':
+      '8klyx':
           lambda override=False, verbose=False: read_PBMCcross_ecc_8k(
               subset='ly',
               return_ecc=False,
               override=override,
               verbose=verbose,
               filtered_genes=True),
-      'crossecclyfull':
+      'ecclyallx':
           lambda override=False, verbose=False: read_PBMCcross_ecc_8k(
               subset='ly',
               return_ecc=True,
               override=override,
               verbose=verbose,
               filtered_genes=False),
-      'crosseccly':
+      'ecclyx':
           lambda override=False, verbose=False: read_PBMCcross_ecc_8k(
               subset='ly',
               return_ecc=True,
               override=override,
               verbose=verbose,
               filtered_genes=True),
-      'cross8knocd4':
+      '8knocd4x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=False,
@@ -172,7 +189,7 @@ def get_dataset_meta():
               verbose=verbose,
               filtered_genes=True,
               remove_protein='CD4'),
-      'crosseccnocd4':
+      'eccnocd4x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=True,
@@ -180,7 +197,7 @@ def get_dataset_meta():
               verbose=verbose,
               filtered_genes=True,
               remove_protein='CD4'),
-      'cross8knocd8':
+      '8knocd8x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=False,
@@ -188,7 +205,7 @@ def get_dataset_meta():
               verbose=verbose,
               filtered_genes=True,
               remove_protein='CD8'),
-      'crosseccnocd8':
+      'eccnocd8x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=True,
@@ -196,7 +213,7 @@ def get_dataset_meta():
               verbose=verbose,
               filtered_genes=True,
               remove_protein='CD8'),
-      'cross8knocd48':
+      '8knocd48x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=False,
@@ -204,14 +221,14 @@ def get_dataset_meta():
               verbose=verbose,
               filtered_genes=True,
               remove_protein=['CD4', 'CD8']),
-      'crosseccnocd48':
+      'eccnocd48x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=True,
               override=override,
               filtered_genes=True,
               remove_protein=['CD4', 'CD8']),
-      'cross8konlycd8':
+      '8konlycd8x':
           lambda override=False, verbose=False: read_PBMCcross_remove_protein(
               subset='ly',
               return_ecc=False,

@@ -8,7 +8,15 @@ from sisua.models.utils import *
 from sisua.models.variational_autoencoder import *
 
 
-def get(model):
+def get_all_models():
+  all_models = []
+  for key, val in globals().items():
+    if isinstance(val, type) and issubclass(val, SingleCellModel):
+      all_models.append(val)
+  return sorted(all_models, key=lambda cls: cls.id)
+
+
+def get_model(model):
   if isinstance(model, type):
     model = model.__name__
   model = str(model).lower()
@@ -72,7 +80,7 @@ def load(path: str, model_index=-1) -> SingleCellModel:
   from odin.backend import Trainer
   with open(os.path.join(path, 'singlecellmodel.pkl'), 'rb') as f:
     class_name, kwargs = pickle.load(f)
-  model = get(class_name)(**kwargs)
+  model = get_model(class_name)(**kwargs)
   model, optimizer, _ = Trainer.restore_checkpoint(path,
                                                    models=model,
                                                    index=model_index)
