@@ -24,7 +24,7 @@ from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
 from odin.bay.distributions import concat_distribution
-from odin.utils import cache_memory, classproperty
+from odin.utils import cache_memory, classproperty, catch_warnings_ignore
 from odin.visual import Visualizer
 from sisua.data import SingleCellOMIC
 from sisua.models.utils import NetworkConfig, RandomVariable
@@ -196,6 +196,13 @@ class SingleCellModel(keras.Model, Visualizer):
   def is_zero_inflated(self):
     return self._omic_outputs[0].is_zero_inflated
 
+  @classproperty
+  def is_multiple_outputs(self):
+    r""" Return true if __init__ contains both 'rna_dim' and 'adt_dim'
+    as arguments """
+    args = inspect.getfullargspec(self.__init__).args
+    return 'rna_dim' in args and 'adt_dim' in args
+
   @property
   def is_semi_supervised(self):
     return self._is_semi_supervised
@@ -225,7 +232,8 @@ class SingleCellModel(keras.Model, Visualizer):
     return self._seed
 
   @abstractmethod
-  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=None):
+  def encode(self, x, lmean=None, lvar=None, y=None, training=None,
+             n_mcmc=None):
     r""" Encode the input matrix into latents
 
     Arguments:
@@ -659,7 +667,7 @@ class SingleCellModel(keras.Model, Visualizer):
         name += i
     return name.lower()
 
-  def plot_learning_curves(self, fig=None):
+  def plot_learning_curves(self, fig=None, title=None, return_figure=False):
     name = [name for name in self._history.keys() if 'val_' != name[:4]]
     from matplotlib import pyplot as plt
     import seaborn as sns
@@ -708,7 +716,12 @@ class SingleCellModel(keras.Model, Visualizer):
                  legend[::2] + legend[1::2],
                  fontsize=8)
       plt.title(key)
-    plt.tight_layout()
+    if title is not None:
+      fig.suptitle(self.name)
+      with catch_warnings_ignore(UserWarning):
+        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    if return_figure:
+      return fig
     self.add_figure('learning_curves', fig)
     return self
 

@@ -5,6 +5,7 @@ import os
 import pickle
 import shutil
 import time
+import warnings
 from collections import OrderedDict, defaultdict
 from itertools import product
 from typing import Optional
@@ -18,8 +19,8 @@ from six import string_types
 
 from odin.backend import log_norm
 from odin.fuel import Dataset
-from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
-                        flatten_list, md5_checksum)
+from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore,
+                        clean_folder, ctext, flatten_list, md5_checksum)
 from odin.utils.mpi import MPI
 from odin.visual import (Visualizer, plot_aspect, plot_confusion_matrix,
                          plot_figure, plot_frame, plot_save, plot_scatter,
@@ -31,7 +32,7 @@ from sisua.analysis.imputation_benchmarks import (correlation_scores,
 from sisua.analysis.latent_benchmarks import (clustering_scores,
                                               plot_distance_heatmap,
                                               plot_latents_binary,
-                                              plot_latents_multiclasses,
+                                              plot_latents_protein_pairs,
                                               streamline_classifier)
 from sisua.analysis.sc_metrics import _preprocess_output_distribution
 from sisua.data import SingleCellOMIC, apply_artificial_corruption, get_dataset
@@ -41,22 +42,26 @@ from sisua.models.base import SingleCellModel
 from sisua.models.scvi import SCVI
 from sisua.utils import dimension_reduction, filtering_experiment_path
 
+sns.set()
 
+
+# 'X' for input gene expression,
+# 'T' for corrupted gene expression,
+# 'V' for imputed gene expression,
+# and 'W' for reconstructed gene expression
 # ===========================================================================
 # The Posterior
 # ===========================================================================
 class Posterior(Visualizer):
   r""" Posterior class for analysis
 
-  Parameters
-  ----------
-  scm : {`sisua.models.SingleCellModel`, string}
-
-  n_mcmc : int
-    number of MCMC samples for evaluation
-
-  verbose : bool
-    turn on verbose
+  Arguments:
+    scm : {`sisua.models.SingleCellModel`, string}, a trained single-cell model
+    gene : a `numpy.ndarray` with shape `[n_samples, n_genes]`
+    protein : a `numpy.ndarray` with shape `[n_samples, n_protein]`
+    batch_size : an Integer, batch size for the prediction tasks.
+    n_mcmc : an Integer, number of MCMC samples for evaluation
+    verbose : a Boolean, turn on verbose
 
   Example
   -------
@@ -127,6 +132,8 @@ class Posterior(Visualizer):
     gene_corrupt = self.gene_corrupt
     protein = self.protein
 
+    if self.verbose:
+      print("Making prediction for clean data ...")
     outputs_clean, latents_clean = scm.predict(gene,
                                                apply_corruption=False,
                                                n_mcmc=self.n_mcmc,
@@ -138,6 +145,8 @@ class Posterior(Visualizer):
     if not isinstance(latents_clean, (tuple, list)):
       latents_clean = [latents_clean]
 
+    if self.verbose:
+      print("Making prediction for corrupted data ...")
     outputs_corrupt, latents_corrupt = scm.predict(gene_corrupt,
                                                    apply_corruption=False,
                                                    n_mcmc=self.n_mcmc,
@@ -293,25 +302,21 @@ class Posterior(Visualizer):
     return outputs, latents, y_train
 
   # ******************** Latent space analysis ******************** #
-  def plot_latents_protein_pairs(self, legend=True, algo='tsne', figsize=None):
+  def plot_latents_protein_pairs(self,
+                                 legend=True,
+                                 algo='tsne',
+                                 all_pairs=False):
     r""" Using marker gene/protein to select mutual exclusive protein
-    pairs for comparison
-
-    Parameters
-    ----------
-    figsize : (`float`, `float`), optional (default=`None`)
-      width, height in inches
-
-    """
+    pairs for comparison """
     z, y = self.Z, self.y_true
     title = self.name
-    fig = plot_latents_multiclasses(Z=z,
-                                    y=y,
-                                    labels_name=self.protein_name,
-                                    title=title,
-                                    algo=algo,
-                                    show_colorbar=bool(legend),
-                                    figsize=figsize)
+    fig = plot_latents_protein_pairs(Z=z,
+                                     y=y,
+                                     labels_name=self.protein_name,
+                                     all_pairs=all_pairs,
+                                     title=title,
+                                     algo=algo,
+                                     show_colorbar=bool(legend))
     if fig is not None:
       self.add_figure('latents_protein_pairs', fig)
     return self
@@ -340,12 +345,9 @@ class Posterior(Visualizer):
                                   legend=True,
                                   algo='tsne',
                                   size=8,
-                                  ax=None,
-                                  fig=(8, 8)):
-    r""" Scatter plot of dimension
-    test : if True, plotting latent space of test set, otherwise, use training set
-    """
-    ax = to_axis2D(ax, fig)
+                                  ax=None):
+    r""" Scatter plot of dimension using binarized protein labels """
+    ax = to_axis2D(ax, (8, 8))
     z, y = self.Z, self.y_true
     title = self.name_lines
     plot_latents_binary(Z=z,
@@ -359,7 +361,7 @@ class Posterior(Visualizer):
                         algo=algo,
                         enable_argmax=True,
                         enable_separated=False)
-    self.add_figure('latents_scatter', ax.get_figure())
+    self.add_figure('latents_scatter_%s' % str(algo).lower(), ax.get_figure())
     return self
 
   # ******************** Streamline classifier ******************** #
@@ -367,22 +369,18 @@ class Posterior(Visualizer):
                          x_train: Optional[SingleCellOMIC] = None,
                          y_train: Optional[SingleCellOMIC] = None,
                          plot_train_results=False,
-                         fig=None,
                          mode='ovr'):
     r"""
-
-    Parameters
-    ----------
-    mode : {'ovr', 'ovo'}
-      ovr - one vs rest
-      ovo - one vs one
-    fig : Figure or tuple (`float`, `float`), optional (default=`None`)
-      width, height in inches
-
+    Arguments:
+      mode : {'ovr', 'ovo'}
+        ovr - one vs rest
+        ovo - one vs one
+      fig : Figure or tuple (`float`, `float`), optional (default=`None`)
+        width, height in inches
     """
     if mode == 'ovo':
       raise NotImplementedError
-
+    # ====== prepare the results ====== #
     if x_train is not None and y_train is not None:
       _, latents, y_train = self._train_data(x_train, y_train)
       Z_train = latents[0].mean().numpy()
@@ -390,7 +388,7 @@ class Posterior(Visualizer):
       Z_train = self.Z
       y_train = self.y_bin
     Z_test, y_test = self.Z, self.y_bin
-
+    # ====== train a plot the classifier ====== #
     (train, test), (fig_train, fig_test) = streamline_classifier(
         Z_train,
         y_train,
@@ -399,9 +397,7 @@ class Posterior(Visualizer):
         plot_train_results=plot_train_results,
         labels_name=self.protein_name,
         show_plot=True,
-        return_figure=True,
-        fig=fig)
-
+        return_figure=True)
     if plot_train_results:
       self.add_figure('streamline_f1_%s' % 'train', fig_train)
     self.add_figure('streamline_f1_%s' % 'test', fig_test)
@@ -438,49 +434,39 @@ class Posterior(Visualizer):
                                  data_type='V',
                                  proteins=None,
                                  n=8,
-                                 fontsize=10,
-                                 fig=None):
+                                 fontsize=10):
     return self._plot_correlation_ranked_pairs(data_type=data_type,
                                                n=n,
                                                proteins=proteins,
                                                top=True,
-                                               fontsize=fontsize,
-                                               fig=fig)
+                                               fontsize=fontsize)
 
   def plot_correlation_bottom_pairs(self,
                                     data_type='V',
                                     proteins=None,
                                     n=8,
-                                    fontsize=10,
-                                    fig=None):
+                                    fontsize=10):
     return self._plot_correlation_ranked_pairs(data_type=data_type,
                                                n=n,
                                                proteins=proteins,
                                                top=False,
-                                               fontsize=fontsize,
-                                               fig=fig)
+                                               fontsize=fontsize)
 
   def _plot_correlation_ranked_pairs(self,
                                      data_type='V',
                                      n=8,
                                      proteins=None,
                                      top=True,
-                                     fontsize=10,
-                                     fig=None):
+                                     fontsize=14):
+    r"""
+    Arguments:
+      data_type : {'X', 'T', 'V', 'W'}
+        'X' for input gene expression,
+        'T' for corrupted gene expression,
+        'V' for imputed gene expression,
+        and 'W' for reconstructed gene expression
+      proteins : {None, 'marker', list of string}
     """
-    Parameters
-    ----------
-    data_type : {'X', 'T', 'V', 'W'}
-      'X' for input gene expression,
-      'T' for corrupted gene expression,
-      'V' for imputed gene expression,
-      and 'W' for reconstructed gene expression
-    proteins : {None, 'marker', list of string}
-
-    """
-    ax = to_axis2D(ax=None, fig=fig)
-    fig = ax.get_figure()
-
     correlations = self.get_correlation_all_pairs(data_type=data_type)
     y = self.y_true
     if data_type == 'V':
@@ -527,15 +513,14 @@ class Posterior(Visualizer):
     correlations_map = {
         i: j[:n] if top else j[-n:][::-1] for i, j in correlations_map.items()
     }
-
     # ====== create figure ====== #
     nrow = len(correlations_map)
     if nrow == 0:  # no matching protein found
       return self
-
     ncol = n
-    if fig is None:
-      fig = plot_figure(nrow=3 * nrow, ncol=4 * ncol)
+    ax = to_axis2D(ax=None, fig=(ncol * 4, int(nrow * 3.6)))
+    fig = ax.get_figure()
+    # ====== plotting ====== #
     for i, (prot_idx, data) in enumerate(correlations_map.items()):
       prot = self.protein_name[prot_idx]
       for j, (gene_idx, pearson, spearman) in enumerate(data):
@@ -546,15 +531,14 @@ class Posterior(Visualizer):
         title = 'Pearson:%.2f Spearman:%.2f' % (pearson, spearman)
         ax.set_title(title, fontsize=fontsize)
         if j == 0:
-          ax.set_ylabel('Protein:%s' % prot, fontsize=fontsize + 2)
-        ax.set_xlabel('Gene:%s' % gene)
-
+          ax.set_ylabel('Protein:%s' % prot, fontsize=fontsize)
+        ax.set_xlabel('Gene:%s' % gene, fontsize=fontsize)
     # ====== store the figure ====== #
     plt.suptitle('[data_type: %s] %s %d pairs' %
                  (data_type_name, 'Top' if top else 'Bottom', n),
-                 fontsize=fontsize + 8)
+                 fontsize=fontsize + 6)
     with catch_warnings_ignore(UserWarning):
-      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+      plt.tight_layout(rect=[0, 0.03, 1, 0.97])
     self.add_figure(
         'correlation_%s_%s%d' %
         (data_type_name.lower(), 'top' if top else 'bottom', n), fig)
@@ -562,21 +546,19 @@ class Posterior(Visualizer):
 
   def plot_correlation_marker_pairs(self,
                                     imputed=True,
-                                    fontsize=10,
-                                    proteins=None,
-                                    fig=None):
-    """ Plotting the correlation series between marker gene and protein,
+                                    fontsize=12,
+                                    proteins=None):
+    r""" Plotting the correlation series between marker gene and protein,
     The original (uncorrupted data) is used for comparison to the
     imputation.
 
-    Parameters
-    ----------
-    imputed : `bool` (default: True)
-      if `True`, plot the imputed value (in case of zero-inflated distribution),
-      otherwise, plot the reconstructed value
-    proteins : {`None`, `str`, list of `str`} (default=`None`)
-      a list of protein names to be included, if `None`, include all marker
-      proteins.
+    Arguments:
+      imputed : `bool` (default: True)
+        if `True`, plot the imputed value (in case of zero-inflated distribution),
+        otherwise, plot the reconstructed value
+      proteins : {`None`, `str`, list of `str`} (default=`None`)
+        a list of protein names to be included, if `None`, include all marker
+        proteins.
     """
     from scipy.stats import pearsonr, spearmanr
     if proteins is not None:
@@ -620,14 +602,7 @@ class Posterior(Visualizer):
     if n_pair == 0:
       return self
 
-    if fig is None:
-      fig = plt.figure(figsize=(15, 5 * n_pair), constrained_layout=True)
-    else:
-      ax = to_axis2D(ax=None, fig=fig)
-      fig = ax.get_figure()
-    assert isinstance(fig, plt.Figure), \
-    "fig must be instance of matplotlib.Figure"
-
+    fig = plt.figure(figsize=(15, 5 * n_pair), constrained_layout=True)
     width = 4
     grids = fig.add_gridspec(n_pair, 2 * width)
 
@@ -637,9 +612,10 @@ class Posterior(Visualizer):
       original_gene, prot2 = original_series[prot_gene]
       assert np.all(prot1 == prot2)
       y = prot1
+      name = 'Imputed' if imputed else 'Reconstructed'
 
       for j, (name, series) in enumerate(
-          (("Original", original_gene), ("Imputed", imputed_gene))):
+          (("Original", original_gene), (name, imputed_gene))):
         ax = plt.subplot(grids[idx, width * j:(width * j + width - 1)])
 
         # plot the points
@@ -662,10 +638,10 @@ class Posterior(Visualizer):
         ax.boxplot(series)
         ax.set_xticks(())
         ax.set_xlabel(name, fontsize=fontsize)
-
+    # set title and save the figure
     plt.suptitle('[%s]%s' % (name, self.name), fontsize=fontsize + 2)
     with catch_warnings_ignore(UserWarning):
-      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+      plt.tight_layout(rect=[0, 0.04, 1, 0.96])
     self.add_figure('correlation_marker_%s' % name.lower(), fig)
     return self
 
@@ -718,18 +694,20 @@ class Posterior(Visualizer):
                                  y_train,
                                  Z_test,
                                  y_test,
-                                 train_results=False,
                                  labels_name=self.protein_name,
+                                 return_figure=False,
                                  show_plot=False)
 
   def save_scores(self, path=None):
     """ Saving all scores to a txt file """
     text = '==== %s ====\n' % self.name
+    classifier_train, classifier_test = self.scores_classifier()
     for name, scores in (
         ('llk', self.scores_llk()),
         ('pearson', self.scores_pearson()),
         ('spearman', self.scores_spearman()),
-        ('classifier', self.scores_classifier()),
+        ('classifier_train', classifier_train),
+        ('classifier_test', classifier_test),
         ('cluster', self.scores_clustering()),
         ('imputation', self.scores_imputation()),
     ):
@@ -760,85 +738,10 @@ class Posterior(Visualizer):
   def valid_history(self):
     return self.scm.valid_history
 
-  def plot_learning_curves(self,
-                           metrics='loss',
-                           ignore_case=True,
-                           ignore_missing=True,
-                           fig=(8, 8)):
-    r""" Plotting the loss or metrics returned during training progress
-
-    Parameters
-    ----------
-    metrics : {`str`, list of `str`} (default='loss')
-      a metric name or list of metric name for plotting
-    ignore_case : `bool` (default=`False`)
-      if `True` turn everything to lower case for matching the metric name.
-    ignore_missing : `bool` (default=`True`)
-      if `True`, ignore the missing metric which not found in the history of
-      trained model.
-    """
-    metrics = as_tuple(metrics, t=str)
-    if ignore_case:
-      metrics = [m.lower() for m in metrics]
-    ax = to_axis2D(None, fig)
-    fig = ax.get_figure()
-
-    train_history = self.train_history
-    valid_history = self.valid_history
-
-    _ = []
-    train_keys = {
-        i.lower() if ignore_case else i: i for i in train_history.keys()
-    }
-    valid_keys = {
-        i.lower() if ignore_case else i: i for i in valid_history.keys()
-    }
-    for m in metrics:
-      if not (m in train_keys and 'val_' + m in valid_keys):
-        if not ignore_missing:
-          raise ValueError(
-              "Cannot find metric with name: %s; all given metrics are: %s" %
-              (m, ', '.join(train_keys)))
-      else:
-        _.append(train_keys[m])
-
-    metrics = tuple(_)
-    n_metrics = len(metrics)
-    if n_metrics == 0:  # no metric or loss found for plotting
-      return self
-
-    for idx, m in enumerate(metrics):
-      ax = plt.subplot(1, n_metrics, idx + 1)
-
-      train = train_history[m]
-      valid = valid_history['val_' + m]
-
-      line_styles = dict(linewidth=1.8)
-      point_styles = dict(alpha=0.6, s=80, linewidths=0)
-
-      ax.plot(train, label='train', color='blue', linestyle='-', **line_styles)
-      ax.scatter(np.argmin(train), np.min(train), c='blue', **point_styles)
-
-      ax.plot(valid,
-              label='valid',
-              color='orange',
-              linestyle='--',
-              **line_styles)
-      ax.scatter(np.argmin(valid), np.min(valid), c='orange', **point_styles)
-
-      # ax.set_ylabel("Loss")
-      ax.set_xlabel("#Epoch")
-      # convert all the xticks to integer and remove overlapping
-      xticks = ax.get_xticks()
-      ax.set_xticks(list(set([int(i) for i in xticks])))
-
-      ax.legend()
-      ax.set_title('[metric: %s]' % m, fontsize=14)
-
-    fig.suptitle(self.name)
-    with catch_warnings_ignore(UserWarning):
-      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    self.add_figure('learning_curves_%s' % m, ax.get_figure())
+  def plot_learning_curves(self):
+    r""" Plotting the loss or metrics returned during training progress """
+    fig = self.scm.plot_learning_curves(title=self.name, return_figure=True)
+    self.add_figure('learning_curves', fig)
     return self
 
   # ******************** Correlation scores ******************** #
@@ -1008,17 +911,25 @@ class Posterior(Visualizer):
   def plot_protein_scatter(self,
                            algo='tsne',
                            protein_name='CD4',
-                           fig=None,
                            y_true_new=None,
                            y_pred_new=None,
                            labels_new=None):
-    """ Plot comparison of protein in latent space, imputed and original
-    input space """
+    r""" Plot scatter points of latent space, imputed and original input space
+    colored by original protein and predicted protein levels. """
     if not self.is_semi_supervised:
+      return self
+    # plot all protein in case of None
+    if protein_name is None:
+      for name in self.protein_name:
+        self.plot_protein_scatter(algo=algo,
+                                  protein_name=name,
+                                  y_true_new=y_true_new,
+                                  y_pred_new=y_pred_new,
+                                  labels_new=labels_new)
       return self
 
     protein_name = standardize_protein_name(protein_name).strip().lower()
-    fig_name = 'protein_scatter_%s' % protein_name
+    fig_name = 'multispaces_scatter_%s' % protein_name
 
     labels = self.protein_name if labels_new is None else labels_new
     labels = [i.strip().lower() for i in labels]
@@ -1027,6 +938,8 @@ class Posterior(Visualizer):
     y_pred = self.y_pred if y_pred_new is None else y_pred_new
 
     if protein_name not in labels:
+      warnings.warn("Cannot find protein '%s', available protein are: %s" %
+                    (protein_name, self.protein_name))
       return self
 
     idx = [i for i, j in enumerate(labels) if protein_name in j][0]
@@ -1034,40 +947,50 @@ class Posterior(Visualizer):
     y_pred = y_pred[:, idx]
     X, Z, V = self.X, self.Z, self.V
 
-    if fig is None:
-      fig = plot_figure(nrow=13, ncol=10)
+    fig = plot_figure(nrow=13, ncol=10)
     assert isinstance(fig, plt.Figure), \
     "fig must be instance of matplotlib.Figure"
 
     x = dimension_reduction(Z, algo=algo)
     ax = plot_scatter_heatmap(x, val=y_true, ax=321, grid=False, colorbar=True)
-    ax.set_xlabel('Latent / ProteinOriginal')
+    ax.set_ylabel('Scatter of Latent Space')
+    ax.set_xlabel('Colored by "Protein Original"')
     ax = plot_scatter_heatmap(x, val=y_pred, ax=322, grid=False, colorbar=True)
-    ax.set_xlabel('Latent / ProteinPredicted')
+    ax.set_xlabel('Colored by "Protein Predicted"')
 
-    x = fn_dim(V)
+    x = dimension_reduction(V, algo=algo)
     ax = plot_scatter_heatmap(x, val=y_true, ax=323, grid=False, colorbar=True)
-    ax.set_xlabel('InputImputed / ProteinOriginal')
+    ax.set_ylabel('Scatter of Imputed mRNA')
+    ax.set_xlabel('Colored by "Protein Original"')
     ax = plot_scatter_heatmap(x, val=y_pred, ax=324, grid=False, colorbar=True)
-    ax.set_xlabel('InputImputed / ProteinPredicted')
+    ax.set_xlabel('Colored by "Protein Predicted"')
 
-    x = fn_dim(X)
+    x = dimension_reduction(X, algo=algo)
     ax = plot_scatter_heatmap(x, val=y_true, ax=325, grid=False, colorbar=True)
-    ax.set_xlabel('InputOriginal / ProteinOriginal')
+    ax.set_ylabel('Scatter of Original mRNA')
+    ax.set_xlabel('Colored by "Protein Original"')
     ax = plot_scatter_heatmap(x, val=y_pred, ax=326, grid=False, colorbar=True)
-    ax.set_xlabel('InputOriginal / ProteinPredicted')
+    ax.set_xlabel('Colored by "Protein Predicted"')
 
     fig.suptitle(protein_name, fontsize=16)
     with catch_warnings_ignore(UserWarning):
-      plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+      plt.tight_layout(rect=[0, 0.04, 1, 0.96])
     self.add_figure(fig_name, fig)
     return self
 
   # ******************** just summary everything  ******************** #
-  def full_report(self, path, x_train=None, y_train=None, override=True):
-    """
-    path : `str`
-      path to a folder
+  def full_report(self,
+                  path,
+                  x_train=None,
+                  y_train=None,
+                  dpi=120,
+                  override=True):
+    r""" Generate a combined report
+
+    Arguments:
+      path : a String, path to a folder saving the report
+      x_train, y_train : training data for downstream task
+      override : a Boolean, override existed analysis
     """
     if not os.path.exists(path):
       os.mkdir(path)
@@ -1076,33 +999,29 @@ class Posterior(Visualizer):
     else:
       if self.verbose:
         print("Override analysis at path:", path)
-      shutil.rmtree(path)
-      os.mkdir(path)
+    clean_folder(path)
 
     score_path = os.path.join(path, 'scores.txt')
     self.save_scores(score_path)
     if self.verbose:
       print("Saved scores at:", score_path)
 
-    self.plot_learning_curves(metric='loss')
+    self.plot_learning_curves()
     if self.is_semi_supervised:
-      self.plot_protein_scatter(protein_name='CD4')
-      self.plot_protein_scatter(protein_name='CD8')
-      self.plot_protein_scatter(protein_name='CD45RA')
-      self.plot_protein_scatter(protein_name='CD45RO')
+      self.plot_protein_scatter(protein_name=None)
       self.plot_protein_predicted_series()
 
-    self.plot_correlation_top_pairs().plot_correlation_bottom_pairs()
-    self.plot_correlation_marker_pairs(
-        imputed=True).plot_correlation_marker_pairs(imputed=False)
+    self.plot_correlation_top_pairs()
+    self.plot_correlation_bottom_pairs()
+    self.plot_correlation_marker_pairs(imputed=True)
+    self.plot_correlation_marker_pairs(imputed=False)
 
-    self.plot_classifier_F1(x_train, y_train)
+    self.plot_classifier_F1(x_train, y_train, plot_train_results=True)
     self.plot_latents_binary_scatter()
     self.plot_latents_distance_heatmap()
-    self.plot_latents_protein_pairs()
-
+    self.plot_latents_protein_pairs(all_pairs=True)
     self.save_figures(path,
-                      dpi=120,
+                      dpi=int(dpi),
                       separate_files=True,
                       clear_figures=True,
                       verbose=self.verbose)

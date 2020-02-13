@@ -27,7 +27,7 @@ from sisua.analysis.imputation_benchmarks import (correlation_scores,
 from sisua.analysis.latent_benchmarks import (clustering_scores,
                                               plot_distance_heatmap,
                                               plot_latents_binary,
-                                              plot_latents_multiclasses)
+                                              plot_latents_protein_pairs)
 from sisua.analysis.posterior import Posterior
 from sisua.data import get_dataset
 from sisua.data.path import EXP_DIR

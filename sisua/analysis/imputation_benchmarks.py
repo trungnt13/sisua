@@ -32,20 +32,18 @@ def get_imputed_indices(x_org, x_imp):
 
 
 def correlation_scores(X, y, gene_name, protein_name, return_series=False):
-  """ Spearman and Pearson correlation scores
+  r""" Spearman and Pearson correlation scores
 
-  return_series : bool
-      if True, return the gene and protein series, instead of
-      calculating spearman, or pearson correlation scores
+  Arguments:
+    return_series : bool
+        if True, return the gene and protein series, instead of
+        calculating spearman, or pearson correlation scores
 
-  Return
-  ------
-  `correlation_scores` or `correlation_series`
-
-  of which,
-
-  correlation_scores : dict(protein_name/gene_name=(spearman, pearson))
-  correlation_series : dict(protein_name/gene_name=(gene_series, prot_series))
+  Returns:
+    `correlation_scores` or `correlation_series`
+      of which,
+    correlation_scores : dict(protein_name/gene_name=(spearman, pearson))
+    correlation_series : dict(protein_name/gene_name=(gene_series, prot_series))
 
   """
   from scipy.stats import pearsonr, spearmanr

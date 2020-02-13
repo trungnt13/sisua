@@ -1,5 +1,6 @@
 from __future__ import absolute_import, division, print_function
 
+import itertools
 from collections import OrderedDict
 
 import numpy as np
@@ -128,23 +129,21 @@ def streamline_classifier(Z_train,
                           title='',
                           plot_train_results=False,
                           show_plot=True,
-                          return_figure=False,
-                          fig=None):
+                          return_figure=False):
   r"""
-  Parameters
-  ----------
+  Arguments:
     fig : Figure or tuple (`float`, `float`), optional (default=`None`)
       width, height in inches
 
-  Return
-  ------
-  Return a dictionary of scores
-  {
-      F1micro=f1_micro * 100,
-      F1macro=f1_macro * 100,
-      F1weight=f1_weight * 100,
-      F1_[classname]=...
-  }
+  Returns:
+    (results_train, results_test), (fig_train, fig_test)
+      results is a dictionary of scores
+      {
+        F1micro=f1_micro * 100,
+        F1macro=f1_macro * 100,
+        F1weight=f1_weight * 100,
+        F1_[classname]=...
+      }
   """
   mode = mode.strip().lower()
   assert mode in ('ovr', 'ovo'), \
@@ -193,16 +192,14 @@ def streamline_classifier(Z_train,
             labels=labels_name,
             title='[train]' + title,
             show_plot=show_plot and plot_train_results,
-            return_figure=True,
-            fig=fig)
+            return_figure=True)
         results_test = plot_evaluate_classifier(
             y_pred=classifier.predict(Z_test),
             y_true=y_test,
             labels=labels_name,
             title='[test]' + title,
             show_plot=show_plot,
-            return_figure=True,
-            fig=fig)
+            return_figure=True)
 
       if show_plot:
         if plot_train_results:
@@ -359,28 +356,26 @@ def plot_distance_heatmap(X,
   return ax
 
 
-def plot_latents_multiclasses(Z,
-                              y,
-                              labels_name,
-                              title=None,
-                              elev=None,
-                              azim=None,
-                              algo='tsne',
-                              show_colorbar=False,
-                              figsize=None):
+def plot_latents_protein_pairs(Z,
+                               y,
+                               labels_name,
+                               all_pairs=False,
+                               title=None,
+                               elev=None,
+                               azim=None,
+                               algo='tsne',
+                               show_colorbar=False):
   r""" Label `y` is multi-classes
   i.e. each samples could belong to multiple classes at once
 
-  Return
-  ------
-  fig : matplotlib.Figure or None
-      if no pair found, return None, otherwise, the
-      figure used to plot all protein pairs
-  figsize : (`float`, `float`), optional (default=`None`)
-    width, height in inches
+  Returns:
+    fig : matplotlib.Figure or None
+        if no pair found, return None, otherwise, the
+        figure used to plot all protein pairs
+    figsize : (`float`, `float`), optional (default=`None`)
+      width, height in inches
 
   """
-  from sisua.data.utils import standardize_protein_name
   labels_name = [standardize_protein_name(i) for i in labels_name]
 
   if title is None:
@@ -407,25 +402,27 @@ def plot_latents_multiclasses(Z,
   y_max = np.max(y, axis=0, keepdims=True)
   y = (y - y_min) / (y_max - y_min)
 
-  # select most 2 different protein
+  # select most 2 different proteins to create pairs
   labels_index = {name: i for i, name in enumerate(labels_name)}
   pairs = []
-  for i, j in PROTEIN_PAIR_COMPARISON:
-    if i in labels_index and j in labels_index:
-      pairs.append((i, j))
+  if all_pairs:
+    pairs = set([
+        '*'.join(sorted(i))
+        for i in itertools.product(labels_index.keys(), labels_index.keys())
+        if i[0] != i[1]
+    ])
+    pairs = [i.split('*') for i in pairs]
+  else:
+    for i, j in PROTEIN_PAIR_COMPARISON:
+      if i in labels_index and j in labels_index:
+        pairs.append((i, j))
   n_pairs = len(pairs)
-
   if n_pairs == 0:
     return None
-
   # we could handle 5 pairs in 1 row, no problem
   ncol = min(5, n_pairs)
   nrow = int(np.ceil(n_pairs / ncol))
-
-  if figsize is None:
-    fig = plt.figure(figsize=(ncol * 4, nrow * 4))
-  else:
-    fig = plt.figure(figsize=figsize)
+  fig = plt.figure(figsize=(ncol * 4, int(nrow * 3.6)))
 
   for idx, labels_name in enumerate(pairs):
     ax = plt.subplot(nrow, ncol, idx + 1)
@@ -445,6 +442,8 @@ def plot_latents_multiclasses(Z,
         legend_enable=False,
         colormap='bwr',
         size=8,
+        elev=elev,
+        azim=azim,
         alpha=1.,
         fontsize=8,
         grid=False,

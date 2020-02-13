@@ -420,24 +420,20 @@ def plot_evaluate_classifier(y_pred,
                              labels,
                              title,
                              show_plot=True,
-                             return_figure=False,
-                             fig=None):
+                             return_figure=False):
   r"""
-
-  Parameters
-  ----------
+  Arguments:
     fig : Figure or tuple (`float`, `float`), optional (default=`None`)
       width, height in inches
 
-  Return
-  ------
-  Return a dictionary of scores
-  {
-      F1micro=f1_micro * 100,
-      F1macro=f1_macro * 100,
-      F1weight=f1_weight * 100,
-      F1_[classname]=...
-  }
+  Returns:
+    Return a dictionary of scores
+    {
+        F1micro=f1_micro * 100,
+        F1macro=f1_macro * 100,
+        F1weight=f1_weight * 100,
+        F1_[classname]=...
+    }
   """
   from matplotlib import pyplot as plt
   fontsize = 12
@@ -451,10 +447,7 @@ def plot_evaluate_classifier(y_pred,
     y_true = one_hot(y_true, nb_classes=num_classes)
 
   if show_plot:
-    if fig is None:
-      fig = plot_figure(nrow=4 * nrow + 2, ncol=4 * ncol)
-    elif isinstance(fig, (tuple, list)):
-      fig = plot_figure(nrow=fig[1], ncol=fig[0])
+    fig = plot_figure(nrow=4 * nrow + 2, ncol=4 * ncol)
 
   f1_classes = []
   for i, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):
@@ -472,9 +465,9 @@ def plot_evaluate_classifier(y_pred,
 
   if show_plot:
     plt.suptitle('%s\nF1-micro:%.2f  F1-macro:%.2f  F1-weight:%.2f' %
-                 (title, f1_micro * 100, f1_macro * 100, f1_weight * 100))
-    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-
+                 (title, f1_micro * 100, f1_macro * 100, f1_weight * 100),
+                 fontsize=fontsize + 6)
+    plt.tight_layout(rect=[0, 0.04, 1, 0.96])
   results = dict(
       F1micro=f1_micro * 100,
       F1macro=f1_macro * 100,
@@ -482,7 +475,6 @@ def plot_evaluate_classifier(y_pred,
   )
   for name, f1 in zip(labels, f1_classes):
     results['F1_' + name] = f1 * 100
-
   if show_plot and return_figure:
     return results, fig
   return results
