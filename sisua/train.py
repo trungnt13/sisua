@@ -80,7 +80,7 @@ class SisuaExperimenter(Experimenter):
 
   def on_load_data(self, cfg):
     gene, prot = get_dataset(cfg.dataset.name)
-    split = float(cfg.get('split', 0.8))
+    split = float(cfg.dataset.get('split', 0.8))
     x_train, x_test = gene.split(split)
     if prot is not None:
       y_train, y_test = prot.split(split)
@@ -101,17 +101,21 @@ class SisuaExperimenter(Experimenter):
     rv_rna = random_variable('rna', cfg, dim=self.rna_dim)
     rv_adt = random_variable('adt', cfg, dim=self.adt_dim, required=False)
     log_norm = cfg.get('log_norm', True)
+    force_semi = cfg.get('force_semi', False)
     # ====== create model ====== #
     model_cls = get_model(cfg.model)
     args = inspect.getfullargspec(model_cls.__init__).args
     model_kwargs = dict(network=network, log_norm=log_norm)
     model_kwargs.update(elbo_config(cfg))
-    if 'rna_dim' in args and 'adt_dim' in args:
+    # because every model could be semi-supervised
+    if model_cls.is_multiple_outputs:
       model_kwargs['rna_dim'] = rv_rna.dim
       model_kwargs['adt_dim'] = rv_adt.dim
+    elif force_semi:
+      model_kwargs['outputs'] = [rv_rna, rv_adt] \
+        if rv_adt is not None else rv_rna
     else:
-      model_kwargs['outputs'] = [rv_rna, rv_adt
-                                ] if rv_adt is not None else rv_rna
+      model_kwargs['outputs'] = [rv_rna]
     if 'latent_dim' in args:
       model_kwargs['latent_dim'] = rv_latent.dim
     else:
@@ -125,7 +129,7 @@ class SisuaExperimenter(Experimenter):
   def on_train(self, cfg, model_path):
     kwargs = Experimenter.match_arguments(self.model.fit,
                                           cfg.train,
-                                          ignores=['inputs'])
+                                          exclude_args='inputs')
     self.model.fit(\
       inputs=self.x_train if self.y_train is None else [self.x_train, self.y_train],
       **kwargs)

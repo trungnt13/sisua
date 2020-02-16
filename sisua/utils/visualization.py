@@ -20,6 +20,7 @@ from odin.visual import (generate_random_colors, generate_random_marker,
                          plot_scatter_layers, plot_series_statistics, subplot)
 from sisua.utils.others import anything2image
 
+sbn.set()
 
 # ===========================================================================
 # Some helper
@@ -447,7 +448,7 @@ def plot_evaluate_classifier(y_pred,
     y_true = one_hot(y_true, nb_classes=num_classes)
 
   if show_plot:
-    fig = plot_figure(nrow=4 * nrow + 2, ncol=4 * ncol)
+    fig = plot_figure(nrow=4 * nrow + 3, ncol=4 * ncol)
 
   f1_classes = []
   for i, (name, pred, true) in enumerate(zip(labels, y_pred.T, y_true.T)):

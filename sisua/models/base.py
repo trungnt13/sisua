@@ -20,11 +20,12 @@ from tensorflow.python.keras.callbacks import (Callback, CallbackList,
 from tensorflow.python.platform import tf_logging as logging
 from tqdm import tqdm
 
+from odin.bay.vi import VariationalAutoencoder
 from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
 from odin.bay.distributions import concat_distribution
-from odin.utils import cache_memory, classproperty, catch_warnings_ignore
+from odin.utils import cache_memory, catch_warnings_ignore, classproperty
 from odin.visual import Visualizer
 from sisua.data import SingleCellOMIC
 from sisua.models.utils import NetworkConfig, RandomVariable
@@ -71,7 +72,7 @@ _MAXIMUM_CACHE_SIZE = 2
 # ===========================================================================
 # SingleCell model
 # ===========================================================================
-class SingleCellModel(keras.Model, Visualizer):
+class SingleCellModel(VariationalAutoencoder, Visualizer):
   r"""
   Note:
     It is recommend to call `tensorflow.random.set_seed` for reproducible
@@ -231,6 +232,23 @@ class SingleCellModel(keras.Model, Visualizer):
   def seed(self):
     return self._seed
 
+  def sample(self, sample_shape=(), seed=1):
+    r""" Sampling from the latents' prior
+
+    Return:
+      sampled tensors from latent's prior `[sample_shape, zdim]`
+        a list of tensors will be returned if model has multiple latents
+    """
+    z = []
+    for qZ in self.latents:
+      pZ = qZ.prior
+      samples = pZ.sample(sample_shape=sample_shape, seed=seed)
+      if len(samples.shape) == 1:
+        samples = tf.expand_dims(samples, axis=0)
+      z.append(samples)
+    z = tuple(z)
+    return z[0] if len(self.latents) == 1 else z
+
   @abstractmethod
   def encode(self, x, lmean=None, lvar=None, y=None, training=None,
              n_mcmc=None):
@@ -244,6 +262,10 @@ class SingleCellModel(keras.Model, Visualizer):
       y : [batch_size, n_protein], input for semi-supervised learning
       training : Boolean, flag mark training progress
       n_mcmc : {`None`, `int`}, number of MCMC samples
+
+    Example:
+      e = self.encoder(x, training=training)
+      qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
     """
     raise NotImplementedError
 
@@ -255,6 +277,11 @@ class SingleCellModel(keras.Model, Visualizer):
       z : [batch_size, latent_dim] or [n_mcmc, batch_size, latent_dim], latent
         codes
       training : Boolean, flag mark training progress
+
+    Example:
+      # the first dimension always the MCMC sample dimension
+      d = self.decoder(z, training=training)
+      pX = [p(d, training=training) for p in self.posteriors]
     """
     raise NotImplementedError
 
@@ -654,9 +681,9 @@ class SingleCellModel(keras.Model, Visualizer):
     return self.__str__()
 
   def __str__(self):
-    return "<[%s]%s fitted:%s epoch:%s semi:%s elbo:%s>" % (
-        self.__class__.__name__, self.name, self.epoch > 0, self.epoch,
-        self.is_semi_supervised, str(self._kl_interpolate))
+    return "<%s fitted:%s epoch:%s semi:%s elbo:%s>" % (
+        self.name, self.epoch > 0, self.epoch, self.is_semi_supervised,
+        str(self._kl_interpolate))
 
   @classproperty
   def id(cls):

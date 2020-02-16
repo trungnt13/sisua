@@ -16,7 +16,11 @@ import seaborn as sns
 import tensorflow as tf
 from matplotlib import pyplot as plt
 from six import string_types
+from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
 
+from odin.bay import vi
+from odin import visual as vs
 from odin.backend import log_norm
 from odin.fuel import Dataset
 from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore,
@@ -41,8 +45,6 @@ from sisua.data.utils import standardize_protein_name
 from sisua.models.base import SingleCellModel
 from sisua.models.scvi import SCVI
 from sisua.utils import dimension_reduction, filtering_experiment_path
-
-sns.set()
 
 
 # 'X' for input gene expression,
@@ -210,8 +212,24 @@ class Posterior(Visualizer):
 
   @property
   def y_true(self):
-    """ True value of protein marker level or cell type labels """
+    r""" True value of protein marker level or cell type labels """
     return self.protein.X
+
+  @property
+  def y_true_binary(self):
+    if self.protein.is_binary:
+      return self.y_true
+    if 'pbe' not in self.protein.uns:
+      self.protein.probabilistic_embedding()
+    return self.protein.obsm['X_bin']
+
+  @property
+  def y_true_probability(self):
+    if self.protein.is_binary:
+      return self.y_true
+    if 'pbe' not in self.protein.uns:
+      self.protein.probabilistic_embedding()
+    return self.protein.obsm['X_prob']
 
   @property
   def y_prob(self):
@@ -328,8 +346,7 @@ class Posterior(Visualizer):
     z, y = self.Z, self.y_true
     title = self.name
     if not self.is_binary_classes:
-      from sisua.label_threshold import ProbabilisticEmbedding
-      y = ProbabilisticEmbedding().fit_transform(y, return_probabilities=True)
+      y = self.y_true_probability
     plot_distance_heatmap(z,
                           labels=y,
                           labels_name=self.protein_name,
@@ -340,6 +357,64 @@ class Posterior(Visualizer):
                           title=title)
     self.add_figure('latents_distance_heatmap', ax.get_figure())
     return self
+
+  def plot_latents_risk(self, n_mcmc=100, seed=1):
+    r""" R.I.S.K :
+     - Representative : llk from GMM of protein
+     - Informative : mutual information
+     - Supportive : streamline task
+     - Knowledge : disentanglement and biological relevant
+    """
+    # only use clean data here
+    if self.protein.is_binary:
+      return self
+    qZ = self.latents_clean[0]
+    factor = StandardScaler().fit_transform(self.y_true)
+    n_latent, n_factor = qZ.event_shape[0], factor.shape[1]
+    # ====== fit GMM on each protein ====== #
+    gmm = []
+    for f in factor.T:
+      model = GaussianMixture(n_components=2,
+                              covariance_type='full',
+                              random_state=seed)
+      model.fit(np.expand_dims(f, axis=-1))
+      gmm.append(model)
+    # ====== llk ====== #
+    Z = qZ.sample(n_mcmc, seed=seed).numpy()
+    llk = np.empty(shape=(n_factor, n_latent), dtype=np.float64)
+    for factor_idx in range(n_factor):
+      for latent_idx in range(n_latent):
+        factor = gmm[factor_idx]
+        latent = Z[:, :, latent_idx].reshape(-1, 1)
+        llk[factor_idx, latent_idx] = factor.score(latent)
+    # ====== plotting ====== #
+    fig = plt.figure(figsize=(n_factor / 1.5, n_latent / 1.5))
+    ax = vs.plot_heatmap(llk,
+                         cmap="Blues",
+                         ax=None,
+                         xticklabels=["Z#%d" % i for i in range(n_latent)],
+                         yticklabels=self.protein_name,
+                         xlabel="Latent dimension",
+                         ylabel="Protein",
+                         colorbar_title="Log-likelihood",
+                         colorbar=True,
+                         fontsize=14,
+                         annotation=True,
+                         text_colors=dict(diag="black",
+                                          minrow="green",
+                                          maxrow="red",
+                                          other="black"),
+                         title="Latent presentativeness matrix")
+    self.add_figure('latents_llk_mcmc%d_seed%d' % (n_mcmc, seed),
+                    ax.get_figure())
+    # ====== mutual information ====== #
+
+    return self
+
+  def plot_latents_uncertainty_scatter(self, n_samples=2, seed=1):
+    for qZ_clean, qZ_corrupted in zip(self.latents_clean, self.latents_corrupt):
+      mean, samples = qZ_clean.mean(), qZ_clean.sample(n_samples, seed=seed)
+      print(mean, samples)
 
   def plot_latents_binary_scatter(self,
                                   legend=True,
@@ -526,7 +601,11 @@ class Posterior(Visualizer):
       for j, (gene_idx, pearson, spearman) in enumerate(data):
         ax = plt.subplot(nrow, ncol, i * ncol + j + 1)
         gene = self.gene_name[gene_idx]
-        sns.scatterplot(x=y[:, prot_idx], y=ydata[:, gene_idx], ax=ax)
+        sns.scatterplot(x=y[:, prot_idx],
+                        y=ydata[:, gene_idx],
+                        ax=ax,
+                        alpha=0.8,
+                        linewidths=None)
 
         title = 'Pearson:%.2f Spearman:%.2f' % (pearson, spearman)
         ax.set_title(title, fontsize=fontsize)
@@ -699,8 +778,9 @@ class Posterior(Visualizer):
                                  show_plot=False)
 
   def save_scores(self, path=None):
-    """ Saving all scores to a txt file """
-    text = '==== %s ====\n' % self.name
+    r""" Saving all scores to a yaml file """
+    import yaml
+    all_scores = {"Model": self.name}
     classifier_train, classifier_test = self.scores_classifier()
     for name, scores in (
         ('llk', self.scores_llk()),
@@ -711,15 +791,11 @@ class Posterior(Visualizer):
         ('cluster', self.scores_clustering()),
         ('imputation', self.scores_imputation()),
     ):
-      text += '%s\n' % name
-      for i, j in sorted(scores.items()):
-        j = '%+.4f' % j
-        j = j.replace('+', ' ')
-        text += ' %12s :%s\n' % (i, j)
+      all_scores[name] = {key: float(val) for key, val in scores.items()}
     if path is None:
-      return text
+      return all_scores
     with open(path, 'w') as f:
-      f.write(text)
+      yaml.dump(all_scores, f)
     return self
 
   # ******************** learning curves and metrics ******************** #
@@ -979,29 +1055,20 @@ class Posterior(Visualizer):
     return self
 
   # ******************** just summary everything  ******************** #
-  def full_report(self,
-                  path,
-                  x_train=None,
-                  y_train=None,
-                  dpi=120,
-                  override=True):
+  def full_report(self, path, x_train=None, y_train=None, dpi=80):
     r""" Generate a combined report
 
     Arguments:
       path : a String, path to a folder saving the report
       x_train, y_train : training data for downstream task
-      override : a Boolean, override existed analysis
     """
     if not os.path.exists(path):
       os.mkdir(path)
     elif not os.path.isdir(path):
       raise ValueError("path to %s must be a folder" % path)
-    else:
-      if self.verbose:
-        print("Override analysis at path:", path)
     clean_folder(path)
 
-    score_path = os.path.join(path, 'scores.txt')
+    score_path = os.path.join(path, 'scores.yaml')
     self.save_scores(score_path)
     if self.verbose:
       print("Saved scores at:", score_path)

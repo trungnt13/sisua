@@ -1,4 +1,5 @@
 model: dca
+force_semi: False
 
 dataset:
   name: cortex
