@@ -15,7 +15,6 @@ from odin.bay.layers import (CategoricalLayer, DenseDistribution,
                              MixtureDensityNetwork, OneHotCategoricalLayer,
                              VectorDeterministicLayer)
 from odin.networks import ConvNetwork, DeconvNetwork, DenseNetwork, Identity
-from sisua.data import SingleCellOMIC
 
 
 def _recover_mcmc_dim(self, inputs, training=None, mask=None):
@@ -209,7 +208,7 @@ class RandomVariable:
   """
 
   def __init__(self, dim, posterior='gaus', name=None, prior=None, **kwargs):
-    if isinstance(dim, SingleCellOMIC):
+    if hasattr(dim, 'shape'):
       dim = dim.shape[1]
     self.name = name
     self.dim = int(dim)

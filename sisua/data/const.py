@@ -1,4 +1,7 @@
 from collections import OrderedDict
+from enum import Flag, auto
+
+from six import string_types
 
 UNIVERSAL_RANDOM_SEED = 5218
 
@@ -59,3 +62,61 @@ MARKER_GENES = {
 #  'CTLA4' 'CD26;Adenosine' 'CD16' 'CD366;tim3' 'HLA-A' 'MHCII;HLA-DR'
 #  'IL7Ralpha;CD127' 'CD11b' 'CD11c' 'LAMP1' 'CD56' 'PD-1;CD279' 'PD1;CD279'
 #  'B220;CD45R' 'CD45RA' 'CD45RO' 'CD138' 'CD62L' 'Siglec-8' 'Ox40;CD134']
+
+
+# ===========================================================================
+# Omic Enum
+# ===========================================================================
+class OMIC(Flag):
+  r""" """
+
+  genomic = auto()
+  epigenomic = auto()
+  transcriptomic = auto()
+  proteomic = auto()
+  metabolomic = auto()
+  microbiomic = auto()
+  celltype = auto()
+
+  @staticmethod
+  def all_omics():
+    omics = []
+    for name in dir(OMIC):
+      val = getattr(OMIC, name)
+      if isinstance(val, OMIC):
+        omics.append(val)
+    return tuple(sorted(omics, key=lambda x: x.id))
+
+  @staticmethod
+  def omic_map(otype=None):
+    om = {}
+    for name in dir(OMIC):
+      val = getattr(OMIC, name)
+      if isinstance(val, OMIC):
+        if otype is not None and \
+          ((isinstance(otype, string_types) and otype.lower() in name) or
+           otype is val):
+          return val
+        om[val] = val.name
+    if otype is not None:
+      raise ValueError("Invalid OMIC type, support: %s, given: %s" %
+                       (str(om), str(otype)))
+    return om
+
+  @property
+  def id(self):
+    om = '_'.join([i[:4] for i in str(self).split('_')])
+    return om
+
+  def __iter__(self):
+    for om in OMIC.all_omics():
+      if om in self:
+        yield om
+
+  def __str__(self):
+    name = super().__str__().split('.')[-1]
+    name = '_'.join(sorted([i for i in name.split('|')]))
+    return name
+
+  def __repr__(self):
+    return self.__str__()

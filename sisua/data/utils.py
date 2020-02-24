@@ -1,8 +1,10 @@
 from __future__ import absolute_import, division, print_function
 
 import base64
+import gzip
 import os
 import pickle
+from copy import deepcopy
 
 import numpy as np
 from scipy import sparse
@@ -11,6 +13,105 @@ from six import string_types
 from bigarray import MmapArrayWriter
 from odin.fuel import Dataset
 from odin.utils import as_tuple, ctext
+
+
+# ===========================================================================
+# Data preprocessing
+# ===========================================================================
+def apply_artificial_corruption(x,
+                                dropout=0.0,
+                                distribution='binomial',
+                                retain_rate=0.2,
+                                copy=False,
+                                seed=8):
+  r"""
+    x : (n_samples, n_features)
+    dropout : scalar (0.0 - 1.0), how many entries (in percent) be selected for
+      corruption.
+    retain_rate : scalar (0.0 - 1.0), how much percent of counts retained
+      their original values.
+    distribution : {'uniform', 'binomial'}
+  """
+  distribution = str(distribution).lower()
+  dropout = float(dropout)
+  assert 0 <= dropout < 1, \
+  "dropout value must be >= 0 and < 1, given: %f" % dropout
+  rand = np.random.RandomState(seed=seed)
+
+  if not (0. < dropout < 1. or 0. < retain_rate < 1.):
+    return x
+  # ====== applying corruption ====== #
+  # Original code from scVI, to provide a comparable result,
+  # please acknowledge the author of scVI if you are using this
+  # code for corrupting the data
+  # https://github.com/YosefLab/scVI/blob/2357dde15351450e452efa426c516c60a2d5ee96/scvi/dataset/dataset.py#L83
+  # the test data won't be corrupted
+  corrupted_x = deepcopy(x) if copy else x
+  # multiply the entry n with a Ber(0.9) random variable.
+  if distribution == "uniform":
+    i, j = np.nonzero(x)
+    ix = rand.choice(range(len(i)),
+                     size=int(np.floor(dropout * len(i))),
+                     replace=False)
+    i, j = i[ix], j[ix]
+    # multiply the entry n with a Bin(n, 0.9) random variable.
+    corrupted = np.multiply(
+        x[i, j], \
+        rand.binomial(n=np.ones(len(ix), dtype=np.int32), p=retain_rate))
+  elif distribution == "binomial":
+    # array representing the indices of a grid
+    # [0, 0, 0, ..., 1, 1, 1, ...]
+    # [0, 1, 2, ..., 0, 1, 2, ...]
+    # i, j = (k.ravel() for k in np.indices(x.shape))
+    i, j = np.nonzero(x)  # we prefer only nonzero here
+    ix = rand.choice(range(len(i)),
+                     size=int(np.floor(dropout * len(i))),
+                     replace=False)
+    i, j = i[ix], j[ix]
+    # only 20% expression captured
+    corrupted = rand.binomial(n=(x[i, j]).astype(np.int32), p=retain_rate)
+  else:
+    raise ValueError(
+        "Only support 2 corruption distribution: 'uniform' and 'binomial', "
+        "but given: '%s'" % distribution)
+  # applying the corrupted values
+  if isinstance(corrupted_x, sparse.base.spmatrix):
+    corrupted = type(corrupted_x)(corrupted)
+  corrupted_x[i, j] = corrupted
+  return corrupted_x
+
+
+def get_library_size(X, return_log_count=False):
+  r""" Copyright scVI authors
+  https://github.com/YosefLab/scVI/blob/master/README.rst
+
+  Original Code:
+  https://github.com/YosefLab/scVI/blob/9d9a525df810c47ce482ef7b554f25fcc6482c2d/scvi/dataset/dataset.py#L288
+
+  size factor of X in log-space
+
+  Parameters
+  ----------
+  X : matrix
+    single-cell data matrix (n_samples, n_features)
+  return_log_count : bool (default=False)
+    if True, return the log-count library size
+
+  Return
+  ------
+  local_mean (n_samples, 1)
+  local_var (n_samples, 1)
+  """
+  assert X.ndim == 2, "Only support 2-D matrix"
+  total_counts = X.sum(axis=1)
+  assert np.all(total_counts >= 0), "Some cell contains negative-count!"
+  log_counts = np.log(total_counts + 1e-8)
+  local_mean = (np.mean(log_counts) * np.ones(
+      (X.shape[0], 1))).astype(np.float32)
+  local_var = (np.var(log_counts) * np.ones((X.shape[0], 1))).astype(np.float32)
+  if not return_log_count:
+    return local_mean, local_var
+  return np.expand_dims(log_counts, -1), local_mean, local_var
 
 
 # ===========================================================================
@@ -33,7 +134,6 @@ def _check_data(X, X_col, y, y_col, rowname):
 
 
 def read_gzip_csv(path):
-  import gzip
   with gzip.open(path, 'rb') as file_obj:
     data = []
     for line in file_obj:

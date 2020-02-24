@@ -19,9 +19,9 @@ from six import string_types
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
-from odin.bay import vi
 from odin import visual as vs
 from odin.backend import log_norm
+from odin.bay import vi
 from odin.fuel import Dataset
 from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore,
                         clean_folder, ctext, flatten_list, md5_checksum)
