@@ -1,7 +1,8 @@
 from collections import OrderedDict
-from enum import Flag, auto
 
 from six import string_types
+
+from odin.utils.ordered_flag import OrderedFlag
 
 UNIVERSAL_RANDOM_SEED = 5218
 
@@ -21,7 +22,7 @@ PROTEIN_PAIR_COMPARISON = [
 # Mapping from protein to gene expression
 # CCR5
 # CCR7
-MARKER_GENES = {
+MARKER_ADT_GENE = {
     ### For PBMC CITEseq
     'CD14': 'CD14',
     'CD15': 'FUT4',
@@ -57,6 +58,11 @@ MARKER_GENES = {
     'CD90': 'THY1',
 }
 
+MARKER_ADTS = list(MARKER_ADT_GENE.keys())
+MARKER_GENES = list(set(list(MARKER_ADT_GENE.values()) + \
+  ['CD8B', 'CD79A', 'LYZ', 'LGALS3', 'S100A8', 'GNLY', 'NKG7',
+   'KLRB1', 'FCER1A', 'CST3']))
+
 # ['CD77' 'CCR7' 'CD19' 'CD1a' 'CD2' 'CD27' 'PD-L1;CD274' 'CD28'
 #  'PECAM;CD31' 'CD34' 'CD3' 'CD4' 'CD44' 'CD5' 'CD69' 'CD7' 'CD8' 'CD66b'
 #  'CTLA4' 'CD26;Adenosine' 'CD16' 'CD366;tim3' 'HLA-A' 'MHCII;HLA-DR'
@@ -67,56 +73,33 @@ MARKER_GENES = {
 # ===========================================================================
 # Omic Enum
 # ===========================================================================
-class OMIC(Flag):
-  r""" """
+class OMIC(OrderedFlag):
+  r""" Enum class to represent all possible OMIC type """
 
-  genomic = auto()
-  epigenomic = auto()
-  transcriptomic = auto()
-  proteomic = auto()
-  metabolomic = auto()
-  microbiomic = auto()
-  celltype = auto()
+  genomic = 'genomic'
+  epigenomic = 'epigenomic'
+  transcriptomic = 'transcriptomic'
+  proteomic = 'proteomic'
+  metabolomic = 'metabolomic'
+  microbiomic = 'microbiomic'
+  celltype = 'celltype'
 
-  @staticmethod
-  def all_omics():
-    omics = []
-    for name in dir(OMIC):
-      val = getattr(OMIC, name)
-      if isinstance(val, OMIC):
-        omics.append(val)
-    return tuple(sorted(omics, key=lambda x: x.id))
+  @classmethod
+  def _sep(cls):
+    return '_'
 
   @staticmethod
-  def omic_map(otype=None):
-    om = {}
-    for name in dir(OMIC):
-      val = getattr(OMIC, name)
-      if isinstance(val, OMIC):
-        if otype is not None and \
-          ((isinstance(otype, string_types) and otype.lower() in name) or
-           otype is val):
+  def parse(otype):
+    r"""
+    otype : String or OMIC (optional). If given, normalize given `otype` to
+      an instance of `OMIC` enum.
+    """
+    if not isinstance(otype, OMIC):
+      otype = str(otype)
+      for val in OMIC:
+        if otype in val.name:
           return val
-        om[val] = val.name
-    if otype is not None:
-      raise ValueError("Invalid OMIC type, support: %s, given: %s" %
-                       (str(om), str(otype)))
-    return om
-
-  @property
-  def id(self):
-    om = '_'.join([i[:4] for i in str(self).split('_')])
-    return om
-
-  def __iter__(self):
-    for om in OMIC.all_omics():
-      if om in self:
-        yield om
-
-  def __str__(self):
-    name = super().__str__().split('.')[-1]
-    name = '_'.join(sorted([i for i in name.split('|')]))
-    return name
-
-  def __repr__(self):
-    return self.__str__()
+    else:
+      return otype
+    raise ValueError("Invalid OMIC type, support: %s, given: %s" %
+                     (str(list(OMIC)), str(otype)))

@@ -16,7 +16,8 @@ from sisua.data.path import CONFIG_PATH, DATA_DIR, EXP_DIR
 from sisua.data.single_cell_dataset import (SingleCellOMIC,
                                             apply_artificial_corruption,
                                             get_library_size)
-from sisua.data.utils import (get_gene_id2name, standardize_protein_name,
+from sisua.data.utils import (get_gene_id2name, is_binary_dtype,
+                              is_categorical_dtype, standardize_protein_name,
                               validating_dataset)
 
 
@@ -331,7 +332,11 @@ def get_dataset(dataset_name, override=False, verbose=False) -> SingleCellOMIC:
                       gene_id=ds['X_col'],
                       name=dataset_name)
   if 'y' in ds:
-    sc.add_omic(OMIC.proteomic, ds['y'], ds['y_col'])
+    y = ds['y']
+    if is_binary_dtype(y):
+      sc.add_omic(OMIC.celltype, y, ds['y_col'])
+    else:
+      sc.add_omic(OMIC.proteomic, y, ds['y_col'])
   return sc
 
 

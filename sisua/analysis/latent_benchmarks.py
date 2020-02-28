@@ -19,7 +19,7 @@ from odin import backend as K
 from odin.utils import catch_warnings_ignore, ctext, one_hot
 from odin.visual import (plot_colorbar, plot_figure, plot_scatter_heatmap,
                          to_axis)
-from sisua.data.const import (MARKER_GENES, PROTEIN_PAIR_COMPARISON,
+from sisua.data.const import (MARKER_ADT_GENE, PROTEIN_PAIR_COMPARISON,
                               UNIVERSAL_RANDOM_SEED)
 from sisua.data.utils import standardize_protein_name
 from sisua.label_threshold import ProbabilisticEmbedding

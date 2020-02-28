@@ -15,7 +15,7 @@ from odin import visual
 from odin.utils import as_tuple, cache_memory, catch_warnings_ignore
 from odin.visual import plot_figure, to_axis
 from sisua.data import get_dataset
-from sisua.data.const import MARKER_GENES
+from sisua.data.const import MARKER_ADT_GENE
 from sisua.data.utils import standardize_protein_name
 
 
@@ -62,7 +62,7 @@ def correlation_scores(X, y, gene_name, protein_name, return_series=False):
   protein_name = [standardize_protein_name(i) for i in protein_name]
   # mapping from protein index to gene index
   prot2gene = {}
-  for prot, gene in MARKER_GENES.items():
+  for prot, gene in MARKER_ADT_GENE.items():
     if prot in protein_name:
       index = [i for i, name in enumerate(gene_name) if gene == name]
       if len(index) == 0:  # still not found anything

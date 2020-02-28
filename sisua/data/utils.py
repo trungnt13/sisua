@@ -200,6 +200,17 @@ def get_gene_id2name():
 # ===========================================================================
 # Utilities
 # ===========================================================================
+def is_categorical_dtype(X):
+  if not isinstance(X.dtype, np.number):
+    return True
+  return np.all(X.astype(np.int64) == X)
+
+
+def is_binary_dtype(X):
+  r""" return True if the data is binary values, i.e. 0 or 1 """
+  return sorted(np.unique(X.astype(np.float32))) == [0., 1.]
+
+
 def remove_allzeros_columns(matrix, colname, print_log=True):
   """ Remove all zero columns from both the matrix and column name vector
 

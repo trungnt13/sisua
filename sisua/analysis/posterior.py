@@ -560,10 +560,10 @@ class Posterior(Visualizer):
     n = int(n)
     if isinstance(proteins,
                   string_types) and proteins.lower().strip() == 'marker':
-      from sisua.data.const import MARKER_GENES
+      from sisua.data.const import MARKER_ADT_GENE
       proteins = [
           i for i in self.protein_name
-          if standardize_protein_name(i) in MARKER_GENES
+          if standardize_protein_name(i) in MARKER_ADT_GENE
       ]
     elif proteins is None:
       proteins = self.protein_name

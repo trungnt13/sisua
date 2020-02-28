@@ -96,8 +96,8 @@ class SisuaDataset(unittest.TestCase):
     pca2 = ds.pca(OMIC.proteomic, n_components=3)
     self.assertTrue(pca1.shape == (n, 2))
     self.assertTrue(pca2.shape == (n, 3))
-    self.assertTrue('prot_pca' in ds.uns)
-    self.assertTrue('tran_pca' in ds.uns)
+    self.assertTrue('%s_pca' % OMIC.proteomic.name in ds.uns)
+    self.assertTrue('%s_pca' % OMIC.transcriptomic.name in ds.uns)
 
   def test_normalization(self):
     ds = get_dataset('8kmy')
@@ -107,7 +107,8 @@ class SisuaDataset(unittest.TestCase):
       ds2 = ds.expm1(omic=OMIC.proteomic, inplace=False)
       self.assertTrue(np.all(np.expm1(ds.X) == ds1.X))
       self.assertTrue(
-          np.all(np.expm1(ds.obsm[OMIC.proteomic]) == ds2.obsm[OMIC.proteomic]))
+          np.all(
+              np.expm1(ds.numpy(OMIC.proteomic)) == ds2.numpy(OMIC.proteomic)))
 
     ds1 = ds.normalize(OMIC.transcriptomic,
                        inplace=False,
@@ -126,6 +127,11 @@ class SisuaDataset(unittest.TestCase):
         np.all(ds2.numpy(OMIC.proteomic) == np.log1p(ds.numpy(OMIC.proteomic))))
     self.assertTrue(
         np.all(ds2.numpy(OMIC.transcriptomic) == ds.numpy(OMIC.transcriptomic)))
+
+  def test_metrics(self):
+    ds = get_dataset('8kmy')
+    ds.calculate_qc_metrics()
+    text = str(ds)
 
 
 if __name__ == '__main__':

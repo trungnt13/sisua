@@ -1,13 +1,16 @@
 from __future__ import absolute_import, division, print_function
 
+import inspect
 import itertools
 import os
+import types
 import warnings
 from copy import deepcopy
 from enum import Enum
 from typing import Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import scanpy as sc
 import scipy as sp
 import tensorflow as tf
@@ -18,12 +21,14 @@ from six import string_types
 from bigarray import MmapArrayWriter
 from odin import visual as vs
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
-from odin.utils import (as_tuple, batching, cache_memory, catch_warnings_ignore,
-                        ctext)
+from odin.utils import (IndexedList, as_tuple, batching, cache_memory,
+                        catch_warnings_ignore, ctext, is_primitive)
 from odin.utils.crypto import md5_checksum
-from odin.visual import Visualizer, to_axis
-from sisua.data.const import OMIC
-from sisua.data.utils import apply_artificial_corruption, get_library_size
+from sisua.data._single_cell_visualizer import SingleCellVisualizer
+from sisua.data.const import MARKER_GENES, OMIC
+from sisua.data.utils import (apply_artificial_corruption, get_library_size,
+                              is_binary_dtype, is_categorical_dtype,
+                              standardize_protein_name)
 from sisua.label_threshold import ProbabilisticEmbedding
 
 # Heuristic constants
@@ -36,13 +41,16 @@ def get_all_omics(sco: sc.AnnData):
   if hasattr(sco, 'omics'):
     return sco.omics
   om = OMIC.transcriptomic
+  all_omics = {o.name: o for o in OMIC}
   for k in sco.obsm.keys():
     if isinstance(k, OMIC):
       om |= k
+    elif k in all_omics:
+      om |= all_omics[k]
   return om
 
 
-class SingleCellOMIC(sc.AnnData, Visualizer):
+class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
   r""" An annotated data matrix.
 
   Arguments:
@@ -67,21 +75,24 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
                dtype=None,
                name=None,
                **kwargs):
-    # directly from file
+    # directly first time init from file
     if 'filename' in kwargs:
       X = None
       kwargs['dtype'] = dtype
-    # init as view or copy
+    # init as view or copy of created SCO
     elif isinstance(X, sc.AnnData):
       self._omics = get_all_omics(X)
+      self._history = IndexedList(X._history) if hasattr(X, '_history') else \
+        IndexedList()
       asview = kwargs.get('asview', False)
       if asview:
         name = X._name + "_view" if name is None else str(name)
       else:
         name = X._name + "_copy" if name is None else str(name)
-    # init as new dataset
+    # init as completely new dataset
     else:
       self._omics = OMIC.transcriptomic
+      self._history = IndexedList()
       if cell_id is None:
         cell_id = ['Cell#%d' % i for i in range(X.shape[0])]
       if gene_id is None:
@@ -91,28 +102,44 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       if name is None:
         name = "scOMICS"
       kwargs['dtype'] = dtype
-      kwargs['obs'] = {'cellid': cell_id}
-      kwargs['var'] = {'geneid': gene_id}
+      kwargs['obs'] = pd.DataFrame(index=cell_id)
+      kwargs['var'] = pd.DataFrame(index=gene_id)
       kwargs['asview'] = False
     # init
     super(SingleCellOMIC, self).__init__(X, **kwargs)
     self._name = str(name)
+    # The class is created for first time
     if not isinstance(X, sc.AnnData):
       self.obs['indices'] = np.arange(self.X.shape[0], dtype='int64')
-      self._calculate_library_info()
+      self._calculate_statistics()
+
+  def _record(self, name: str, local: dict):
+    method = getattr(self, name)
+    specs = inspect.getfullargspec(method)
+    assert inspect.ismethod(method)
+    local = {
+        k: v if is_primitive(v, inc_ndarray=False) else str(type(v)) \
+          for k, v in local.items() \
+            if not isinstance(v, SingleCellOMIC) and \
+              (k in specs.args or specs.varkw is not None)
+    }
+    self._history[name] = local
 
   def add_omic(self, omic: OMIC, X: np.ndarray, var_id=None):
-    omic = OMIC.omic_map(omic)
+    self._record('add_omic', locals())
+    omic = OMIC.parse(omic)
     assert X.shape[0] == self.X.shape[0], \
       "Number of samples of new omic type mismatch, given: %s, require: %s" % \
         (str(X.shape), self.X.shape[0])
-    self.obsm[omic] = X
+    self.obsm[omic.name] = X
     if var_id is not None:
       var_id = np.array(var_id).ravel()
       assert len(var_id) == X.shape[1]
-      self.uns[omic.id + 'id'] = var_id
+      if omic == OMIC.proteomic:
+        var_id = standardize_protein_name(var_id)
+      self.uns[omic.name + '_id'] = var_id
     self._omics |= omic
-    self._calculate_library_info(omic)
+    self._calculate_statistics(omic)
     return self
 
   # ******************** shape manipulation ******************** #
@@ -127,8 +154,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       assert np.all(sco.obs.iloc[:, 0] == self.obs.iloc[:, 0])
     return self
 
-  def _calculate_library_info(self, omic=OMIC.transcriptomic):
-    omic = OMIC.omic_map(omic)
+  def _calculate_statistics(self, omic=OMIC.transcriptomic):
     X = self.numpy(omic)
     # start processing
     if sp.sparse.issparse(X):
@@ -137,13 +163,14 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       total_counts = np.sum(X, axis=1, keepdims=True)
     log_counts, local_mean, local_var = get_library_size(X,
                                                          return_log_count=True)
-    self.obsm[omic.id + '_stats'] = np.hstack(
+    self.obsm[omic.name + '_stats'] = np.hstack(
         [total_counts, log_counts, local_mean, local_var])
 
   def copy(self, filename=None):
     r""" Full copy, optionally on disk. (this code is copied from
     `AnnData`, modification to return `SingleCellOMIC` instance.
     """
+    self._record('copy', locals())
     anndata = super().copy(filename)
     anndata._name = self.name
     sco = SingleCellOMIC(anndata, asview=False)
@@ -175,6 +202,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
         if True, applying the indices to the observation (i.e. axis=0),
         otherwise, to the variable (i.e. axis=1)
     """
+    self._record('apply_indices', locals())
     indices = np.array(indices)
     itype = indices.dtype.type
     if not issubclass(itype, (np.bool, np.bool_, np.integer)):
@@ -218,6 +246,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     >>> assert np.all(x_train_train.obs['cellid'] ==
     >>>               y_train[x_train_train.indices].obs['cellid'])
     """
+    self._record('split', locals())
     assert 0 < train_percent < 1
     ids = np.random.RandomState(seed=seed).permutation(
         self.n_obs).astype('int32')
@@ -231,6 +260,13 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
 
   # ******************** properties ******************** #
   @property
+  def history(self):
+    r""" A dictionary recorded all methods and arguments have been called
+    within this instance of `SingleCellDataset`,
+    i.e. it provide a trace back of how data is preprocessed. """
+    return self._history
+
+  @property
   def indices(self):
     r""" Return the row indices had been used to created this data,
     helpful when using `SingleCellOMIC.split` to keep track the
@@ -239,20 +275,53 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
 
   @property
   def cell_id(self):
-    return self.obs['cellid'].values
+    return self.obs.index
 
   @property
   def gene_id(self):
-    return self.var['geneid'].values
+    return self.var.index
+
+  @property
+  def marker_genes(self):
+    marker_genes = set([i.lower() for i in MARKER_GENES])
+    genes = [
+        name for i, name in enumerate(self.gene_id)
+        if name.lower() in marker_genes
+    ]
+    return genes
+
+  def omic_id(self, omic):
+    r""" Return the variables' name for specified OMIC type """
+    omic = OMIC.parse(omic)
+    if omic == OMIC.transcriptomic:
+      return self.gene_id
+    labels = self.uns[omic.name + '_id']
+    return labels
 
   def numpy(self, omic=OMIC.transcriptomic):
+    r""" Return observation ndarray in `obsm` or `obs`"""
+    # obs
+    if isinstance(omic, string_types) and \
+      not isinstance(omic, OMIC) and \
+        omic in self.obs:
+      return self.obs[omic].values
+    # obsm
+    omic = OMIC.parse(omic)
     if omic not in self.omics:
       raise ValueError(
           "Cannot find OMIC type '%s', in the single-cell dataset of: %s" %
           (omic, self.omics))
     if omic == OMIC.transcriptomic:
       return self.X
-    return self.obsm[omic]
+    return self.obsm[omic.name]
+
+  def labels(self, omic=OMIC.proteomic):
+    omic = OMIC.parse(omic)
+    return self.obs[self.labels_name(omic)]
+
+  def labels_name(self, omic=OMIC.proteomic):
+    omic = OMIC.parse(omic)
+    return omic.name + '_labels'
 
   @property
   def omics(self):
@@ -264,9 +333,19 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     return self._name
 
   @property
-  def is_binary(self):
-    """ return True if the data is binary """
-    return sorted(np.unique(self.X.astype('float32'))) == [0., 1.]
+  def is_log(self):
+    if 'normalize' in self.history and \
+      any(h['log1p'] for h in as_tuple(self.history['normalize'])):
+      return True
+    return False
+
+  def is_binary(self, omic):
+    r""" return True if the given OMIC type is binary """
+    return is_binary_dtype(self.numpy(omic))
+
+  def is_categorical(self, omic):
+    r""" return True if the given OMIC type is binary """
+    return is_categorical_dtype(self.numpy(omic))
 
   @property
   def n_obs(self):
@@ -282,38 +361,36 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
   def dtype(self):
     return self.X.dtype
 
-  def count_stats(self, omic=OMIC.transcriptomic):
+  def statistics(self, omic=OMIC.transcriptomic):
     r""" Return a matrix of shape `[n_obs, 4]`.
 
     The columns are: 'total_counts', 'log_counts', 'local_mean', 'local_var'
     """
-    return self.obsm[omic.id + '_stats']
+    return self.obsm[omic.name + '_stats']
 
   def library_size(self, omic=OMIC.transcriptomic):
     r""" Return the mean and variance for library size modeling in log-space """
     return self.local_mean(omic), self.local_var(omic)
 
   def total_counts(self, omic=OMIC.transcriptomic):
-    return self.count_stats(omic)[:, 0]
+    return self.statistics(omic)[:, 0]
 
   def log_counts(self, omic=OMIC.transcriptomic):
-    return self.count_stats(omic)[:, 1]
+    return self.statistics(omic)[:, 1]
 
   def local_mean(self, omic=OMIC.transcriptomic):
-    return self.count_stats(omic)[:, 2]
+    return self.statistics(omic)[:, 2]
 
   def local_var(self, omic=OMIC.transcriptomic):
-    return self.count_stats(omic)[:, 3]
+    return self.statistics(omic)[:, 3]
 
   def probability(self, omic=OMIC.proteomic):
     r""" Return the probability embedding of an OMIC """
-    self.probabilistic_embedding(omic=omic)
-    return self.obsm['%s_prob' % omic.id]
+    return self.probabilistic_embedding(omic=omic)[1]
 
   def binary(self, omic=OMIC.proteomic):
     r""" Return the binary embedding of an OMIC """
-    self.probabilistic_embedding(omic=omic)
-    return self.obsm['%s_bin' % omic.id]
+    return self.probabilistic_embedding(omic=omic)[2]
 
   # ******************** converter ******************** #
   def as_tensorflow_dataset(self, obs=(), obsm=(),
@@ -348,6 +425,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       seed : `int` (default=8). Seed for the random state.
     """
     om = self if inplace else self.copy()
+    om._record('corrupt', locals())
     if not (0. < retain_rate < 1. or 0. < dropout_rate < 1.):
       return om
     apply_artificial_corruption(om.numpy(omic),
@@ -356,10 +434,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
                                 distribution=distribution,
                                 copy=False,
                                 seed=seed)
-    om._name = '%s_%s%s%s%s' % (om.name, omic.id.upper(), distribution[:3], \
-                              ('%.2f' % dropout_rate).split('.')[-1],
-                              ('%.2f' % retain_rate).split('.')[-1])
-    om._calculate_library_info(omic)
+    om._calculate_statistics(omic)
     return om
 
   def filter_highly_variable_genes(self,
@@ -437,6 +512,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     # this function will take the exponential of X all the time,
     # so non-logarithmzed data might led to overflow
     omics = self if inplace else self.copy()
+    omics._record('filter_highly_variable_genes', locals())
     sc.pp.highly_variable_genes(omics,
                                 min_disp=min_disp,
                                 max_disp=max_disp,
@@ -450,7 +526,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     omics._name += '_vargene'
     omics._n_vars = omics._X.shape[1]
     # recalculate library info
-    omics._calculate_library_info()
+    omics._calculate_statistics()
     return omics
 
   def filter_genes(self,
@@ -492,6 +568,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       Proxy method to Scanpy preprocessing
     """
     omics = self if inplace else self.copy()
+    omics._record('filter_genes', locals())
     sc.pp.filter_genes(omics,
                        min_counts=min_counts,
                        max_counts=max_counts,
@@ -501,7 +578,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     omics._name += '_filtergene'
     omics._n_vars = omics._X.shape[1]
     # recalculate library info
-    omics._calculate_library_info()
+    omics._calculate_statistics()
     return omics
 
   def filter_cells(self,
@@ -550,10 +627,11 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
                                                        max_genes=max_genes,
                                                        inplace=False)
     omics = self if inplace else self.copy()
+    omics._record('filter_cells', locals())
     omics.apply_indices(cells_subset, observation=True)
     omics._name += '_filtercell'
     # recalculate library info
-    omics._calculate_library_info()
+    omics._calculate_statistics()
     return omics
 
   def probabilistic_embedding(self,
@@ -569,83 +647,141 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     r""" Fit a GMM on each feature column to get the probability or binary
     representation of the features
 
+    Return:
+      `ProbabilisticEmbedding` model
+      np.ndarray : probabilities X
+      np.ndarray : binary X
+
     Arguments:
       pbe : {`sisua.ProbabilisticEmbedding`, `None`}, optional pretrained
         instance of `ProbabilisticEmbedding`
     """
+    self._record('probabilistic_embedding', locals())
     # We turn-off default log_norm here since the data can be normalized
     # separately in advance.
+    omic = OMIC.parse(omic)
     X = self.numpy(omic)
     if X.shape[1] >= 100:
       warnings.warn("%d GMM will be trained!" % self.shape[1])
-    name = omic.id
+    name = omic.name
     pbe_name = '%s_pbe' % name
-
-    if pbe is None:
-      if pbe_name not in self.uns:
-        pbe = ProbabilisticEmbedding(
-            n_components_per_class=n_components_per_class,
-            positive_component=positive_component,
-            log_norm=log_norm,
-            clip_quartile=clip_quartile,
-            remove_zeros=remove_zeros,
-            ci_threshold=ci_threshold,
-            random_state=seed)
-        from sklearn.exceptions import ConvergenceWarning
-        with catch_warnings_ignore(ConvergenceWarning):
-          pbe.fit(X)
-        self.uns[pbe_name] = pbe
-        self._name += '_%spbe' % name.upper()
-      else:
-        pbe = self.uns[pbe_name]
-    else:
-      assert isinstance(pbe, ProbabilisticEmbedding), \
-        'pbe, if given, must be instance of sisua.ProbabilisticEmbedding'
-    # make prediction
     prob_name = '%s_prob' % name
     bin_name = '%s_bin' % name
-    if prob_name not in self.obsm:
-      self.obsm[prob_name] = pbe.predict_proba(X)
-    if bin_name not in self.obsm:
-      self.obsm[bin_name] = pbe.predict(X)
-    return self
+    label_name = self.labels_name(name)
 
-  def pca(self, omic=OMIC.transcriptomic, n_components=2):
+    if is_binary_dtype(X):
+      X_prob = X
+      X_bin = X
+      self.uns[pbe_name] = None
+    else:
+      if pbe is None:
+        if pbe_name not in self.uns:
+          pbe = ProbabilisticEmbedding(
+              n_components_per_class=n_components_per_class,
+              positive_component=positive_component,
+              log_norm=log_norm,
+              clip_quartile=clip_quartile,
+              remove_zeros=remove_zeros,
+              ci_threshold=ci_threshold,
+              random_state=seed)
+          from sklearn.exceptions import ConvergenceWarning
+          with catch_warnings_ignore(ConvergenceWarning):
+            pbe.fit(X)
+          self.uns[pbe_name] = pbe
+        else:
+          pbe = self.uns[pbe_name]
+      else:
+        assert isinstance(pbe, ProbabilisticEmbedding), \
+          'pbe, if given, must be instance of sisua.ProbabilisticEmbedding'
+      # make prediction
+      X_prob = pbe.predict_proba(X)
+      X_bin = pbe.predict(X)
+    # store the data
+    if prob_name not in self.obsm:
+      self.obsm[prob_name] = X_prob
+    if label_name not in self.obs and name + '_id' in self.uns:
+      omic_id = self.omic_id(name)
+      labels = [omic_id[i] for i in np.argmax(self.obsm[prob_name], axis=1)]
+      self.obs[label_name] = labels
+    if bin_name not in self.obsm:
+      self.obsm[bin_name] = X_bin
+    return pbe, self.obsm[prob_name], self.obsm[bin_name]
+
+  def dimension_reduce(self,
+                       omic=OMIC.transcriptomic,
+                       n_components=2,
+                       algo='pca',
+                       random_state=1):
     r""" Code from `scanpy.pp.pca`, there is bug when `chunked=True` so we
     modify it here. """
+    self._record('dimension_reduce', locals())
     from sklearn.decomposition import IncrementalPCA
-    name = '%s_pca' % omic.id
+    algo = str(algo).lower().strip()
+    assert algo in ('pca', 'tsne', 'umap')
+    omic = OMIC.parse(omic)
+    name = '%s_%s' % (omic.name, algo)
     if name in self.obsm:
-      return self.obsm[name]
-
+      return self.obsm[name][:, :int(n_components)]
     X = self.numpy(omic)
-    n_components = X.shape[1] if n_components is None else int(n_components)
-    X_pca = np.empty((X.shape[0], n_components), dtype=X.dtype)
-    pca_ = IncrementalPCA(n_components=n_components)
-
-    for start, end in batching(_DEFAULT_BATCH_SIZE, n=X.shape[0]):
-      chunk = X[start:end]
-      chunk = chunk.toarray() if issparse(chunk) else chunk
-      pca_.partial_fit(chunk)
-
-    for start, end in batching(_DEFAULT_BATCH_SIZE, n=X.shape[0]):
-      chunk = X[start:end]
-      chunk = chunk.toarray() if issparse(chunk) else chunk
-      X_pca[start:end] = pca_.transform(chunk)
-
-    self.obsm[name] = X_pca
-    self.uns['%s_pca' % omic.id] = pca_
-    return X_pca
+    # train new PCA model
+    if algo == 'pca':
+      X_ = np.empty(X.shape, dtype=X.dtype)
+      model = IncrementalPCA(n_components=None)
+      # fitting
+      for start, end in batching(_DEFAULT_BATCH_SIZE, n=X.shape[0]):
+        chunk = X[start:end]
+        chunk = chunk.toarray() if issparse(chunk) else chunk
+        model.partial_fit(chunk)
+      # transforming
+      for start, end in batching(_DEFAULT_BATCH_SIZE, n=X.shape[0]):
+        chunk = X[start:end]
+        chunk = chunk.toarray() if issparse(chunk) else chunk
+        X_[start:end] = model.transform(chunk)
+    # TSNE
+    elif algo == 'tsne':
+      self.dimension_reduce(omic, algo='pca', random_state=random_state)
+      from multiprocessing import cpu_count
+      sc.tl.tsne(self,
+                 n_pcs=min(120, X.shape[1]),
+                 use_rep=omic.name + '_pca',
+                 copy=False,
+                 n_jobs=max(1,
+                            cpu_count() - 1),
+                 random_state=random_state)
+      X_ = self.obsm['X_tsne']
+      model = None
+      del self.obsm['X_tsne']
+    # UMAP
+    elif algo == 'umap':
+      try:
+        import cuml
+        method = 'rapids'
+      except ImportError:
+        method = 'umap'
+      nb = self.neighbors(omic, method='umap', random_state=random_state)
+      self.uns['neighbors'] = nb
+      with catch_warnings_ignore(UserWarning):
+        sc.tl.umap(self, method=method, random_state=random_state, copy=False)
+      X_ = self.obsm['X_umap']
+      model = self.uns['umap']
+      del self.obsm['X_umap']
+      del self.uns['umap']
+      del self.uns['neighbors']
+    # store the result
+    self.obsm[name] = X_
+    if model is not None:
+      self.uns[name] = model
+    return self.obsm[name][:, :int(n_components)]
 
   def expm1(self, omic=OMIC.transcriptomic, inplace=True):
     om = self if inplace else self.copy()
+    om._record('expm1', locals())
     _expm1 = lambda x: (np.expm1(x.data, out=x.data)
                         if issparse(x) else np.expm1(x, out=x))
     X = om.numpy(omic)
     for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
       X[s:e] = _expm1(X[s:e])
-    om._name += '_expm1'
-    om._calculate_library_info(omic)
+    om._calculate_statistics(omic)
     return om
 
   def normalize(self,
@@ -696,6 +832,7 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
         `scanpy.pp.scale`
     """
     om = self if inplace else self.copy()
+    om._record('normalize', locals())
     if omic != OMIC.transcriptomic:
       org_X = om._X
       om._X = om.numpy(omic)
@@ -719,9 +856,9 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
       om._name += '_scale'
 
     if omic != OMIC.transcriptomic:
-      om.obsm[omic] = om.X
+      om.obsm[omic.name] = om.X
       om._X = org_X
-    om._calculate_library_info(omic)
+    om._calculate_statistics(omic)
     return om
 
   # ====== statistics ====== #
@@ -748,13 +885,13 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
 
   # ******************** metrics ******************** #
   def neighbors(self,
+                omic=OMIC.transcriptomic,
                 n_neighbors=15,
-                n_pcs=None,
-                use_rep=None,
+                n_pcs=100,
                 knn=True,
                 method='umap',
                 metric='euclidean',
-                seed=8):
+                random_state=1):
     r"""\
     Compute a neighborhood graph of observations [McInnes18]_.
 
@@ -764,69 +901,73 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     connectivities are computed according to [Coifman05]_, in the adaption of
     [Haghverdi16]_.
 
-    Parameters
-    ----------
-    n_neighbors : `int` (default=15)
+    Arguments:
+      n_neighbors : `int` (default=15)
         The size of local neighborhood (in terms of number of neighboring data
-        points) used for manifold approximation. Larger values result in more
+         points) used for manifold approximation. Larger values result in more
         global views of the manifold, while smaller values result in more local
         data being preserved. In general values should be in the range 2 to 100.
         If `knn` is `True`, number of nearest neighbors to be searched. If `knn`
         is `False`, a Gaussian kernel width is set to the distance of the
         `n_neighbors` neighbor.
-    n_pcs : {`int`, `None`} (default=None)
+      n_pcs : {`int`, `None`} (default=None)
         Use this many PCs. If n_pcs==0 use .X if use_rep is None.
-    use_rep : {`None`, ‘X’} or any key for .obsm, optional (default=None)
+        if n_pcs==None, use obsm['X_pca'].
+      use_rep : {`None`, ‘X’} or any key for .obsm, optional (default=None)
         Use the indicated representation. If None, the representation is
         chosen automatically: for .n_vars < 50, .X is used, otherwise
         ‘X_pca’ is used. If ‘X_pca’ is not present, it’s computed with
         default parameters.
-    knn : `bool` (default=True)
+      knn : `bool` (default=True)
         If `True`, use a hard threshold to restrict the number of neighbors to
         `n_neighbors`, that is, consider a knn graph. Otherwise, use a Gaussian
         Kernel to assign low weights to neighbors more distant than the
         `n_neighbors` nearest neighbor.
-    seed : `int` (default=8)
-        A numpy random seed.
-    method : {{'umap', 'gauss', `None`}}  (default: `'umap'`)
-        Use 'umap' [McInnes18]_ or 'gauss' (Gauss kernel following [Coifman05]_
-        with adaptive width [Haghverdi16]_) for computing connectivities.
-    metric : {`str`, `callable`} (default='euclidean')
+      method : {{'umap', 'gauss', `rapids`}}  (default: `'umap'`)
+        for computing connectivities.
+      metric : {`str`, `callable`} (default='euclidean')
         A known metric’s name or a callable that returns a distance.
 
-    Returns
-    -------
-    returns `SingleCellOMIC` with the following:
+    Returns:
+      returns neighbors object with the following:
 
-    **connectivities** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
-        Weighted adjacency matrix of the neighborhood graph of data
-        points. Weights should be interpreted as connectivities.
-    **distances** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
-        Instead of decaying weights, this stores distances for each pair of
-        neighbors.
+      **connectivities** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
+          Weighted adjacency matrix of the neighborhood graph of data
+          points. Weights should be interpreted as connectivities.
+      **distances** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
+          Instead of decaying weights, this stores distances for each pair of
+          neighbors.
     """
-    sc.pp.neighbors(self,
-                    n_neighbors=n_neighbors,
-                    knn=knn,
-                    method=method,
-                    metric=metric,
-                    n_pcs=n_pcs,
-                    use_rep=use_rep,
-                    random_state=seed,
-                    copy=False)
-    return self
+    self._record('neighbors', locals())
+    omic = OMIC.parse(omic)
+    name = omic + '_neighbors'
+    if name not in self.uns:
+      self.dimension_reduce(omic, algo='pca', random_state=random_state)
+      sc.pp.neighbors(self,
+                      n_neighbors=n_neighbors,
+                      knn=knn,
+                      method=method,
+                      metric=metric,
+                      n_pcs=int(n_pcs),
+                      use_rep=omic.name + '_pca',
+                      random_state=random_state,
+                      copy=False)
+      neighbors = self.uns['neighbors']
+      del self.uns['neighbors']
+      self.uns[name] = neighbors
+    return self.uns[name]
 
   def louvain(self,
+              omic=OMIC.transcriptomic,
               resolution=None,
               restrict_to=None,
-              key_added='louvain',
               adjacency=None,
               flavor='vtraag',
               directed=True,
               use_weights=False,
               partition_type=None,
-              partition_kwargs=None,
-              seed=8):
+              partition_kwargs={},
+              random_state=1):
     r"""Cluster cells into subgroups [Blondel08]_ [Levine15]_ [Traag17]_.
 
     Cluster cells using the Louvain algorithm [Blondel08]_ in the implementation
@@ -836,53 +977,47 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
     This requires having ran :func:`~scanpy.pp.neighbors` or :func:`~scanpy.external.pp.bbknn` first,
     or explicitly passing a ``adjacency`` matrix.
 
-    Parameters
-    ----------
-    resolution
-        For the default flavor (``'vtraag'``), you can provide a resolution
-        (higher resolution means finding more and smaller clusters),
-        which defaults to 1.0. See “Time as a resolution parameter” in [Lambiotte09]_.
-    restrict_to
-        Restrict the clustering to the categories within the key for sample
-        annotation, tuple needs to contain ``(obs_key, list_of_categories)``.
-    key_added
-        Key under which to add the cluster labels. (default: ``'louvain'``)
-    adjacency
-        Sparse adjacency matrix of the graph, defaults to
-        ``adata.uns['neighbors']['connectivities']``.
-    flavor : {``'vtraag'``, ``'igraph'``}
-        Choose between to packages for computing the clustering.
-        ``'vtraag'`` is much more powerful, and the default.
-    directed
-        Interpret the ``adjacency`` matrix as directed graph?
-    use_weights
-        Use weights from knn graph.
-    partition_type
-        Type of partition to use.
-        Only a valid argument if ``flavor`` is ``'vtraag'``.
-    partition_kwargs
-        Key word arguments to pass to partitioning,
-        if ``vtraag`` method is being used.
-    seed
-        Change the initialization of the optimization.
-
-    Returns
-    -------
-    :obj:`None`
-        By default (``copy=False``), updates ``adata`` with the following fields:
-
-        ``adata.obs['louvain']`` (:class:`pandas.Series`, dtype ``category``)
-            Array of dim (number of samples) that stores the subgroup id
-            (``'0'``, ``'1'``, ...) for each cell.
-
-    :class:`~anndata.AnnData`
-        When ``copy=True`` is set, a copy of ``adata`` with those fields is returned.
+    Arguments:
+      resolution
+          For the default flavor (``'vtraag'``), you can provide a resolution
+          (higher resolution means finding more and smaller clusters),
+          which defaults to 1.0. See “Time as a resolution parameter” in [Lambiotte09]_.
+      restrict_to
+          Restrict the clustering to the categories within the key for sample
+          annotation, tuple needs to contain ``(obs_key, list_of_categories)``.
+      key_added
+          Key under which to add the cluster labels. (default: ``'louvain'``)
+      adjacency
+          Sparse adjacency matrix of the graph, defaults to
+          ``adata.uns['neighbors']['connectivities']``.
+      flavor : {``'vtraag'``, ``'igraph'``}
+          Choose between to packages for computing the clustering.
+          ``'vtraag'`` is much more powerful, and the default.
+      directed
+          Interpret the ``adjacency`` matrix as directed graph?
+      use_weights
+          Use weights from knn graph.
+      partition_type
+          Type of partition to use.
+          Only a valid argument if ``flavor`` is ``'vtraag'``.
+      partition_kwargs
+          Key word arguments to pass to partitioning,
+          if ``vtraag`` method is being used.
+      random_state : Change the initialization of the optimization.
     """
+    self._record('louvain', locals())
+    try:
+      import louvain
+    except ImportError:
+      raise ImportError("pip install louvain>=0.6 python-igraph")
+    omic = OMIC.parse(omic)
+    nb = self.neighbors(omic)
+    self.uns['neighbors'] = nb
     sc.tl.louvain(self,
                   resolution=resolution,
-                  random_state=seed,
+                  random_state=random_state,
                   restrict_to=restrict_to,
-                  key_added=key_added,
+                  key_added=omic.name + '_louvain',
                   adjacency=adjacency,
                   flavor=flavor,
                   directed=directed,
@@ -890,138 +1025,128 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
                   partition_type=partition_type,
                   partition_kwargs=partition_kwargs,
                   copy=False)
+    del self.uns['neighbors']
+    model = self.uns['louvain']
+    del self.uns['louvain']
+    self.uns[omic.name + '_louvain'] = model
+    return self.obs[omic.name + '_louvain'].values
+
+  # ******************** Genes metrics and ranking ******************** #
+  def top_genes(self, n_genes=8):
+    self.quality_metrics()
+    exit()
+
+  def rank_genes_groups(self,
+                        n_genes=100,
+                        groupby=OMIC.proteomic,
+                        louvain=False,
+                        method='t-test_overestim_var',
+                        corr_method='benjamini-hochberg'):
+    r"""
+    method
+      The default 't-test_overestim_var' overestimates variance of each group,
+      `'t-test'` uses t-test, `'wilcoxon'` uses Wilcoxon rank-sum,
+      `'logreg'` uses logistic regression. See [Ntranos18]_,
+      `here <https://github.com/theislab/scanpy/issues/95>`__ and `here
+      <http://www.nxn.se/valent/2018/3/5/actionable-scrna-seq-clusters>`__,
+      for why this is meaningful.
+    corr_method
+      p-value correction method.
+      Used only for `'t-test'`, `'t-test_overestim_var'`, and `'wilcoxon'`.
+
+    """
+    self._record('rank_genes_groups', locals())
+    x = self.numpy(groupby)
+    if x.ndim > 1:
+      omic = OMIC.parse(groupby)
+      if louvain:
+        self.louvain(omic)
+        groupby = omic.name + '_louvain'
+      else:
+        self.probabilistic_embedding(omic)
+        groupby = self.labels_name(omic)
+    elif isinstance(groupby, OMIC):
+      groupby = groupby.name
+    sc.tl.rank_genes_groups(self,
+                            groupby=groupby,
+                            n_genes=int(n_genes),
+                            method=method,
+                            corr_method=corr_method,
+                            copy=False,
+                            key_added='%s_rank' % groupby)
     return self
 
-  def calculate_qc_metrics(self,
-                           expr_type='counts',
-                           var_type='genes',
-                           qc_vars=(),
-                           percent_top=(50, 100, 200, 500),
-                           layer=None,
-                           use_raw=False,
-                           parallel=None):
-    """\
-    Calculate quality control metrics.
+  def quality_metrics(self,
+                      n_bins=20,
+                      flavor='cell_ranger',
+                      percent_top=100,
+                      use_raw=False):
+    r"""\
+    Calculate quality control metrics, and highly variable genes.
 
-    Calculates a number of qc metrics for an AnnData object, see section
-    `Returns` for specifics. Largely based on `calculateQCMetrics` from scater
-    [McCarthy17]_. Currently is most efficient on a sparse CSR or dense matrix.
-
-    Parameters
-    ----------
-    expr_type : str
-      Name of kind of values in X.
-    var_type : str
-      The kind of thing the variables are.
-    qc_vars : Collection[str]
-      Keys for boolean columns of .var which identify variables you could
-      want to control for (e.g. “ERCC” or “mito”).
-    percent_top : Collection[int]
-      Which proportions of top genes to cover. If empty or None don’t
-      calculate. Values are considered 1-indexed, percent_top=[50] finds
-      cumulative proportion to the 50th most expressed gene.
-    layer : str, None
-      If provided, use adata.layers[layer] for expression values instead of
-      adata.X.
-    use_raw : bool
-      If True, use adata.raw.X for expression values instead of adata.X.
-    parallel : bool, None
-      Whether to force parallelism. Otherwise usage of paralleism is based
-      on compilation time and sample size heuristics.
-
-    Returns
-    -------
-    updates `SingleCellOMIC`'s `obs` and `var`.
+    Arguments:
+      n_bins
+        Number of bins for binning the mean gene expression. Normalization is
+        done with respect to each bin. If just a single gene falls into a bin,
+        the normalized dispersion is artificially set to 1. You'll be informed
+        about this if you set `settings.verbosity = 4`.
+      flavor
+        Choose the flavor for computing normalized dispersion. In their default
+        workflows, Seurat passes the cutoffs whereas Cell Ranger passes
+        `n_top_genes`.
+      percent_top : a list of Integer. Which proportions of top genes to cover.
+        If empty or None don’t calculate. Values are considered 1-indexed,
+        percent_top=[50] finds cumulative proportion to the 50th most
+        expressed gene.
+      use_raw : a Boolean. If True, use adata.raw.X for expression values
+        instead of adata.X.
 
     Observation level metrics include:
-    total_{var_type}_by_{expr_type}
-      E.g. “total_genes_by_counts”. Number of genes with positive counts in
-      a cell.
-    total_{expr_type}
-      E.g. “total_counts”. Total number of counts for a cell.
-    pct_{expr_type}_in_top_{n}_{var_type} - for n in percent_top
-      E.g. “pct_counts_in_top_50_genes”. Cumulative percentage of counts for
-      50 most expressed genes in a cell.
-    total_{expr_type}_{qc_var} - for qc_var in qc_vars
-      E.g. “total_counts_mito”. Total number of counts for variabes in qc_vars.
-    pct_{expr_type}_{qc_var} - for qc_var in qc_vars
-      E.g. “pct_counts_mito”. Proportion of total counts for a cell which are
-      mitochondrial.
+      "n_genes_by_counts". Number of genes with positive counts in a cell.
+      "total_counts". Total number of counts for a cell.
+      "pct_counts_in_top_50_genes". Cumulative percentage of counts for 50 most
+        expressed genes in a cell.
 
     Variable level metrics include:
-    total_{expr_type}
-      E.g. “total_counts”. Sum of counts for a gene.
-    mean_{expr_type}
-      E.g. “mean counts”. Mean expression over all cells.
-    n_cells_by_{expr_type}
-      E.g. “n_cells_by_counts”. Number of cells this expression is measured in.
-    pct_dropout_by_{expr_type}
-      E.g. “pct_dropout_by_counts”. Percentage of cells this feature does not
-      appear in.
+      "total_counts". Sum of counts for a gene.
+      "mean_counts". Mean expression over all cells.
+      "n_cells_by_counts". Number of cells this expression is measured in.
+      "pct_dropout_by_counts". Percentage of cells this feature does not
+        appear in.
+      "highly_variable" : boolean indicator of highly-variable genes
+      "dispersions" : dispersions per gene
+      "dispersions_norm" : normalized dispersions per gene
+
     """
+    self._record('quality_metrics', locals())
     sc.pp.calculate_qc_metrics(self,
-                               expr_type=expr_type,
-                               var_type=var_type,
-                               qc_vars=qc_vars,
-                               percent_top=percent_top,
-                               layer=layer,
+                               percent_top=as_tuple(percent_top, t=int)
+                               if percent_top is not None else None,
                                use_raw=use_raw,
-                               parallel=parallel,
                                inplace=True)
+    # Expects logarithmized data.
+    if not self.is_log:
+      sc.pp.log1p(self)
+    sc.pp.highly_variable_genes(self,
+                                n_bins=int(n_bins),
+                                flavor=flavor,
+                                subset=False,
+                                inplace=True)
+    del self.var['means']
+    if not self.is_log:
+      X = self.X
+      for s, e in batching(_DEFAULT_BATCH_SIZE, n=self.n_obs):
+        x = X[s:e]
+        if sp.sparse.issparse(x):
+          np.expm1(x.data, out=x.data)
+        else:
+          np.expm1(x, out=x)
     return self
-
-  # ******************** plotting helper ******************** #
-  def plot_percentile_histogram(self,
-                                n_hist,
-                                title=None,
-                                outlier=0.001,
-                                non_zeros=False,
-                                fig=None):
-    """ Data is chopped into multiple percentile (`n_hist`) and the
-    histogram is plotted for each percentile.
-
-    """
-    from matplotlib import pyplot as plt
-    arr = self.X
-    if non_zeros:
-      arr = arr[arr != 0]
-    n_percentiles = n_hist + 1
-    n_col = 5
-    n_row = int(np.ceil(n_hist / n_col))
-    if fig is None:
-      fig = vs.plot_figure(nrow=int(n_row * 1.5), ncol=20)
-    self.assert_figure(fig)
-    percentile = np.linspace(start=np.min(arr),
-                             stop=np.max(arr),
-                             num=n_percentiles)
-    n_samples = len(arr)
-    for i, (p_min, p_max) in enumerate(zip(percentile, percentile[1:])):
-      min_mask = arr >= p_min
-      max_mask = arr <= p_max
-      mask = np.logical_and(min_mask, max_mask)
-      a = arr[mask]
-      _, bins = vs.plot_histogram(
-          a,
-          bins=120,
-          ax=(n_row, n_col, i + 1),
-          fontsize=8,
-          color='red' if len(a) / n_samples < outlier else 'blue',
-          title=("[%s]" % title if i == 0 else "") +
-          "%d(samples)  Range:[%g, %g]" % (len(a), p_min, p_max))
-      plt.gca().set_xticks(np.linspace(np.min(bins), np.max(bins), num=8))
-    plt.tight_layout()
-    self.add_figure('percentile_%dhistogram' % n_hist, fig)
-    return self
-
-  def plot_heatmap(self, ax=None):
-    raise NotImplementedError
-
-  def plot_rank_features_stacked_violin(self, n_features=10, ax=None):
-    raise NotImplementedError
 
   # ******************** logging and io ******************** #
   def save_to_mmaparray(self, path, dtype=None):
     """ This only save the data without row names and column names """
+    self._record('save_to_mmaparray', locals())
     with MmapArrayWriter(path=path,
                          shape=self.shape,
                          dtype=self.dtype if dtype is None else dtype,
@@ -1046,7 +1171,8 @@ class SingleCellOMIC(sc.AnnData, Visualizer):
         all_nonzeros.append(x[ids[0], ids[1]])
       all_nonzeros = np.concatenate(all_nonzeros)
 
-      text += pad[:-1] + "OMIC: '%s'" % str(omic)
+      text += pad[:-1] + "OMIC: '%s' - dtype: '%s'" % (
+          omic.name, "binary" if self.is_binary(omic) else "continuous")
       text += pad + 'Sparsity  : %.2f' % self.sparsity(omic)
       text += pad + 'Nonzeros  : %s' % describe(
           all_nonzeros, shorten=True, float_precision=2)
