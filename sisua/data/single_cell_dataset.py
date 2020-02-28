@@ -7,6 +7,7 @@ import types
 import warnings
 from copy import deepcopy
 from enum import Enum
+from numbers import Number
 from typing import Optional, Tuple
 
 import numpy as np
@@ -32,7 +33,7 @@ from sisua.data.utils import (apply_artificial_corruption, get_library_size,
 from sisua.label_threshold import ProbabilisticEmbedding
 
 # Heuristic constants
-_DEFAULT_BATCH_SIZE = 4096
+_BATCH_SIZE = 4096
 # TODO: take into account obsp and varp
 
 
@@ -728,12 +729,12 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
       X_ = np.empty(X.shape, dtype=X.dtype)
       model = IncrementalPCA(n_components=None)
       # fitting
-      for start, end in batching(_DEFAULT_BATCH_SIZE, n=X.shape[0]):
+      for start, end in batching(_BATCH_SIZE, n=X.shape[0]):
         chunk = X[start:end]
         chunk = chunk.toarray() if issparse(chunk) else chunk
         model.partial_fit(chunk)
       # transforming
-      for start, end in batching(_DEFAULT_BATCH_SIZE, n=X.shape[0]):
+      for start, end in batching(_BATCH_SIZE, n=X.shape[0]):
         chunk = X[start:end]
         chunk = chunk.toarray() if issparse(chunk) else chunk
         X_[start:end] = model.transform(chunk)
@@ -771,6 +772,9 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     self.obsm[name] = X_
     if model is not None:
       self.uns[name] = model
+    # select components
+    if n_components is None:
+      return self.obsm[name]
     return self.obsm[name][:, :int(n_components)]
 
   def expm1(self, omic=OMIC.transcriptomic, inplace=True):
@@ -779,7 +783,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     _expm1 = lambda x: (np.expm1(x.data, out=x.data)
                         if issparse(x) else np.expm1(x, out=x))
     X = om.numpy(omic)
-    for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
+    for s, e in batching(n=self.n_obs, batch_size=_BATCH_SIZE):
       X[s:e] = _expm1(X[s:e])
     om._calculate_statistics(omic)
     return om
@@ -847,7 +851,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
       om._name += '_total'
 
     if log1p:
-      sc.pp.log1p(om, chunked=True, chunk_size=_DEFAULT_BATCH_SIZE, copy=False)
+      sc.pp.log1p(om, chunked=True, chunk_size=_BATCH_SIZE, copy=False)
       om._name += '_log1p'
       del om.uns['log1p']
     # scaling may result negative total counts
@@ -870,7 +874,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     is scalable. """
     counts = 0
     X = self.numpy(omic)
-    for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=X.shape[1]):
+    for s, e in batching(batch_size=_BATCH_SIZE, n=X.shape[1]):
       counts += np.sum(X[:, s:e], axis=1)
     return counts
 
@@ -879,7 +883,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     is scalable. """
     counts = 0
     X = self.numpy(omic)
-    for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=X.shape[0]):
+    for s, e in batching(batch_size=_BATCH_SIZE, n=X.shape[0]):
       counts += np.sum(X[s:e], axis=0)
     return counts
 
@@ -957,6 +961,53 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
       self.uns[name] = neighbors
     return self.uns[name]
 
+  def kmeans(self,
+             omic=OMIC.transcriptomic,
+             n_clusters='auto',
+             n_init='auto',
+             dimension_reduction=None,
+             random_state=1234):
+    self._record('kmeans', locals())
+    from sklearn.cluster import MiniBatchKMeans
+    omic = OMIC.parse(omic)
+    if not isinstance(n_clusters, Number):
+      for o in OMIC:
+        if o == omic or o not in self.omics:
+          continue
+        ndim = self.numpy(o).shape[1]
+        if ndim <= 50:
+          n_clusters = ndim
+          break
+    n_clusters = int(n_clusters)
+    n_init = int(n_init) if isinstance(n_init, Number) else int(n_clusters) * 2
+    kmean = MiniBatchKMeans(n_clusters=int(n_clusters),
+                            max_iter=100,
+                            n_init=int(n_init),
+                            compute_labels=False,
+                            batch_size=_BATCH_SIZE // 5,
+                            random_state=random_state)
+    # get appropriate input data
+    if dimension_reduction is None:
+      X = self.numpy(omic)
+    else:
+      X = self.dimension_reduce(omic,
+                                n_components=None,
+                                algo=dimension_reduction,
+                                random_state=random_state)
+    # better suffering the batch
+    for s, e in batching(_BATCH_SIZE, self.n_obs, seed=random_state):
+      x = X[s:e]
+      kmean.partial_fit(x)
+    # make prediction
+    labels = []
+    for s, e in batching(_BATCH_SIZE, self.n_obs):
+      x = X[s:e]
+      labels.append(kmean.predict(x))
+    labels = np.concatenate(labels, axis=0)
+    self.obs[omic.name + '_kmeans'] = pd.Categorical(labels)
+    self.uns[omic.name + '_kmeans'] = kmean
+    return self
+
   def louvain(self,
               omic=OMIC.transcriptomic,
               resolution=None,
@@ -1032,26 +1083,43 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     return self.obs[omic.name + '_louvain'].values
 
   # ******************** Genes metrics and ranking ******************** #
-  def top_genes(self, n_genes=8):
+  def top_genes(self, n_genes=100, return_indices=False):
+    r""" The genes that, top highly variated, less dropout
+    (i.e. smallest counts of zero-values), and appeared in most cells
+    will be returned.
+
+    Arguments:
+      return_indices : a Boolean. If True, return the index of top genes,
+        otherwise, return the genes' ID.
+    """
     self.quality_metrics()
-    exit()
+    highly_var = self.var['highly_variable']
+    n_cells = self.var['n_cells_by_counts'][highly_var].values
+    n_cells = (n_cells - np.min(n_cells)) / (np.max(n_cells) - np.min(n_cells))
+    zero_counts = self.var['pct_dropout_by_counts'][highly_var].values
+    zero_counts = (zero_counts - np.min(zero_counts)) / \
+      (np.max(zero_counts) - np.min(zero_counts))
+    # higher is better
+    rating = (n_cells + (1. - zero_counts)) / 2
+    ids = np.argsort(rating)[::-1]
+    # indexing the genes
+    genes = np.arange(self.n_vars, dtype=np.int64) \
+      if return_indices else self.gene_id.values
+    genes = genes[highly_var][ids][:n_genes]
+    return genes
 
   def rank_genes_groups(self,
                         n_genes=100,
                         groupby=OMIC.proteomic,
                         louvain=False,
-                        method='t-test_overestim_var',
+                        method='logreg',
                         corr_method='benjamini-hochberg'):
     r"""
-    method
-      The default 't-test_overestim_var' overestimates variance of each group,
+    method :
+      't-test_overestim_var' overestimates variance of each group,
       `'t-test'` uses t-test, `'wilcoxon'` uses Wilcoxon rank-sum,
-      `'logreg'` uses logistic regression. See [Ntranos18]_,
-      `here <https://github.com/theislab/scanpy/issues/95>`__ and `here
-      <http://www.nxn.se/valent/2018/3/5/actionable-scrna-seq-clusters>`__,
-      for why this is meaningful.
-    corr_method
-      p-value correction method.
+      `'logreg'` uses logistic regression.
+    corr_method :  p-value correction method.
       Used only for `'t-test'`, `'t-test_overestim_var'`, and `'wilcoxon'`.
 
     """
@@ -1082,7 +1150,8 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
                       percent_top=100,
                       use_raw=False):
     r"""\
-    Calculate quality control metrics, and highly variable genes.
+    Calculate quality control metrics for both the observations and variable.
+    Highly variable genes (i.e. variables) also calculated.
 
     Arguments:
       n_bins
@@ -1135,7 +1204,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     del self.var['means']
     if not self.is_log:
       X = self.X
-      for s, e in batching(_DEFAULT_BATCH_SIZE, n=self.n_obs):
+      for s, e in batching(_BATCH_SIZE, n=self.n_obs):
         x = X[s:e]
         if sp.sparse.issparse(x):
           np.expm1(x.data, out=x.data)
@@ -1151,7 +1220,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
                          shape=self.shape,
                          dtype=self.dtype if dtype is None else dtype,
                          remove_exist=True) as f:
-      for s, e in batching(batch_size=_DEFAULT_BATCH_SIZE, n=self.n_obs):
+      for s, e in batching(batch_size=_BATCH_SIZE, n=self.n_obs):
         x = self.X[s:e]
         if dtype is not None:
           x = x.astype(dtype)
@@ -1165,7 +1234,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     for omic in self.omics:
       X = self.numpy(omic)
       all_nonzeros = []
-      for s, e in batching(n=self.n_obs, batch_size=_DEFAULT_BATCH_SIZE):
+      for s, e in batching(n=self.n_obs, batch_size=_BATCH_SIZE):
         x = X[s:e]
         ids = np.nonzero(x)
         all_nonzeros.append(x[ids[0], ids[1]])

@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 from contextlib import contextmanager
+from numbers import Number
 
 import numpy as np
 import scanpy as sc
@@ -17,7 +18,7 @@ from sisua.data.utils import is_categorical_dtype
 # ===========================================================================
 # Helper
 # ===========================================================================
-def _process_omics(sco, omic, to_labels=False, louvain=False):
+def _process_omics(sco, omic, to_labels=False, clustering=None):
   if isinstance(omic, OMIC):
     omic = omic.name
   else:
@@ -29,12 +30,21 @@ def _process_omics(sco, omic, to_labels=False, louvain=False):
   x = None
   if omic in sco.obs:
     x = sco.obs[omic].values
-  elif omic in sco.obsm:
-    x = sco.obsm[omic]
+  elif omic in sco.obsm or omic == OMIC.transcriptomic.name:
+    x = sco.numpy(omic)
     # Use Louvain community detection
-    if louvain:
-      x = sco.louvain(omic)
-      omic = omic + '_louvain'
+    if isinstance(clustering, string_types):
+      clustering = clustering.lower().strip()
+      if 'louvain' in clustering:
+        x = sco.louvain(omic)
+        omic = omic + '_louvain'
+      elif 'kmean' in clustering:
+        x = sco.kmeans(omic)
+        omic = omic + '_kmeans'
+      else:
+        raise ValueError(
+            "No support for clustering algorithm '%s' of OMIC type '%s'" %
+            (clustering, omic))
     # probabilistic embedding
     elif to_labels:
       _, prob, _ = sco.probabilistic_embedding(omic)
@@ -47,7 +57,9 @@ def _process_omics(sco, omic, to_labels=False, louvain=False):
 
 
 def _marker_genes(sco, marker_genes):
-  if marker_genes is None:
+  if isinstance(marker_genes, Number):
+    marker_genes = sco.top_genes(n_genes=int(marker_genes))
+  elif marker_genes is None:
     marker_genes = sco.marker_genes
   else:
     marker_genes = as_tuple(marker_genes, t=string_types)
@@ -67,15 +79,13 @@ class SingleCellVisualizer(Visualizer):
     omic = OMIC.parse(omic)
     x = self.numpy(omic)
     varname = self.omic_id(omic)
-    print(x)
-    print(varname)
     yield self
 
   def plot_scatter(self,
                    X=OMIC.transcriptomic,
                    colorby=OMIC.proteomic,
                    markerby=OMIC.celltype,
-                   louvain=False,
+                   clustering=None,
                    legend_loc='best',
                    algo='tsne',
                    ax=None):
@@ -90,8 +100,14 @@ class SingleCellVisualizer(Visualizer):
     omic = OMIC.parse(X)
     omic_name = omic.name
     X = self.dimension_reduce(omic, n_components=2, algo=algo)
-    _, colors = _process_omics(self, colorby, to_labels=True, louvain=louvain)
-    _, markers = _process_omics(self, markerby, to_labels=True, louvain=louvain)
+    _, colors = _process_omics(self,
+                               colorby,
+                               to_labels=True,
+                               clustering=clustering)
+    _, markers = _process_omics(self,
+                                markerby,
+                                to_labels=True,
+                                clustering=clustering)
     if is_categorical_dtype(colors):  # categorical values
       fn = vs.plot_scatter
       kw = dict(color='b' if colors is None else colors)
@@ -113,15 +129,19 @@ class SingleCellVisualizer(Visualizer):
     return self
 
   def plot_dotplot(self,
-                   groupby=OMIC.proteomic,
+                   groupby=OMIC.transcriptomic,
                    marker_genes=None,
-                   louvain=False,
+                   clustering=None,
                    rank_genes=0,
                    dendrogram=True,
                    standard_scale='var',
                    cmap='Reds',
                    log=False):
-    groupby, _ = _process_omics(self, groupby, to_labels=True, louvain=louvain)
+    marker_genes = _marker_genes(self, marker_genes)
+    groupby, _ = _process_omics(self,
+                                groupby,
+                                to_labels=True,
+                                clustering=clustering)
     kw = dict(dendrogram=dendrogram,
               log=log,
               standard_scale=standard_scale,
@@ -135,21 +155,24 @@ class SingleCellVisualizer(Visualizer):
                                              key=key,
                                              **kw)
     else:
-      marker_genes = _marker_genes(self, marker_genes)
       axes = sc.pl.dotplot(self, var_names=marker_genes, groupby=groupby, **kw)
     self.add_figure('dotplot_%s' % ('log' if log else 'raw'), plt.gcf())
     return self
 
   def plot_stacked_violins(self,
-                           groupby=OMIC.proteomic,
+                           groupby=OMIC.transcriptomic,
                            marker_genes=None,
-                           louvain=False,
+                           clustering=None,
                            rank_genes=0,
-                           dendrogram=True,
+                           dendrogram=False,
                            swap_axes=True,
                            standard_scale='var',
                            log=False):
-    groupby, _ = _process_omics(self, groupby, to_labels=True, louvain=louvain)
+    marker_genes = _marker_genes(self, marker_genes)
+    groupby, _ = _process_omics(self,
+                                groupby,
+                                to_labels=True,
+                                clustering=clustering)
     kw = dict(dendrogram=dendrogram,
               swap_axes=bool(swap_axes),
               log=log,
@@ -163,7 +186,6 @@ class SingleCellVisualizer(Visualizer):
                                                     key=key,
                                                     **kw)
     else:
-      marker_genes = _marker_genes(self, marker_genes)
       axes = sc.pl.stacked_violin(self,
                                   var_names=marker_genes,
                                   groupby=groupby,
@@ -172,16 +194,20 @@ class SingleCellVisualizer(Visualizer):
     return self
 
   def plot_heatmap(self,
-                   groupby=OMIC.proteomic,
+                   groupby=OMIC.transcriptomic,
                    marker_genes=None,
-                   louvain=False,
+                   clustering=None,
                    rank_genes=0,
-                   dendrogram=True,
+                   dendrogram=False,
                    swap_axes=False,
                    cmap=None,
                    standard_scale='var',
                    log=True):
-    groupby, _ = _process_omics(self, groupby, to_labels=True, louvain=louvain)
+    marker_genes = _marker_genes(self, marker_genes)
+    groupby, _ = _process_omics(self,
+                                groupby,
+                                to_labels=True,
+                                clustering=clustering)
     kw = dict(dendrogram=dendrogram,
               swap_axes=bool(swap_axes),
               standard_scale=standard_scale,
@@ -197,7 +223,6 @@ class SingleCellVisualizer(Visualizer):
                                              key=key,
                                              **kw)
     else:
-      marker_genes = _marker_genes(self, marker_genes)
       axes = sc.pl.heatmap(self, var_names=marker_genes, groupby=groupby, **kw)
     self.add_figure('heatmap_%s' % ('log' if log else 'raw'), plt.gcf())
     return self
@@ -241,9 +266,3 @@ class SingleCellVisualizer(Visualizer):
     plt.tight_layout()
     self.add_figure('percentile_%dhistogram' % n_hist, fig)
     return self
-
-  def plot_rank_genes_groups_heatmap(self, ax=None):
-    sc.pl.rank_genes_groups_heatmap
-
-  def plot_rank_features_stacked_violin(self, n_features=10, ax=None):
-    raise NotImplementedError
