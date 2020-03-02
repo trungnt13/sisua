@@ -6,6 +6,7 @@ import unittest
 from tempfile import mkstemp
 
 import numpy as np
+import pandas as pd
 
 from odin.utils import catch_warnings_ignore
 from sisua.data import OMIC, get_dataset
@@ -30,8 +31,11 @@ def _equal(self, sco1, sco2):
     self.assertTrue(np.all(v1 == v2), msg="var-key: %s" % k1)
   for (k1, v1), (k2, v2) in zip(sco1.uns.items(), sco2.uns.items()):
     self.assertEqual(k1, k2)
-    if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
+    self.assertTrue(type(v1) is type(v2))
+    if isinstance(v1, np.ndarray):
       cond = np.all(v1 == v2)
+    elif isinstance(v1, pd.DataFrame):
+      cond = np.all(v1 == v2) and np.all(v1.index == v2.index)
     else:
       cond = v1 is v2
     self.assertTrue(cond, msg="uns-key: %s" % k1)
@@ -91,13 +95,17 @@ class SisuaDataset(unittest.TestCase):
     self.assertTrue(np.all(np.logical_and(0. < prob, prob < 1.)))
     self.assertTrue(np.all(np.unique(bina) == np.unique([0., 1.])))
 
-    n = ds.n_obs
-    pca1 = ds.pca(n_components=2)
-    pca2 = ds.pca(OMIC.proteomic, n_components=3)
-    self.assertTrue(pca1.shape == (n, 2))
-    self.assertTrue(pca2.shape == (n, 3))
-    self.assertTrue('%s_pca' % OMIC.proteomic.name in ds.uns)
-    self.assertTrue('%s_pca' % OMIC.transcriptomic.name in ds.uns)
+    for algo in ('pca', 'tsne'):
+      n = ds.n_obs
+      pca1 = ds.dimension_reduce(n_components=2, algo=algo)
+      pca2 = ds.dimension_reduce(OMIC.proteomic, n_components=3, algo=algo)
+      self.assertTrue(pca1.shape == (n, 2))
+      self.assertTrue(pca2.shape == (n, 3) if algo == 'pca' else \
+        pca2.shape == (n, 2))
+      name1 = '%s_%s' % (OMIC.proteomic.name, algo)
+      name2 = '%s_%s' % (OMIC.transcriptomic.name, algo)
+      self.assertTrue(name1 in ds.obsm and name1 in ds.uns)
+      self.assertTrue(name2 in ds.obsm and name2 in ds.uns)
 
   def test_normalization(self):
     ds = get_dataset('8kmy')
@@ -130,8 +138,13 @@ class SisuaDataset(unittest.TestCase):
 
   def test_metrics(self):
     ds = get_dataset('8kmy')
-    ds.calculate_qc_metrics()
-    text = str(ds)
+    ds.calculate_quality_metrics()
+    ds.rank_genes_groups()
+
+  def test_clustering(self):
+    ds = get_dataset('8kmy')
+    # ds.kmeans()
+    # ds.knn()
 
 
 if __name__ == '__main__':

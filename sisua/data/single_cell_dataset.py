@@ -21,6 +21,7 @@ from six import string_types
 
 from bigarray import MmapArrayWriter
 from odin import visual as vs
+from odin.search import diagonal_beam_search
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import (IndexedList, as_tuple, batching, cache_memory,
                         catch_warnings_ignore, ctext, is_primitive)
@@ -109,10 +110,12 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     # init
     super(SingleCellOMIC, self).__init__(X, **kwargs)
     self._name = str(name)
+    if OMIC.transcriptomic.name + '_var' not in self.uns:
+      self.uns[OMIC.transcriptomic.name + '_var'] = self.var
     # The class is created for first time
     if not isinstance(X, sc.AnnData):
       self.obs['indices'] = np.arange(self.X.shape[0], dtype='int64')
-      self._calculate_statistics()
+      self._calculate_statistics(OMIC.transcriptomic)
 
   def _record(self, name: str, local: dict):
     method = getattr(self, name)
@@ -126,19 +129,23 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     }
     self._history[name] = local
 
-  def add_omic(self, omic: OMIC, X: np.ndarray, var_id=None):
+  def add_omic(self, omic: OMIC, X: np.ndarray, var_names=None):
     self._record('add_omic', locals())
     omic = OMIC.parse(omic)
     assert X.shape[0] == self.X.shape[0], \
       "Number of samples of new omic type mismatch, given: %s, require: %s" % \
         (str(X.shape), self.X.shape[0])
     self.obsm[omic.name] = X
-    if var_id is not None:
-      var_id = np.array(var_id).ravel()
-      assert len(var_id) == X.shape[1]
-      if omic == OMIC.proteomic:
-        var_id = standardize_protein_name(var_id)
-      self.uns[omic.name + '_id'] = var_id
+    # variable name
+    if var_names is not None:
+      var_names = np.array(var_names).ravel()
+      assert len(var_names) == X.shape[1]
+      if omic in (OMIC.proteomic | OMIC.celltype):
+        var_names = standardize_protein_name(var_names)
+    else:
+      var_names = ['%s%d' % (omic.name, i) for i in range(X.shape[1])]
+    self.uns[omic.name + '_var'] = pd.DataFrame(index=var_names)
+    # update
     self._omics |= omic
     self._calculate_statistics(omic)
     return self
@@ -291,13 +298,12 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     ]
     return genes
 
-  def omic_id(self, omic):
-    r""" Return the variables' name for specified OMIC type """
+  def omic_var(self, omic):
     omic = OMIC.parse(omic)
+    assert omic in self.omics
     if omic == OMIC.transcriptomic:
-      return self.gene_id
-    labels = self.uns[omic.name + '_id']
-    return labels
+      return self.var
+    return self.uns[omic.name + '_var']
 
   def numpy(self, omic=OMIC.transcriptomic):
     r""" Return observation ndarray in `obsm` or `obs`"""
@@ -695,39 +701,40 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
         assert isinstance(pbe, ProbabilisticEmbedding), \
           'pbe, if given, must be instance of sisua.ProbabilisticEmbedding'
       # make prediction
-      X_prob = pbe.predict_proba(X)
+      X_prob = np.clip(pbe.predict_proba(X), 0. + 1e-8, 1. - 1e-8)
       X_bin = pbe.predict(X)
     # store the data
     if prob_name not in self.obsm:
       self.obsm[prob_name] = X_prob
-    if label_name not in self.obs and name + '_id' in self.uns:
-      omic_id = self.omic_id(name)
+    if label_name not in self.obs and name + '_var' in self.uns:
+      omic_id = self.omic_var(name).index
       labels = [omic_id[i] for i in np.argmax(self.obsm[prob_name], axis=1)]
-      self.obs[label_name] = labels
+      self.obs[label_name] = pd.Categorical(labels)
     if bin_name not in self.obsm:
       self.obsm[bin_name] = X_bin
     return pbe, self.obsm[prob_name], self.obsm[bin_name]
 
   def dimension_reduce(self,
                        omic=OMIC.transcriptomic,
-                       n_components=2,
+                       n_components=100,
                        algo='pca',
                        random_state=1):
-    r""" Code from `scanpy.pp.pca`, there is bug when `chunked=True` so we
-    modify it here. """
+    r""" Perform dimension reduction on given OMIC data. """
     self._record('dimension_reduce', locals())
     from sklearn.decomposition import IncrementalPCA
     algo = str(algo).lower().strip()
     assert algo in ('pca', 'tsne', 'umap')
     omic = OMIC.parse(omic)
     name = '%s_%s' % (omic.name, algo)
+    ## already transformed
     if name in self.obsm:
-      return self.obsm[name][:, :int(n_components)]
+      return self.obsm[name] if n_components is None else \
+        self.obsm[name][:, :int(n_components)]
     X = self.numpy(omic)
-    # train new PCA model
+    ## train new PCA model
     if algo == 'pca':
-      X_ = np.empty(X.shape, dtype=X.dtype)
-      model = IncrementalPCA(n_components=None)
+      X_ = np.empty(shape=(X.shape[0], n_components), dtype=X.dtype)
+      model = IncrementalPCA(n_components=n_components)
       # fitting
       for start, end in batching(_BATCH_SIZE, n=X.shape[0]):
         chunk = X[start:end]
@@ -738,21 +745,23 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
         chunk = X[start:end]
         chunk = chunk.toarray() if issparse(chunk) else chunk
         X_[start:end] = model.transform(chunk)
-    # TSNE
+    ## TSNE
     elif algo == 'tsne':
-      self.dimension_reduce(omic, algo='pca', random_state=random_state)
       from multiprocessing import cpu_count
+      self.dimension_reduce(omic,
+                            n_components=n_components,
+                            algo='pca',
+                            random_state=random_state)
       sc.tl.tsne(self,
-                 n_pcs=min(120, X.shape[1]),
+                 n_pcs=n_components,
                  use_rep=omic.name + '_pca',
                  copy=False,
-                 n_jobs=max(1,
-                            cpu_count() - 1),
+                 n_jobs=max(1, cpu_count() - 1),\
                  random_state=random_state)
       X_ = self.obsm['X_tsne']
       model = None
       del self.obsm['X_tsne']
-    # UMAP
+    ## UMAP
     elif algo == 'umap':
       try:
         import cuml
@@ -768,14 +777,12 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
       del self.obsm['X_umap']
       del self.uns['umap']
       del self.uns['neighbors']
-    # store the result
+    ## store and return the result
     self.obsm[name] = X_
-    if model is not None:
-      self.uns[name] = model
-    # select components
-    if n_components is None:
-      return self.obsm[name]
-    return self.obsm[name][:, :int(n_components)]
+    # the model could be None, in case of t-SNE
+    self.uns[name] = model
+    return self.obsm[name] if n_components is None else \
+      self.obsm[name][:, :int(n_components)]
 
   def expm1(self, omic=OMIC.transcriptomic, inplace=True):
     om = self if inplace else self.copy()
@@ -961,32 +968,43 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
       self.uns[name] = neighbors
     return self.uns[name]
 
-  def kmeans(self,
-             omic=OMIC.transcriptomic,
-             n_clusters='auto',
-             n_init='auto',
-             dimension_reduction=None,
-             random_state=1234):
-    self._record('kmeans', locals())
-    from sklearn.cluster import MiniBatchKMeans
+  def clustering(self,
+                 omic=OMIC.transcriptomic,
+                 n_clusters=OMIC.proteomic,
+                 n_init='auto',
+                 dimension_reduction=None,
+                 matching_labels=True,
+                 algo='kmeans',
+                 random_state=1234):
+    r""" k-Means clustering for given OMIC type
+
+    Arguments:
+      matching_labels : a Boolean. Matching OMIC var_names to appropriate
+        clusters, only when `n_clusters` is string or OMIC type.
+    """
+    self._record('clustering', locals())
+    ## clustering algorithm
+    from sklearn.cluster import MiniBatchKMeans, AgglomerativeClustering
+    from sklearn.neighbors import KNeighborsClassifier
+    algo = str(algo).strip().lower()
+    ## input data
     omic = OMIC.parse(omic)
-    if not isinstance(n_clusters, Number):
-      for o in OMIC:
-        if o == omic or o not in self.omics:
-          continue
-        ndim = self.numpy(o).shape[1]
-        if ndim <= 50:
-          n_clusters = ndim
-          break
+    cluster_omic = None
+    if isinstance(n_clusters, Number):
+      n_clusters = int(n_clusters)
+    elif isinstance(n_clusters, string_types):
+      cluster_omic = OMIC.parse(n_clusters)
+      n_clusters = self.numpy(cluster_omic).shape[1]
+      if n_clusters > 20:
+        warnings.warn("Found omic type: '%s' with %d clusters" %
+                      (cluster_omic.name, n_clusters))
     n_clusters = int(n_clusters)
     n_init = int(n_init) if isinstance(n_init, Number) else int(n_clusters) * 2
-    kmean = MiniBatchKMeans(n_clusters=int(n_clusters),
-                            max_iter=100,
-                            n_init=int(n_init),
-                            compute_labels=False,
-                            batch_size=_BATCH_SIZE // 5,
-                            random_state=random_state)
-    # get appropriate input data
+    ## check if output already extracted
+    output_name = '%s_%s%d' % (omic.name, algo, n_clusters)
+    if output_name in self.obs:
+      return self.obs[output_name]
+    ## get appropriate input data
     if dimension_reduction is None:
       X = self.numpy(omic)
     else:
@@ -994,19 +1012,55 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
                                 n_components=None,
                                 algo=dimension_reduction,
                                 random_state=random_state)
-    # better suffering the batch
-    for s, e in batching(_BATCH_SIZE, self.n_obs, seed=random_state):
-      x = X[s:e]
-      kmean.partial_fit(x)
-    # make prediction
-    labels = []
-    for s, e in batching(_BATCH_SIZE, self.n_obs):
-      x = X[s:e]
-      labels.append(kmean.predict(x))
-    labels = np.concatenate(labels, axis=0)
-    self.obs[omic.name + '_kmeans'] = pd.Categorical(labels)
-    self.uns[omic.name + '_kmeans'] = kmean
-    return self
+    ## fit KMeans
+    if algo == 'kmeans':  # KMeans
+      model = MiniBatchKMeans(n_clusters=int(n_clusters),
+                              max_iter=100,
+                              n_init=int(n_init),
+                              compute_labels=False,
+                              batch_size=_BATCH_SIZE // 5,
+                              random_state=random_state)
+      # better suffering the batch
+      for s, e in batching(_BATCH_SIZE, self.n_obs, seed=random_state):
+        x = X[s:e]
+        model.partial_fit(x)
+      # make prediction
+      labels = []
+      for s, e in batching(_BATCH_SIZE, self.n_obs):
+        x = X[s:e]
+        labels.append(model.predict(x))
+      labels = np.concatenate(labels, axis=0)
+    ## fit KNN
+    elif algo == 'knn':
+      from sklearn.cluster import SpectralClustering
+      neighbors = self.neighbors(omic)
+      model = None
+      labels = SpectralClustering(
+          n_clusters=n_clusters,
+          random_state=random_state,
+          n_init=n_init,
+          affinity='precomputed_nearest_neighbors',
+          n_neighbors=neighbors['params']['n_neighbors'] - 1).fit_predict(
+              neighbors['connectivities'])
+    else:
+      raise NotImplementedError(algo)
+    ## correlation matrix
+    if cluster_omic is not None and matching_labels:
+      _, X, _ = self.probabilistic_embedding(cluster_omic)
+      # omic-cluster correlation matrix
+      corr = np.empty(shape=(X.shape[1], n_clusters), dtype=np.float32)
+      for i, x in enumerate(X.T):
+        for lab in range(n_clusters):
+          mask = labels == lab
+          corr[i, lab] = np.sum(x[mask])
+      ids = diagonal_beam_search(corr)
+      varnames = self.omic_var(cluster_omic).index
+      labels_to_omic = {lab: name for lab, name, in zip(ids, varnames)}
+      labels = np.array([labels_to_omic[i] for i in labels])
+    ## saving data and model
+    self.obs[output_name] = pd.Categorical(labels)
+    # self.uns[output_name] = model
+    return labels
 
   def louvain(self,
               omic=OMIC.transcriptomic,
@@ -1111,7 +1165,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
   def rank_genes_groups(self,
                         n_genes=100,
                         groupby=OMIC.proteomic,
-                        louvain=False,
+                        clustering=None,
                         method='logreg',
                         corr_method='benjamini-hochberg'):
     r"""
@@ -1127,9 +1181,16 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
     x = self.numpy(groupby)
     if x.ndim > 1:
       omic = OMIC.parse(groupby)
-      if louvain:
-        self.louvain(omic)
-        groupby = omic.name + '_louvain'
+      # clustering and community detection
+      if clustering is not None:
+        clustering = str(clustering).lower().strip()
+        clustering_method = getattr(self, clustering, None)
+        if clustering_method is not None:
+          clustering_method(omic)
+          groupby = omic.name + '_%s' % clustering
+        else:
+          raise ValueError("No support for clustering method: %s" % clustering)
+      # just probabilistic embedding
       else:
         self.probabilistic_embedding(omic)
         groupby = self.labels_name(omic)
@@ -1144,11 +1205,11 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
                             key_added='%s_rank' % groupby)
     return self
 
-  def quality_metrics(self,
-                      n_bins=20,
-                      flavor='cell_ranger',
-                      percent_top=100,
-                      use_raw=False):
+  def calculate_quality_metrics(self,
+                                n_bins=20,
+                                flavor='cell_ranger',
+                                percent_top=100,
+                                use_raw=False):
     r"""\
     Calculate quality control metrics for both the observations and variable.
     Highly variable genes (i.e. variables) also calculated.
@@ -1187,7 +1248,7 @@ class SingleCellOMIC(sc.AnnData, SingleCellVisualizer):
       "dispersions_norm" : normalized dispersions per gene
 
     """
-    self._record('quality_metrics', locals())
+    self._record('calculate_quality_metrics', locals())
     sc.pp.calculate_qc_metrics(self,
                                percent_top=as_tuple(percent_top, t=int)
                                if percent_top is not None else None,
