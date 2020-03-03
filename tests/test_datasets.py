@@ -137,14 +137,17 @@ class SisuaDataset(unittest.TestCase):
         np.all(ds2.numpy(OMIC.transcriptomic) == ds.numpy(OMIC.transcriptomic)))
 
   def test_metrics(self):
-    ds = get_dataset('8kmy')
-    ds.calculate_quality_metrics()
-    ds.rank_genes_groups()
+    sco = get_dataset('8kmy')
+    sco.rank_vars_groups(clustering='kmeans')
+    sco.calculate_quality_metrics()
+    with sco._swap_omic('prot'):
+      sco.rank_vars_groups(clustering='kmeans')
+      sco.calculate_quality_metrics()
 
   def test_clustering(self):
     ds = get_dataset('8kmy')
-    # ds.kmeans()
-    # ds.knn()
+    ds.clustering(algo='kmeans')
+    ds.clustering(algo='knn')
 
 
 if __name__ == '__main__':

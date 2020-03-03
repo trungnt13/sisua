@@ -1,6 +1,5 @@
 from __future__ import absolute_import, division, print_function
 
-from contextlib import contextmanager
 from numbers import Number
 
 import numpy as np
@@ -28,22 +27,20 @@ def _process_omics(sco, omic, clustering=None):
       pass
   omic = str(omic)
   x = None
+  ## the omic provided already in observation
   if omic in sco.obs:
     x = sco.obs[omic].values
-  elif omic in sco.obsm or omic == OMIC.transcriptomic.name:
+  ## processing of multi-dimensional OMIC for labeling and clustering
+  elif omic in sco.omics:
     # Use Louvain community detection
     if isinstance(clustering, string_types):
       clustering = clustering.lower().strip()
-      if 'louvain' in clustering:
+      if 'louvain' in clustering:  # community detection
         x = sco.louvain(omic)
         omic = omic + '_louvain'
-      elif 'kmean' in clustering:
-        x = sco.kmeans(omic)
-        omic = omic + '_kmeans'
-      else:
-        raise ValueError(
-            "No support for clustering algorithm '%s' of OMIC type '%s'" %
-            (clustering, omic))
+      else:  # clustering
+        x = sco.clustering(omic, n_clusters=omic, algo=clustering)
+        omic = '%s_%s%d' % (omic, clustering, sco.numpy(omic).shape[1])
     # probabilistic embedding
     else:
       x = sco.numpy(omic)
@@ -53,37 +50,53 @@ def _process_omics(sco, omic, clustering=None):
         omic = sco.labels_name(omic)
       except KeyError:  # no variable name, just use raw integer values
         x = np.argmax(prob, axis=1)
+  ## Exception
+  else:
+    raise ValueError("No support for omic: '%s' and clustering: '%s'" %
+                     (omic, str(clustering)))
   return omic, x
 
 
-def _marker_genes(sco, marker_genes):
-  if isinstance(marker_genes, Number):
-    marker_genes = sco.top_genes(n_genes=int(marker_genes))
-  elif marker_genes is None:
-    marker_genes = sco.marker_genes
-  else:
-    marker_genes = as_tuple(marker_genes, t=string_types)
-  assert all(g in sco.gene_id for g in marker_genes)
-  return marker_genes
+def _process_varnames(sco, input_omic, var_names):
+  input_omic = OMIC.parse(input_omic)
+  with sco._swap_omic(input_omic) as sco:
+    if isinstance(var_names, Number):
+      var_names = sco.top_vars(n_vars=int(var_names))
+    elif var_names is None:
+      if input_omic == OMIC.transcriptomic:
+        var_names = [i for i in sco.var_names if i in MARKER_GENES]
+      else:  # just take all variables
+        var_names = sco.var_names
+    else:
+      var_names = as_tuple(var_names, t=string_types)
+    # check all var names are exist
+    assert all(g in sco.gene_id for g in var_names)
+  return input_omic, var_names
+
+
+def _validate_arguments(kw):
+  X = OMIC.parse(kw.get('X'))
+  groupby = OMIC.parse(kw.get('groupby'))
+  rank_genes = kw.get('rank_genes')
+  clustering = kw.get('clustering')
+  log = kw.get('log')
+  if rank_genes:
+    assert X == OMIC.transcriptomic, \
+      "Only visualize transcriptomic in case of rank_genes>0, but given: %s" \
+        % X.name
+  title = '_'.join(i for i in [
+      X.name, groupby.name,
+      str(clustering), \
+      ('rank' if rank_genes else ''),
+      ('log' if log else 'raw')
+  ] if len(i) > 0)
+  return title
 
 
 # ===========================================================================
 # Main class
 # ===========================================================================
-class SingleCellVisualizer(Visualizer):
-
-  @contextmanager
-  def _swap_omic(self, omic):
-    r""" Temporary change the main OMIC type to other than transcriptomic """
-    if isinstance(omic, (OMIC, string_types)):
-      omic = OMIC.parse(omic)
-      x = self.numpy(omic)
-    else:
-      x = omic
-    org_x = self._X
-    self._X = x
-    yield self
-    self._X = org_x
+class SingleCellVisualizer(sc.AnnData, Visualizer):
 
   def plot_scatter(self,
                    X=OMIC.transcriptomic,
@@ -126,104 +139,111 @@ class SingleCellVisualizer(Visualizer):
                     ax.get_figure())
     return self
 
-  def plot_dotplot(self,
-                   groupby=OMIC.transcriptomic,
-                   marker_genes=None,
-                   clustering=None,
-                   rank_genes=0,
-                   dendrogram=True,
-                   standard_scale='var',
-                   cmap='Reds',
-                   log=False):
-    marker_genes = _marker_genes(self, marker_genes)
-    groupby, _ = _process_omics(self, groupby, clustering=clustering)
-    kw = dict(dendrogram=dendrogram,
-              log=log,
-              standard_scale=standard_scale,
-              color_map=cmap)
-    if rank_genes > 0:
-      key = groupby + '_rank'
-      if key not in self.uns:
-        self.rank_genes_groups(groupby=groupby)
-      axes = sc.pl.rank_genes_groups_dotplot(self,
-                                             n_genes=int(rank_genes),
-                                             key=key,
-                                             **kw)
-    else:
-      axes = sc.pl.dotplot(self, var_names=marker_genes, groupby=groupby, **kw)
-    self.add_figure('dotplot_%s' % ('log' if log else 'raw'), plt.gcf())
-    return self
-
   def plot_stacked_violins(self,
+                           X=OMIC.transcriptomic,
                            groupby=OMIC.transcriptomic,
-                           marker_genes=None,
-                           clustering=None,
+                           var_names=None,
+                           clustering='kmeans',
                            rank_genes=0,
                            dendrogram=False,
                            swap_axes=True,
                            standard_scale='var',
                            log=False):
-    marker_genes = _marker_genes(self, marker_genes)
+    title = _validate_arguments(locals())
+    X, var_names = _process_varnames(self, X, var_names)
     groupby, _ = _process_omics(self, groupby, clustering=clustering)
     kw = dict(dendrogram=dendrogram,
               swap_axes=bool(swap_axes),
               log=log,
               standard_scale=standard_scale)
     if rank_genes > 0:
-      key = groupby + '_rank'
-      if key not in self.uns:
-        self.rank_genes_groups(groupby=groupby)
+      key = self.rank_vars_groups(groupby=groupby, n_vars=int(rank_genes))
       axes = sc.pl.rank_genes_groups_stacked_violin(self,
                                                     n_genes=int(rank_genes),
                                                     key=key,
                                                     **kw)
     else:
-      axes = sc.pl.stacked_violin(self,
-                                  var_names=marker_genes,
-                                  groupby=groupby,
-                                  **kw)
-    self.add_figure('stacked_violin_%s' % ('log' if log else 'raw'), plt.gcf())
+      with self._swap_omic(X):
+        axes = sc.pl.stacked_violin(self,
+                                    var_names=var_names,
+                                    groupby=groupby,
+                                    **kw)
+    ## reconfigure the axes
+    fig = plt.gcf()
+    plt.suptitle(title)
+    self.add_figure('stacked_violin_%s' % title, fig)
+    return self
+
+  def plot_dotplot(self,
+                   X=OMIC.transcriptomic,
+                   groupby=OMIC.transcriptomic,
+                   var_names=None,
+                   clustering='kmeans',
+                   rank_genes=0,
+                   dendrogram=False,
+                   standard_scale='var',
+                   cmap='Reds',
+                   log=True):
+    title = _validate_arguments(locals())
+    X, var_names = _process_varnames(self, X, var_names)
+    groupby, _ = _process_omics(self, groupby, clustering=clustering)
+    kw = dict(dendrogram=dendrogram,
+              log=log,
+              standard_scale=standard_scale,
+              color_map=cmap)
+    if rank_genes > 0:
+      key = self.rank_vars_groups(groupby=groupby, n_vars=int(rank_genes))
+      axes = sc.pl.rank_genes_groups_dotplot(self,
+                                             n_genes=int(rank_genes),
+                                             key=key,
+                                             **kw)
+    else:
+      with self._swap_omic(X):
+        axes = sc.pl.dotplot(self, var_names=var_names, groupby=groupby, **kw)
+    ## reconfigure the axes
+    fig = plt.gcf()
+    plt.suptitle(title)
+    self.add_figure('dotplot_%s' % title, fig)
     return self
 
   def plot_heatmap(self,
                    X=OMIC.transcriptomic,
                    groupby=OMIC.transcriptomic,
-                   marker_genes=None,
-                   clustering=None,
+                   var_names=None,
+                   clustering='kmeans',
                    rank_genes=0,
                    dendrogram=False,
                    swap_axes=False,
-                   cmap=None,
+                   cmap='bwr',
                    standard_scale='var',
-                   show_gene_labels=True,
                    log=True):
     r"""
     X : `OMIC` or `np.ndarray`. Input data for visualization
     """
-    marker_genes = _marker_genes(self, marker_genes)
+    title = _validate_arguments(locals())
+    X, var_names = _process_varnames(self, X, var_names)
     groupby, _ = _process_omics(self, groupby, clustering=clustering)
+    ## select the right marker genes and omic
     kw = dict(dendrogram=dendrogram,
               swap_axes=bool(swap_axes),
               standard_scale=standard_scale,
-              show_gene_labels=bool(show_gene_labels),
-              log=log)
-    if cmap is not None:
-      kw['cmap'] = cmap
+              show_gene_labels=True if len(var_names) < 50 else False,
+              log=log,
+              cmap=cmap)
+    ## plotting
     if rank_genes > 0:
-      key = groupby + '_rank'
-      if key not in self.uns:
-        self.rank_genes_groups(groupby=groupby, n_genes=int(rank_genes))
+      key = self.rank_vars_groups(groupby=groupby, n_vars=int(rank_genes))
       axes = sc.pl.rank_genes_groups_heatmap(self,
                                              n_genes=int(rank_genes),
                                              key=key,
                                              **kw)
     else:
       with self._swap_omic(X):
-        axes = sc.pl.heatmap(self,
-                             var_names=marker_genes,
-                             groupby=groupby,
-                             **kw)
-    self.add_figure('heatmap_%s' % ('log' if log else 'raw'), plt.gcf())
+        axes = sc.pl.heatmap(self, var_names=var_names, groupby=groupby, **kw)
+    ## reconfigure the axes
+    fig = plt.gcf()
+    plt.suptitle(title)
+    self.add_figure('heatmap_%s' % title, fig)
     return self
 
   def plot_percentile_histogram(self,
