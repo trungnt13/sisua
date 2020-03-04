@@ -8,7 +8,7 @@ from sisua.models.utils import *
 from sisua.models.variational_autoencoder import *
 
 
-def get_all_models():
+def get_all_models() -> list:
   all_models = []
   for key, val in globals().items():
     if isinstance(val, type) and issubclass(val, SingleCellModel):

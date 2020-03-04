@@ -19,7 +19,7 @@ from six import string_types
 
 from bigarray import MmapArrayWriter
 from odin import visual as vs
-from odin.search import diagonal_beam_search
+from odin.search import diagonal_beam_search, diagonal_bruteforce_search
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import (IndexedList, as_tuple, batching, cache_memory,
                         catch_warnings_ignore, ctext, is_primitive)
@@ -105,6 +105,7 @@ class SingleCellOMIC(SingleCellVisualizer):
     # init
     super(SingleCellOMIC, self).__init__(X, **kwargs)
     self._name = str(name)
+    self._verbose = False
     # store transcriptomic
     if OMIC.transcriptomic.name + '_var' not in self.uns:
       self.uns[OMIC.transcriptomic.name + '_var'] = self.var
@@ -114,6 +115,15 @@ class SingleCellOMIC(SingleCellVisualizer):
     if not isinstance(X, sc.AnnData):
       self.obs['indices'] = np.arange(self.X.shape[0], dtype='int64')
       self._calculate_statistics(OMIC.transcriptomic)
+
+  def set_verbose(self, verbose):
+    r""" If True, print out all method call and its arguments """
+    self._verbose = bool(verbose)
+    return self
+
+  @property
+  def verbose(self):
+    return self._verbose
 
   @contextmanager
   def _swap_omic(self, omic):
@@ -156,6 +166,10 @@ class SingleCellOMIC(SingleCellVisualizer):
               (k in specs.args or specs.varkw is not None)
     }
     self._history[name] = local
+    if self.verbose:  # print out every method call and its arguments
+      print("Method:", name)
+      for k, v in local.items():
+        print(" ", k, ':', v)
 
   def add_omic(self, omic: OMIC, X: np.ndarray, var_names=None):
     self._record('add_omic', locals())
@@ -329,10 +343,12 @@ class SingleCellOMIC(SingleCellVisualizer):
 
   def omic_var(self, omic):
     omic = OMIC.parse(omic)
-    assert omic in self.omics, \
-      "This dataset doesn't contain '%s', all available OMICs are: %s" % \
-        (omic, self.omics)
-    return self.uns[omic.name + '_var']
+    for om in list(omic):
+      name = om.name + '_var'
+      if name in self.uns:
+        return self.uns[omic.name + '_var']
+    raise ValueError("OMIC not found, give: '%s', support: '%s'" %
+                     (omic, self.omics))
 
   def numpy(self, omic=OMIC.transcriptomic):
     r""" Return observation ndarray in `obsm` or `obs`"""
@@ -343,15 +359,20 @@ class SingleCellOMIC(SingleCellVisualizer):
       return self.obs[omic].values
     # obsm
     omic = OMIC.parse(omic)
-    if omic not in self.omics:
-      raise ValueError(
-          "Cannot find OMIC type '%s', in the single-cell dataset of: %s" %
-          (omic, self.omics))
-    return self.obsm[omic.name]
+    for om in list(omic):
+      if om in self.omics:
+        return self.obsm[omic.name]
+    raise ValueError("OMIC not found, give: '%s', support: '%s'" %
+                     (omic, self.omics))
 
   def labels(self, omic=OMIC.proteomic):
     omic = OMIC.parse(omic)
-    return self.obs[self.labels_name(omic)]
+    for om in list(omic):
+      name = self.labels_name(om)
+      if name in self.obs:
+        return self.obs[name]
+    raise ValueError("OMIC not found, give: '%s', support: '%s'" %
+                     (omic, self.omics))
 
   def labels_name(self, omic=OMIC.proteomic):
     omic = OMIC.parse(omic)
@@ -363,15 +384,13 @@ class SingleCellOMIC(SingleCellVisualizer):
     return self._omics
 
   @property
-  def name(self):
-    return self._name
+  def n_omics(self):
+    r""" Return number of OMIC types stored in this dataset """
+    return len(list(self._omics))
 
   @property
-  def is_log(self):
-    if 'normalize' in self.history and \
-      any(h['log1p'] for h in as_tuple(self.history['normalize'])):
-      return True
-    return False
+  def name(self):
+    return self._name
 
   def is_binary(self, omic):
     r""" return True if the given OMIC type is binary """
@@ -395,7 +414,7 @@ class SingleCellOMIC(SingleCellVisualizer):
   def dtype(self):
     return self.X.dtype
 
-  def statistics(self, omic=OMIC.transcriptomic):
+  def stats(self, omic=OMIC.transcriptomic):
     r""" Return a matrix of shape `[n_obs, 4]`.
 
     The columns are: 'total_counts', 'log_counts', 'local_mean', 'local_var'
@@ -407,16 +426,16 @@ class SingleCellOMIC(SingleCellVisualizer):
     return self.local_mean(omic), self.local_var(omic)
 
   def total_counts(self, omic=OMIC.transcriptomic):
-    return self.statistics(omic)[:, 0]
+    return self.stats(omic)[:, 0:1]
 
   def log_counts(self, omic=OMIC.transcriptomic):
-    return self.statistics(omic)[:, 1]
+    return self.stats(omic)[:, 1:2]
 
   def local_mean(self, omic=OMIC.transcriptomic):
-    return self.statistics(omic)[:, 2]
+    return self.stats(omic)[:, 2:3]
 
   def local_var(self, omic=OMIC.transcriptomic):
-    return self.statistics(omic)[:, 3]
+    return self.stats(omic)[:, 3:4]
 
   def probability(self, omic=OMIC.proteomic):
     r""" Return the probability embedding of an OMIC """
@@ -441,13 +460,14 @@ class SingleCellOMIC(SingleCellVisualizer):
 
   # ******************** transformation ******************** #
   def corrupt(self,
+              omic=OMIC.transcriptomic,
               dropout_rate=0.2,
               retain_rate=0.2,
               distribution='binomial',
-              omic=OMIC.transcriptomic,
               inplace=True,
               seed=8):
     r"""
+      omic : `OMIC`, which omic type will be corrupted
       dropout_rate : scalar (0.0 - 1.0), (default=0.25)
         how many entries (in percent) be selected for corruption.
       retain_rate : scalar (0.0 - 1.0), (default=0.2)
@@ -462,13 +482,14 @@ class SingleCellOMIC(SingleCellVisualizer):
     om._record('corrupt', locals())
     if not (0. < retain_rate < 1. or 0. < dropout_rate < 1.):
       return om
-    apply_artificial_corruption(om.numpy(omic),
-                                dropout=dropout_rate,
-                                retain_rate=retain_rate,
-                                distribution=distribution,
-                                copy=False,
-                                seed=seed)
-    om._calculate_statistics(omic)
+    for o in omic:
+      apply_artificial_corruption(om.numpy(o),
+                                  dropout=dropout_rate,
+                                  retain_rate=retain_rate,
+                                  distribution=distribution,
+                                  copy=False,
+                                  seed=seed)
+      om._calculate_statistics(o)
     return om
 
   def filter_highly_variable_genes(self,
@@ -669,7 +690,7 @@ class SingleCellOMIC(SingleCellVisualizer):
     return omics
 
   def probabilistic_embedding(self,
-                              omic=OMIC.proteomic,
+                              omic,
                               n_components_per_class=2,
                               positive_component=1,
                               log_norm=False,
@@ -1080,7 +1101,8 @@ class SingleCellOMIC(SingleCellVisualizer):
         for lab in range(n_clusters):
           mask = labels == lab
           corr[i, lab] = np.sum(x[mask])
-      ids = diagonal_beam_search(corr)
+      ids = diagonal_beam_search(corr) if n_clusters > 10 else \
+        diagonal_bruteforce_search(corr)
       varnames = self.omic_var(cluster_omic).index
       labels_to_omic = {lab: name for lab, name, in zip(ids, varnames)}
       labels = np.array([labels_to_omic[i] for i in labels])
@@ -1208,9 +1230,9 @@ class SingleCellOMIC(SingleCellVisualizer):
       the key to ranked groups in `.uns`
     """
     self._record('rank_vars_groups', locals())
-    if groupby in self.obs:
+    if str(groupby) in self.obs:
       groupby_name = groupby.split('_')[0]
-    else: # search in obsm, then clustering it
+    else:  # search in obsm, then clustering it
       for omic in OMIC.parse(groupby):
         if omic in self.omics:
           groupby_name = omic.name

@@ -16,6 +16,8 @@ from odin.bay.layers import (CategoricalLayer, DenseDistribution,
                              VectorDeterministicLayer)
 from odin.networks import ConvNetwork, DeconvNetwork, DenseNetwork, Identity
 
+__all__ = ['NetworkConfig', 'RandomVariable']
+
 
 def _recover_mcmc_dim(self, inputs, training=None, mask=None):
   # This is a little hack to ignore MCMC dimension in the decoder
@@ -205,6 +207,10 @@ class RandomVariable:
     name : identity of the OMIC
     kwargs : keyword arguments for initializing the `DistributionLambda`
       of the posterior.
+
+  Example:
+    x = RandomVariable(dim=12, posterior='gaus')
+    dist = x.create_posterior()
   """
 
   def __init__(self, dim, posterior='gaus', name=None, prior=None, **kwargs):

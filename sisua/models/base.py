@@ -20,40 +20,82 @@ from tensorflow.python.keras.callbacks import (Callback, CallbackList,
 from tensorflow.python.platform import tf_logging as logging
 from tqdm import tqdm
 
-from odin.bay.vi import VariationalAutoencoder
 from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
 from odin.bay.distributions import concat_distribution
+from odin.bay.vi import VariationalAutoencoder
 from odin.utils import cache_memory, catch_warnings_ignore, classproperty
 from odin.visual import Visualizer
-from sisua.data import SingleCellOMIC
+from sisua.data import OMIC, SingleCellOMIC
 from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 # ===========================================================================
 # Helper
 # ===========================================================================
-def _to_sc_omics(x):
+def _to_sco(x, rvs) -> SingleCellOMIC:
+  rvs_omics = []
+  for rv in rvs:
+    name = rv.name
+    try:
+      name = OMIC.parse(rv.name)
+    except:
+      pass
+    rvs_omics.append(name)
+  ## convert data to SingleCellOMIC
   if isinstance(x, SingleCellOMIC):
-    return x
-  return SingleCellOMIC(x)
+    inputs = x
+  else:
+    if not isinstance(x, (tuple, list)):
+      x = [x]
+    inputs = SingleCellOMIC(x[0])
+    if len(x) > 1:
+      omics = list(OMIC)
+      omics.remove(OMIC.transcriptomic)
+      # we don't know what is the omic of data anyway, random assigning it
+      for arr, om_random, om_rv in zip(x[1:], omics, rvs_omics[1:]):
+        inputs.add_omic(omic=om_random if om_rv is None else om_rv, X=arr)
+  return inputs
 
 
-def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
-               is_semi_supervised, batch_size, shuffle, epochs):
+def _to_tfdata(sco: SingleCellOMIC, rvs: List[RandomVariable],
+               mask: Union[np.ndarray, None], batch_size: int, epochs: int,
+               training: bool):
+  r""" Create tensorflow dataset for fitting or predicting """
+  is_semi_supervised = len(rvs) > 1
+  # matching OMIC with random variable description
+  all_omics = []
+  for rv in rvs if training else rvs[:1]:
+    dim = rv.dim
+    name = rv.name
+    found_omic = list(filter(lambda o: sco.numpy(o).shape[1] == dim, sco.omics))
+    if len(found_omic) > 1:
+      if name is None:  # cannot clear the confusion, ignore the results
+        found_omic = []
+      else:  # matching the name
+        name = name.lower().strip()
+        found_omic = [o for o in found_omic if name in o.name or o.nam in name]
+    if len(found_omic) == 0:
+      raise ValueError(
+          "Cannot find OMIC for random variable: %s, "
+          "available OMICS are: %s" % (str(rv), ', '.join(
+              str(o) + '-' + str(sco.numpy(o).shape) for o in sco.omics)))
+    all_omics.append(found_omic[0])
+  # getting the data
   all_data = []
-  for i, j in enumerate(sco):
-    if i == 0:  # main data, gene expression
-      all_data += [j.X, j.local_mean, j.local_var]
-    else:  # semi-supervised data
-      all_data.append(j.X)
+  for i, omic in enumerate(all_omics):
+    X = sco.numpy(omic)
+    if i == 0:  # main data, transcriptomic
+      all_data += [X, sco.local_mean(omic), sco.local_var(omic)]
+    elif training:  # semi-supervised data
+      all_data.append(X)
   # adding mask at the end if semi-supervised
   if is_semi_supervised and mask is not None:
     all_data += [mask]
   # NOTE: from_tensor_slices accept tuple but not list
   ds = tf.data.Dataset.from_tensor_slices(tuple(all_data))
-  if shuffle:
+  if training:
     ds = ds.shuffle(1000)
   ds = ds.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
   ds = ds.repeat(epochs)
@@ -63,10 +105,6 @@ def _to_tfdata(sco: SingleCellOMIC, mask: Union[np.ndarray, None],
   else:
     ds = ds.map(lambda *args: (args,))
   return ds
-
-
-_CACHE_PREDICT = defaultdict(dict)
-_MAXIMUM_CACHE_SIZE = 2
 
 
 # ===========================================================================
@@ -387,16 +425,12 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
               n_mcmc=1,
               batch_size=64,
               apply_corruption=False,
-              enable_cache=True,
               verbose=1):
     r"""
     Arguments:
       apply_corruption : `bool` (default=`False`)
         if `True` applying corruption on data before prediction to match the
         condition during fitting.
-      enable_cache : `bool` (default=`True`)
-        if `True` store the "footprint" of the input arguments to return the
-        cached outputs
 
     Return:
       X : `Distribution` or tuple of `Distribution`
@@ -406,37 +440,20 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
         latent distribution, multiple distribution is return in case of
         multiple latents
     """
-    if not isinstance(inputs, (tuple, list)):
-      inputs = [inputs]
-    inputs = [_to_sc_omics(i) for i in inputs]
-    assert len(inputs) == 1, \
-      "During prediction phase, only the mRNA gene expression is provided, " +\
-        "this is strict regulation for all models!"
-
-    # checking the cache, this mechanism will significantly improve speed
-    # during monitoring of fitting process
-    self_id = id(self)
-    footprint = ''.join([str(id(i.X)) for i in inputs]) + \
-      str(n_mcmc) + str(apply_corruption) + str(self.epoch)
-    if enable_cache and footprint in _CACHE_PREDICT[id(self)]:
-      return _CACHE_PREDICT[self_id][footprint]
-
-    # applying corruption for testing
+    inputs = _to_sco(inputs, self.omic_outputs)
+    ## applying corruption for testing
     if apply_corruption and self.corruption_rate is not None:
-      inputs = [
-          data.corrupt(corruption_rate=self.corruption_rate,
-                       corruption_dist=self.corruption_dist,
-                       inplace=False) if idx == 0 else data
-          for idx, data in enumerate(inputs)
-      ]
-    n = inputs[0].shape[0]
-    data = _to_tfdata(inputs,
-                      None,
-                      self.is_semi_supervised,
-                      batch_size,
-                      shuffle=False,
-                      epochs=1)
-
+      inputs = inputs.corrupt(dropout_rate=self.corruption_rate,
+                              distribution=self.corruption_dist,
+                              inplace=False)
+    n = inputs.n_obs
+    data = _to_tfdata(sco=inputs,
+                      rvs=self.omic_outputs,
+                      mask=None,
+                      batch_size=batch_size,
+                      epochs=1,
+                      training=False)
+    ## making predictions
     X, Z = [], []
     for inputs in tqdm(data,
                        desc="Predicting",
@@ -480,18 +497,11 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       ])
     else:
       Z = concat_distribution(Z, axis=0)
-    # cache and return
-    if enable_cache:
-      _CACHE_PREDICT[self_id][footprint] = (X, Z)
-      # LIFO
-      if len(_CACHE_PREDICT[self_id]) > _MAXIMUM_CACHE_SIZE:
-        key = list(_CACHE_PREDICT[self_id].keys())[0]
-        del _CACHE_PREDICT[self_id][key]
     return X, Z
 
   def fit(
       self,
-      inputs: Union[SingleCellOMIC, Iterable[SingleCellOMIC]],
+      inputs: SingleCellOMIC,
       optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
       learning_rate=1e-4,
       clipnorm=100,
@@ -535,44 +545,42 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     self._corruption_rate = corruption_rate
 
     # prepare input data
-    if not isinstance(inputs, (tuple, list)):
-      inputs = [inputs]
-    inputs = [_to_sc_omics(i) for i in inputs]
+    inputs = _to_sco(inputs, self.omic_outputs)
 
     # corrupting the data (only the main data, the semi supervised data
     # remain clean)
     if corruption_rate > 0:
-      inputs = [
-          data.corrupt(corruption_rate=corruption_rate,
-                       corruption_dist=corruption_dist,
-                       inplace=False) if idx == 0 else data
-          for idx, data in enumerate(inputs)
-      ]
-    train, valid = [], []
-    for i in inputs:
-      tr, va = i.split(seed=self.seed, train_percent=1 - validation_split)
-      train.append(tr)
-      valid.append(va)
+      inputs = inputs.corrupt(dropout_rate=corruption_rate,
+                              distribution=corruption_dist,
+                              inplace=False)
+    train, valid = inputs.split(seed=self.seed,
+                                train_percent=1 - validation_split)
 
     # generate training mask for semi-supervised learning
     rand = np.random.RandomState(seed=self.seed)
-    n = train[0].shape[0]
+    n = train.n_obs
     train_mask = np.zeros(shape=(n, 1), dtype='float32')
     train_mask[rand.permutation(n)[:int(semi_percent * n)]] = 1
     train_mask = train_mask * semi_weight
-    valid_mask = np.ones(shape=(valid[0].shape[0], 1), dtype='float32')
+    valid_mask = np.ones(shape=(valid.n_obs, 1), dtype='float32')
 
     # calculate the steps
-    assert len(set(i.shape[0] for i in train)) == 1
-    assert len(set(i.shape[0] for i in valid)) == 1
-    steps_per_epoch = int(np.ceil(train[0].shape[0] / batch_size))
-    validation_steps = int(np.ceil(valid[0].shape[0] / batch_size))
+    steps_per_epoch = int(np.ceil(train.n_obs / batch_size))
+    validation_steps = int(np.ceil(valid.n_obs / batch_size))
 
     # convert to tensorflow Dataset
-    train_data = _to_tfdata(train, train_mask, self.is_semi_supervised,
-                            batch_size, shuffle, epochs)
-    valid_data = _to_tfdata(valid, valid_mask, self.is_semi_supervised,
-                            batch_size, shuffle, epochs)
+    train_data = _to_tfdata(sco=train,
+                            rvs=self.omic_outputs,
+                            mask=train_mask,
+                            batch_size=batch_size,
+                            epochs=epochs,
+                            training=True)
+    valid_data = _to_tfdata(sco=valid,
+                            rvs=self.omic_outputs,
+                            mask=valid_mask,
+                            batch_size=batch_size,
+                            epochs=epochs,
+                            training=True)
 
     # prepare callback
     update_epoch = LambdaCallback(
@@ -681,8 +689,11 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     return self.__str__()
 
   def __str__(self):
-    return "<%s fitted:%s epoch:%s semi:%s elbo:%s>" % (
-        self.name, self.epoch > 0, self.epoch, self.is_semi_supervised,
+    return "<%s rv:%s fitted:%s epoch:%s semi:%s elbo:%s>" % (
+        self.name,
+        ''.join(['(%d,%s,%s)' % (rv.dim, rv.posterior, rv.name)
+                  for rv in self.omic_outputs]),
+        self.epoch > 0, self.epoch, self.is_semi_supervised,
         str(self._kl_interpolate))
 
   @classproperty

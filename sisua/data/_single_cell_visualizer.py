@@ -39,8 +39,8 @@ def _process_omics(sco, omic, clustering=None):
         x = sco.louvain(omic)
         omic = omic + '_louvain'
       else:  # clustering
-        x = sco.clustering(omic, n_clusters=omic, algo=clustering)
-        omic = '%s_%s%d' % (omic, clustering, sco.numpy(omic).shape[1])
+        omic = sco.clustering(omic, algo=clustering, return_key=True)
+        x = sco.obs[omic].values.get_values()
     # probabilistic embedding
     else:
       x = sco.numpy(omic)

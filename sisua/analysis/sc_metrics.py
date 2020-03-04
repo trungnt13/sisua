@@ -21,7 +21,7 @@ from sisua.analysis.imputation_benchmarks import (correlation_scores,
 from sisua.analysis.latent_benchmarks import clustering_scores
 from sisua.data import SingleCellOMIC
 from sisua.models import SingleCellModel
-from sisua.models.base import _to_sc_omics
+from sisua.models.base import _to_sco
 
 __all__ = [
     'SingleCellMetric', 'NegativeLogLikelihood', 'ImputationError',
@@ -122,7 +122,7 @@ class SingleCellMetric(Callback):
 
     if not isinstance(inputs, (tuple, list)):
       inputs = [inputs]
-    inputs = [_to_sc_omics(i) for i in inputs]
+    inputs = _to_sco(inputs, model.omic_outputs)
     if model.corruption_rate is not None:
       corruption_text = str(model.corruption_dist) + str(model.corruption_rate)
       inputs_corrupt = [

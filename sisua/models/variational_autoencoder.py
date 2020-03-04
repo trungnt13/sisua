@@ -40,6 +40,10 @@ class VariationalAutoEncoder(SingleCellModel):
 class SISUA(VariationalAutoEncoder):
   r""" SemI-SUpervised Autoencoder
 
+    - Transcriptomic : zero-inflated negative binomial distribution
+    - Proteomic : negative binomial or onehot-categorical distribution
+    - Latent : multi-variate normal with diagonal covariance
+
   Arguments:
     rna_dim : Integer, number of input dimension for scRNA-seq.
     adt_dim : Integer, number of input dimension for ADT.

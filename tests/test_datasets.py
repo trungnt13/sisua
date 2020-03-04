@@ -7,11 +7,23 @@ from tempfile import mkstemp
 
 import numpy as np
 import pandas as pd
+from sklearn.exceptions import ConvergenceWarning, EfficiencyWarning
 
 from odin.utils import catch_warnings_ignore
 from sisua.data import OMIC, get_dataset
 
 np.random.seed(8)
+
+ignore_warnings = [
+    RuntimeWarning, ConvergenceWarning, PendingDeprecationWarning,
+    DeprecationWarning, EfficiencyWarning
+]
+
+try:
+  import scvi
+  _SCVI = True
+except ImportError:
+  _SCVI = False
 
 
 # ===========================================================================
@@ -77,6 +89,13 @@ class SisuaDataset(unittest.TestCase):
     self.assertTrue(ds.sparsity() < ds1.sparsity() < ds2.sparsity())
     om = OMIC.proteomic
     self.assertTrue(ds.sparsity(om) < ds3.sparsity(om) < ds4.sparsity(om))
+    # multi corruption
+    ds1 = ds.corrupt(omic=OMIC.transcriptomic | OMIC.proteomic,
+                     dropout_rate=0.5,
+                     inplace=False)
+    self.assertTrue(\
+      ds1.sparsity(OMIC.transcriptomic) > ds.sparsity(OMIC.transcriptomic) and
+      ds1.sparsity(OMIC.proteomic) > ds.sparsity(OMIC.proteomic))
 
   def test_filters(self):
     ds = get_dataset('8kmy')
@@ -89,7 +108,7 @@ class SisuaDataset(unittest.TestCase):
 
   def test_embedding(self):
     ds = get_dataset('8kmy')
-    ds.probabilistic_embedding()
+    ds.probabilistic_embedding(OMIC.proteomic)
     prob = ds.probability()
     bina = ds.binary()
     self.assertTrue(np.all(np.logical_and(0. < prob, prob < 1.)))
@@ -138,16 +157,96 @@ class SisuaDataset(unittest.TestCase):
 
   def test_metrics(self):
     sco = get_dataset('8kmy')
-    sco.rank_vars_groups(clustering='kmeans')
-    sco.calculate_quality_metrics()
-    with sco._swap_omic('prot'):
+    with catch_warnings_ignore(ConvergenceWarning):
       sco.rank_vars_groups(clustering='kmeans')
       sco.calculate_quality_metrics()
+      with sco._swap_omic('prot'):
+        sco.rank_vars_groups(clustering='kmeans')
+        sco.calculate_quality_metrics()
+
+      if _SCVI:
+        sco = get_dataset('cortex')
+        sco.rank_vars_groups(clustering='kmeans')
+        sco.calculate_quality_metrics()
+        with sco._swap_omic('cell'):
+          sco.rank_vars_groups(clustering='kmeans')
+          sco.calculate_quality_metrics()
 
   def test_clustering(self):
     ds = get_dataset('8kmy')
-    ds.clustering(algo='kmeans')
-    ds.clustering(algo='knn')
+    with catch_warnings_ignore(EfficiencyWarning):
+      ds.clustering(algo='kmeans')
+      ds.clustering(algo='knn')
+
+  def test_visualization_proteomic(self):
+    sco = get_dataset('8kmy')
+    for X, var_names, rank_genes, clustering, dendrogram in itertools.product(
+        ('prot', 'tran'), \
+        (None, 10),
+        (0, 3),
+        ('kmeans', 'louvain', None),
+        (True, False)):
+      if X == 'prot' and rank_genes > 0:
+        continue
+      # check louvain available
+      if clustering == 'louvain':
+        try:
+          import louvain
+        except ImportError:
+          continue
+      # plotting
+      with catch_warnings_ignore(ignore_warnings):
+        sco.plot_heatmap(X=X,
+                         groupby='prot',
+                         var_names=var_names,
+                         clustering=clustering,
+                         rank_genes=rank_genes)
+        sco.plot_dotplot(X=X,
+                         groupby='prot',
+                         var_names=var_names,
+                         clustering=clustering,
+                         rank_genes=rank_genes)
+        sco.plot_stacked_violins(X=X,
+                                 groupby='prot',
+                                 var_names=var_names,
+                                 clustering=clustering,
+                                 rank_genes=rank_genes)
+    sco.save_figures('/tmp/tmp1.pdf')
+
+  def test_visualization_celltype(self):
+    sco = get_dataset('cortex')
+    for X, var_names, rank_genes, clustering, dendrogram in itertools.product(
+        ('cell', 'tran'), \
+        (None, 10),
+        (0, 3),
+        ('kmeans', 'louvain', None),
+        (True, False)):
+      if X == 'cell' and rank_genes > 0:
+        continue
+      # check louvain available
+      if clustering == 'louvain':
+        try:
+          import louvain
+        except ImportError:
+          continue
+      # plotting
+      with catch_warnings_ignore(ignore_warnings):
+        sco.plot_heatmap(X=X,
+                         groupby=OMIC.celltype,
+                         var_names=var_names,
+                         clustering=clustering,
+                         rank_genes=rank_genes)
+        sco.plot_dotplot(X=X,
+                         groupby=OMIC.celltype,
+                         var_names=var_names,
+                         clustering=clustering,
+                         rank_genes=rank_genes)
+        sco.plot_stacked_violins(X=X,
+                                 groupby=OMIC.celltype,
+                                 var_names=var_names,
+                                 clustering=clustering,
+                                 rank_genes=rank_genes)
+    sco.save_figures('/tmp/tmp2.pdf')
 
 
 if __name__ == '__main__':

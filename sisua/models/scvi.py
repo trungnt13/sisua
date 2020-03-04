@@ -51,6 +51,9 @@ class SCVI(SingleCellModel):
         input_dropout=self.network_config.input_dropout,
         output_dropout=self.network_config.encoder_dropout,
         name='EncoderL')
+    assert self.omic_outputs[0].posterior in ('zinbd', 'nbd'), \
+      "scVI only support transcriptomic distribution: 'zinbd' or 'nbd', " + \
+        "but given: %s" % self.omic_outputs[0].posterior
     self.latent = self.latents[0]
     self.library = self.latents[1]
     self.clip_library = float(clip_library)
