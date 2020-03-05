@@ -83,6 +83,7 @@ class OMIC(OrderedFlag):
   metabolomic = 'metabolomic'
   microbiomic = 'microbiomic'
   celltype = 'celltype'
+  latent = 'latent'
 
   @classmethod
   def _sep(cls):

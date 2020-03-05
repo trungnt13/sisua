@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 
 from sisua.analysis import Posterior
-from sisua.data import get_dataset, standardize_protein_name
+from sisua.data import OMIC, get_dataset, standardize_protein_name
 from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, NetworkConfig,
                           RandomVariable, VariationalAutoEncoder)
 
@@ -22,17 +22,12 @@ np.random.seed(8)
 # ===========================================================================
 # Loading Data
 # ===========================================================================
-x, y = get_dataset('pbmc8kly')
-print(x)
-print(y)
+sco = get_dataset('8kly')
+print(sco)
+train, test = sco.split(train_percent=0.9)
+n_genes = sco.numpy(OMIC.transcriptomic).shape[1]
+n_prots = sco.numpy(OMIC.proteomic).shape[1]
 
-x_train, x_test = x.split(train_percent=0.9)
-y_train, y_test = y.split(train_percent=0.9)
-x_train.assert_matching_cells(y_train)
-x_test.assert_matching_cells(y_test)
-
-n_genes = x.shape[1]
-n_prots = y.shape[1]
 gene_omic = RandomVariable(n_genes, posterior='zinb', name='rna')
 prot_omic = RandomVariable(n_prots, posterior='nb', name='adt')
 network = NetworkConfig(nlayers=1,
@@ -53,14 +48,14 @@ scvae = VariationalAutoEncoder(outputs=gene_omic,
                                analytic=analytic)
 # Be generous with the number of epoch, since we use EarlyStopping,
 # the algorithm will stop when overfitting
-scvae.fit(x_train, epochs=epochs, verbose=True)
-imputation, latent = scvae.predict(x_test)
+scvae.fit(train, epochs=epochs, verbose=True)
+imputation, latent = scvae.predict(test)
 # instead of getting a single imputation, we get a distribution of
 # the imputation, which is much more helpful
 print(imputation)
 print(latent)
 
-pos = Posterior(scvae, gene=x_test, protein=y_test, verbose=True)
+pos = Posterior(scm=scvae, sco=sco, verbose=True)
 # inspecting training process
 pos.plot_learning_curves(metrics=['loss', 'klqp', 'loss_x', 'nllk_x'],
                          ignore_missing=True,

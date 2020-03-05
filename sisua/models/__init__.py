@@ -65,7 +65,7 @@ def save(path: str, model: SingleCellModel, max_to_keep=4):
                           models=model,
                           max_to_keep=max_to_keep)
   with open(os.path.join(path, 'history.pkl'), 'wb') as f:
-    pickle.dump(model._history, f)
+    pickle.dump([model._history, model._fit_history], f)
   with open(os.path.join(path, 'singlecellmodel.pkl'), 'wb') as f:
     pickle.dump([class_name, kwargs], f)
   return path
@@ -78,15 +78,19 @@ def load(path: str, model_index=-1) -> SingleCellModel:
         "Cannot only save model to a folder, given path to a file: %s" % path)
   import pickle
   from odin.backend import Trainer
+  ## create new instance
   with open(os.path.join(path, 'singlecellmodel.pkl'), 'rb') as f:
-    class_name, kwargs = pickle.load(f)
+    class_name, kwargs, attrs = pickle.load(f)
   model = get_model(class_name)(**kwargs)
+  ## restore the checkpoint
   model, optimizer, _ = Trainer.restore_checkpoint(path,
                                                    models=model,
                                                    index=model_index)
   model = model[0]
   if len(optimizer) > 0:
     model.optimizer = optimizer[0]
+  ## restore the history
   with open(os.path.join(path, 'history.pkl'), 'rb') as f:
-    model._history = pickle.load(f)
+    model._history, model._fit_history = pickle.load(f)
+  ## restore the attributes
   return model

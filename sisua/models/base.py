@@ -25,7 +25,8 @@ from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
 from odin.bay.distributions import concat_distribution
 from odin.bay.vi import VariationalAutoencoder
-from odin.utils import cache_memory, catch_warnings_ignore, classproperty
+from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
+                        is_primitive)
 from odin.visual import Visualizer
 from sisua.data import OMIC, SingleCellOMIC
 from sisua.models.utils import NetworkConfig, RandomVariable
@@ -128,13 +129,14 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
                seed=8,
                name=None):
     super(SingleCellModel, self).__init__(name=name)
-    self._epoch = self.add_weight(
+    self._epochs = self.add_weight(
         name='epochs',
         shape=(),
         initializer=tf.initializers.Constant(value=0.),
         trainable=False,
         dtype='float32')
     self._history = defaultdict(list)
+    self._fit_history = list()
     # parameters for ELBO
     self._analytic = bool(analytic)
     self._kl_mcmc = int(kl_mcmc)
@@ -148,8 +150,6 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     # parameters for fitting
     self._seed = int(seed)
     self._is_fitting = False
-    self._corruption_rate = 0
-    self._corruption_dist = 'binomial'
     self._log_norm = bool(log_norm)
     # ====== parsing the outputs ====== #
     outputs = [
@@ -208,6 +208,34 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     return {k: v for k, v in hist.items() if 'val_' == k[:4]}
 
   @property
+  def fit_history(self):
+    r""" Return the history of all fit method call. """
+    return self._fit_history
+
+  @property
+  def is_fitted(self):
+    return len(self._fit_history) > 0
+
+  @property
+  def fitted_dataset(self):
+    r""" Return the name of the last SingleCellOMIC dataset fitted on """
+    if not self.is_fitted:
+      return None
+    return self._fit_history[-1]['inputs']
+
+  @property
+  def corruption_rate(self):
+    if len(self.fit_history) == 0:
+      return 0.
+    return max(i['corruption_rate'] for i in self.fit_history)
+
+  @property
+  def corruption_dist(self):
+    if len(self.fit_history) == 0:
+      return 'binomial'
+    return list(set(i['corruption_dist'] for i in self.fit_history))[-1]
+
+  @property
   def posteriors(self):
     return [getattr(self, 'output_%d' % i) for i in range(self.n_outputs)]
 
@@ -247,16 +275,8 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     return self._is_semi_supervised
 
   @property
-  def corruption_rate(self):
-    return self._corruption_rate
-
-  @property
-  def corruption_dist(self):
-    return self._corruption_dist
-
-  @property
-  def epoch(self):
-    return int(self._epoch.numpy())
+  def epochs(self):
+    return int(self._epochs.numpy())
 
   @property
   def analytic(self):
@@ -264,7 +284,7 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
 
   @property
   def kl_weight(self):
-    return self._kl_interpolate(self._epoch)
+    return self._kl_interpolate(self._epochs)
 
   @property
   def seed(self):
@@ -469,7 +489,7 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
         x = x[0]
       X.append(x)
       Z.append(z)
-
+    # merging the batch distributions
     if isinstance(x, (tuple, list)):
       merging_axis = 0 if x[0].batch_shape.ndims == 1 else 1
     else:
@@ -487,7 +507,6 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       X = concat_distribution(X,
                               axis=merging_axis,
                               name=self.posteriors[0].name)
-
     # multiple latents
     if isinstance(Z[0], (tuple, list)):
       Z = tuple([
@@ -525,8 +544,23 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       verbose=1):
     r""" This fit function is the combination of both
     `Model.compile` and `Model.fit` """
+    ## check the arguments
     if epochs <= 0:
       return self
+    assert 0.0 <= semi_percent <= 1.0
+    if validation_split <= 0:
+      raise ValueError("validation_split must > 0")
+    inputs = _to_sco(inputs, self.omic_outputs)
+    ## store the fit history
+    fit_kwargs = dict(locals())
+    for kw in ('self', 'inputs', '__class__'):
+      del fit_kwargs[kw]
+    fit_kwargs['inputs'] = inputs.name
+    fit_kwargs = {
+        k: v if is_primitive(v, inc_ndarray=False) else v.__class__.__name__
+        for k, v in fit_kwargs.items()
+    }
+    self._fit_history.append(fit_kwargs)
     # check signature of `call` function
     # inputs, training=None, n_mcmc=1
     specs = inspect.getfullargspec(self.call)
@@ -534,19 +568,6 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       raise ValueError(
           "call method must have following arguments %s; bug given %s" %
           (['self', 'inputs', 'training', 'n_mcmc'], specs.args))
-
-    # check arguments
-    assert 0.0 <= semi_percent <= 1.0
-    if validation_split <= 0:
-      raise ValueError("validation_split must > 0")
-
-    # store the corruption rate for later use
-    self._corruption_dist = corruption_dist
-    self._corruption_rate = corruption_rate
-
-    # prepare input data
-    inputs = _to_sco(inputs, self.omic_outputs)
-
     # corrupting the data (only the main data, the semi supervised data
     # remain clean)
     if corruption_rate > 0:
@@ -584,7 +605,7 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
 
     # prepare callback
     update_epoch = LambdaCallback(
-        on_epoch_end=lambda *args, **kwargs: self._epoch.assign_add(1))
+        on_epoch_end=lambda *args, **kwargs: self._epochs.assign_add(1))
     if callbacks is None:
       callbacks = [update_epoch]
     elif isinstance(callbacks, Callback):
@@ -671,10 +692,10 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
                                             validation_data=valid_data,
                                             validation_freq=validation_freq,
                                             callbacks=callbacks,
-                                            initial_epoch=self.epoch,
+                                            initial_epoch=self.epochs,
                                             steps_per_epoch=steps_per_epoch,
                                             validation_steps=validation_steps,
-                                            epochs=self.epoch + epochs,
+                                            epochs=self.epochs + epochs,
                                             verbose=verbose)
     # store the history
     for key, val in logs.history.items():
@@ -690,10 +711,10 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
 
   def __str__(self):
     return "<%s rv:%s fitted:%s epoch:%s semi:%s elbo:%s>" % (
-        self.name,
-        ''.join(['(%d,%s,%s)' % (rv.dim, rv.posterior, rv.name)
-                  for rv in self.omic_outputs]),
-        self.epoch > 0, self.epoch, self.is_semi_supervised,
+        self.name, ''.join([
+            '(%d,%s,%s)' % (rv.dim, rv.posterior, rv.name)
+            for rv in self.omic_outputs
+        ]), self.epochs > 0, self.epochs, self.is_semi_supervised,
         str(self._kl_interpolate))
 
   @classproperty

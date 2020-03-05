@@ -272,7 +272,7 @@ class SingleCellOMIC(SingleCellVisualizer):
           self, 1, vals={i: j[indices] for i, j in self._varm.items()})
     return self
 
-  def split(self, train_percent=0.8, copy=True, seed=8):
+  def split(self, train_percent=0.8, copy=True, seed=1):
     r""" Spliting the data into training and test dataset
 
     Arguments:
@@ -346,7 +346,7 @@ class SingleCellOMIC(SingleCellVisualizer):
     for om in list(omic):
       name = om.name + '_var'
       if name in self.uns:
-        return self.uns[omic.name + '_var']
+        return self.uns[om.name + '_var']
     raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                      (omic, self.omics))
 
@@ -361,7 +361,7 @@ class SingleCellOMIC(SingleCellVisualizer):
     omic = OMIC.parse(omic)
     for om in list(omic):
       if om in self.omics:
-        return self.obsm[omic.name]
+        return self.obsm[om.name]
     raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                      (omic, self.omics))
 
@@ -465,7 +465,7 @@ class SingleCellOMIC(SingleCellVisualizer):
               retain_rate=0.2,
               distribution='binomial',
               inplace=True,
-              seed=8):
+              seed=1):
     r"""
       omic : `OMIC`, which omic type will be corrupted
       dropout_rate : scalar (0.0 - 1.0), (default=0.25)

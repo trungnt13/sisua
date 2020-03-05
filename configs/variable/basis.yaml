@@ -2,8 +2,11 @@ latent:
   dim: 12
   posterior: 'gaus'
 
-rna:
-  posterior: 'zinb'
+transcriptomic:
+  posterior: 'zinbd'
 
-adt:
-  posterior: 'nb'
+proteomic:
+  posterior: 'nbd'
+
+celltype:
+  posterior: 'onehot'

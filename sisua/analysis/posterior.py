@@ -39,7 +39,8 @@ from sisua.analysis.latent_benchmarks import (clustering_scores,
                                               plot_latents_protein_pairs,
                                               streamline_classifier)
 from sisua.analysis.sc_metrics import _preprocess_output_distribution
-from sisua.data import SingleCellOMIC, apply_artificial_corruption, get_dataset
+from sisua.data import (OMIC, SingleCellOMIC, apply_artificial_corruption,
+                        get_dataset)
 from sisua.data.path import EXP_DIR
 from sisua.data.utils import standardize_protein_name
 from sisua.models.base import SingleCellModel
@@ -93,54 +94,71 @@ class Posterior(Visualizer):
 
   def __init__(self,
                scm: SingleCellModel,
-               gene: SingleCellOMIC,
-               protein: Optional[SingleCellOMIC] = None,
+               sco: SingleCellOMIC,
                batch_size=16,
                n_mcmc=10,
+               random_state=2,
                verbose=True):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
     self.n_mcmc = int(n_mcmc)
     self.batch_size = int(batch_size)
-
+    self.rand = random_state \
+      if isinstance(random_state, np.random.RandomState) else \
+        np.random.RandomState(seed=random_state)
+    # single cell model
     if isinstance(scm, string_types):
       with open(scm, 'rb') as f:
         scm = pickle.load(f)
     assert isinstance(scm, SingleCellModel), \
-      "scm must be instance of SingleCellModel but given %s" % str(type(scm))
+      "scm must be instance of SingleCellModel, but given %s" % str(type(scm))
     self.scm = scm
-    # gene expression data
-    assert isinstance(gene, SingleCellOMIC), \
-      "gene must be instance of SingleCellOMIC"
-    self.gene = gene
-    # protein level data
-    assert isinstance(protein, (SingleCellOMIC, type(None))), \
-      "protein must be instance of SingleCellOMIC or None"
-    if protein is not None:
-      if 'pbe' not in protein.uns:
-        protein.probabilistic_embedding()
-    self.protein = protein
+    if not self.scm.is_fitted and verbose:
+      warnings.warn("The SingleCellModel is not fitted.")
+    # multi-omics expression data
+    assert isinstance(sco, SingleCellOMIC), \
+      "sco must be instance of SingleCellOMIC, but given %s" % str(type(sco))
+    self.sco = sco
+    assert sco.n_omics >= 2, \
+      "SingleCellOMIC need at least 2 different OMIC types for evaluation."
     # corrupted gene expression
-    gene_corrupt = self.gene.corrupt(corruption_rate=self.scm.corruption_rate,
-                                     corruption_dist=self.scm.corruption_dist,
-                                     inplace=False)
-    self.gene_corrupt = gene_corrupt
+    self.sco_corrupt = self.sco.corrupt(\
+      dropout_rate=max(0.1, scm.corruption_rate),
+      distribution=scm.corruption_dist,
+      inplace=False,
+      seed=self.rand.randint(1e8))
+    # infer the OMICs tranined on
+    omics = OMIC.transcriptomic
+    for i, rv in enumerate(self.scm.omic_outputs):
+      dim = rv.dim
+      name = rv.name
+      if i == 0:  # main data, transcriptomic
+        assert dim == self.sco.n_vars
+      else:  # semi-supervised
+        found = []
+        for om in self.sco.omics:
+          if om != OMIC.transcriptomic and dim == self.sco.numpy(om).shape[1]:
+            found.append(om)
+        if len(found) > 1 and name is not None:
+          name = name.lower().strip()
+          found = [om for om in found if name in om.name or om.name in name]
+        omics = omics | found[0]
+    self.omics = omics
     # initialize all the prediction
     self._initialize()
+    self._datasets = dict()
 
   def _initialize(self):
     scm = self.scm
-    gene = self.gene
-    gene_corrupt = self.gene_corrupt
-    protein = self.protein
+    sco = self.sco
+    sco_corrupt = self.sco_corrupt
 
     if self.verbose:
       print("Making prediction for clean data ...")
-    outputs_clean, latents_clean = scm.predict(gene,
+    outputs_clean, latents_clean = scm.predict(sco,
                                                apply_corruption=False,
                                                n_mcmc=self.n_mcmc,
                                                batch_size=self.batch_size,
-                                               enable_cache=False,
                                                verbose=self.verbose)
     if not isinstance(outputs_clean, (tuple, list)):
       outputs_clean = [outputs_clean]
@@ -149,11 +167,10 @@ class Posterior(Visualizer):
 
     if self.verbose:
       print("Making prediction for corrupted data ...")
-    outputs_corrupt, latents_corrupt = scm.predict(gene_corrupt,
+    outputs_corrupt, latents_corrupt = scm.predict(sco_corrupt,
                                                    apply_corruption=False,
                                                    n_mcmc=self.n_mcmc,
                                                    batch_size=self.batch_size,
-                                                   enable_cache=False,
                                                    verbose=self.verbose)
     if not isinstance(outputs_corrupt, (tuple, list)):
       outputs_corrupt = [outputs_corrupt]
@@ -165,102 +182,116 @@ class Posterior(Visualizer):
     self.outputs_corrupt = outputs_corrupt
     self.latents_corrupt = latents_corrupt
 
+  def create_sco(self, imputed=True, corrupted=True) -> SingleCellOMIC:
+    r""" Create a SingleCellOMIC dataset based on the output of
+    SingleCellModel
+
+    The output name of the dataset is concatenated with
+      - 'i' if imputed, otherwise, 'r' for reconstructed
+      - 'c' if corrupted, otherwise, 'o' for original
+    """
+    if corrupted:
+      outputs, latents = self.outputs_corrupt, self.latents_corrupt
+    else:
+      outputs, latents = self.outputs_clean, self.latents_clean
+    imputed &= self.scm.is_zero_inflated
+    key = (imputed, corrupted)
+    if key not in self._datasets:
+      if imputed:
+        outputs = [_preprocess_output_distribution(o) for o in outputs]
+      outputs = [tf.reduce_mean(o.mean(), axis=0).numpy() for o in outputs]
+      latents = [z.mean().numpy() for z in latents]
+      if len(latents) > 1:
+        if self.verbose:
+          warnings.warn(
+              "%d latents found, concatenate all the latent into single "
+              "2-D array" % len(latents))
+        latents = np.concatenate(latents, axis=1)
+      else:
+        latents = latents[0]
+      sco = SingleCellOMIC(
+          outputs[0],
+          cell_id=self.cell_names,
+          gene_id=self.gene_names,
+          dtype=self.sco.dtype,
+          name='%s%s%s' %
+          (self.sco.name, 'i' if imputed else 'r', 'c' if corrupted else 'o'))
+      for o, om in zip(outputs[1:], list(self.omics)[1:]):
+        sco.add_omic(omic=om,
+                     X=o,
+                     var_names=[name for name in self.sco.omic_var(om).index])
+      sco.add_omic(omic=OMIC.latent,
+                   X=latents,
+                   var_names=['Z#%d' % i for i in range(latents.shape[1])])
+      self._datasets[key] = sco
+    return self._datasets[key]
+
   # ******************** Basic matrices ******************** #
   @property
-  def gene_name(self):
-    return self.gene.var['geneid'].values
+  def gene_names(self):
+    return self.sco.var_names
 
   @property
-  def protein_name(self):
-    name = self.protein.var['protid'].values
+  def cell_names(self):
+    return self.sco.obs_names
+
+  @property
+  def labels(self):
+    name = self.sco.omic_var(OMIC.proteomic | OMIC.celltype).index
     return [standardize_protein_name(i) for i in name]
 
   @property
-  def gene_dim(self):
-    return self.gene.shape[1]
+  def n_labels(self):
+    return self.sco.numpy(OMIC.proteomic | OMIC.celltype).shape[1]
 
   @property
-  def prot_dim(self):
-    return self.protein.shape[1]
+  def gene_dim(self):
+    return self.sco.n_vars
 
   @property
   def X(self):
     r""" Original gene expression data without artificial corruption """
-    return self.gene.X
+    return self.sco.X
 
   @property
   def T(self):
     r""" Target variables: artificial corrupted gene expression similar
     to the one used for fitting the model """
-    return self.gene_corrupt.X
+    return self.sco_corrupt.X
 
   @property
   def W(self):
-    r""" The reconstruction of single-cell matrix (with un-imputed genes) """
+    r""" The reconstruction of single-cell matrix (with un-imputed genes),
+    mean of the distribution. """
     return tf.reduce_mean(self.outputs_corrupt[0].mean(), axis=0).numpy()
 
   @property
-  def V(self):
-    r""" The imputation of single-cell matrix """
+  def I(self):
+    r""" The imputation of single-cell matrix, mean of the distribution. """
     dist = _preprocess_output_distribution(self.outputs_corrupt[0])
     return tf.reduce_mean(dist.mean(), axis=0).numpy()
 
   @property
   def Z(self):
-    """ Latent space of the autoencoder"""
+    r""" Latent space of the autoencoder """
     return self.latents_corrupt[0].mean().numpy()
 
   @property
   def y_true(self):
     r""" True value of protein marker level or cell type labels """
-    return self.protein.X
-
-  @property
-  def y_true_binary(self):
-    if self.protein.is_binary:
-      return self.y_true
-    if 'pbe' not in self.protein.uns:
-      self.protein.probabilistic_embedding()
-    return self.protein.obsm['X_bin']
-
-  @property
-  def y_true_probability(self):
-    if self.protein.is_binary:
-      return self.y_true
-    if 'pbe' not in self.protein.uns:
-      self.protein.probabilistic_embedding()
-    return self.protein.obsm['X_prob']
-
-  @property
-  def y_prob(self):
-    """ Return the probabilized value of `y_true` """
-    if self.is_binary_classes:
-      return self.y_true
-    return self.protein.obsm['X_prob']
-
-  @property
-  def y_bin(self):
-    """ Return the binarized value of `y_true` """
-    if self.is_binary_classes:
-      return self.y_true
-    return self.protein.obsm['X_bin']
+    return self.sco.numpy(OMIC.proteomic | OMIC.celltype)
 
   @property
   def y_pred(self):
-    """ Labels prediction from semi-supervised learning """
+    r""" Labels prediction from semi-supervised learning """
     if not self.is_semi_supervised:
-      raise RuntimeError(
-          "Not semi supervised model, cannot generate prediction for protein values"
-      )
+      return None
     return tf.reduce_mean(self.outputs_corrupt[1].mean(), axis=0).numpy()
 
   @property
   def name(self):
     i = self.scm.id
-    ds_name = self.gene.name.split('_')[0]
-    n_gene = '%dgene' % self.X.shape[1]
-    n_prot = '%dprot' % (self.y_true.shape[1]
-                         if self.protein is not None else 0)
+    ds_name = self.sco.name
     norm = 'log' if self.scm.log_norm else 'raw'
     corruption_dist = self.scm.corruption_dist
     corruption_rate = self.scm.corruption_rate
@@ -272,11 +303,11 @@ class Posterior(Visualizer):
       semi = 'semi'
     else:
       semi = 'unsp'
-    return '_'.join([ds_name, i, norm, n_gene, n_prot, corruption, semi])
+    return '_'.join([ds_name, i, norm, corruption, semi])
 
   @property
   def name_lines(self):
-    """same as short_id but divided into 3 lines"""
+    r""" same as short_id but divided into 3 lines """
     short_id = self.name.split('_')
     return '\n'.join(
         ['_'.join(short_id[:2]), '_'.join(short_id[2:-1]), short_id[-1]])
@@ -330,7 +361,7 @@ class Posterior(Visualizer):
     title = self.name
     fig = plot_latents_protein_pairs(Z=z,
                                      y=y,
-                                     labels_name=self.protein_name,
+                                     labels_name=self.labels,
                                      all_pairs=all_pairs,
                                      title=title,
                                      algo=algo,
@@ -349,7 +380,7 @@ class Posterior(Visualizer):
       y = self.y_true_probability
     plot_distance_heatmap(z,
                           labels=y,
-                          labels_name=self.protein_name,
+                          labels_name=self.labels,
                           legend_enable=bool(legend),
                           ax=ax,
                           fontsize=8,
@@ -393,7 +424,7 @@ class Posterior(Visualizer):
                          cmap="Blues",
                          ax=None,
                          xticklabels=["Z#%d" % i for i in range(n_latent)],
-                         yticklabels=self.protein_name,
+                         yticklabels=self.labels,
                          xlabel="Latent dimension",
                          ylabel="Protein",
                          colorbar_title="Log-likelihood",
@@ -432,7 +463,7 @@ class Posterior(Visualizer):
                         size=8,
                         fontsize=8,
                         ax=ax,
-                        labels_name=self.protein_name,
+                        labels_name=self.labels,
                         algo=algo,
                         enable_argmax=True,
                         enable_separated=False)
@@ -470,7 +501,7 @@ class Posterior(Visualizer):
         Z_test,
         y_test,
         plot_train_results=plot_train_results,
-        labels_name=self.protein_name,
+        labels_name=self.labels,
         show_plot=True,
         return_figure=True)
     if plot_train_results:
@@ -545,7 +576,7 @@ class Posterior(Visualizer):
     correlations = self.get_correlation_all_pairs(data_type=data_type)
     y = self.y_true
     if data_type == 'V':
-      ydata = self.V
+      ydata = self.I
       data_type_name = "Imputed"
     elif data_type == 'X':
       ydata = self.X
@@ -562,16 +593,16 @@ class Posterior(Visualizer):
                   string_types) and proteins.lower().strip() == 'marker':
       from sisua.data.const import MARKER_ADT_GENE
       proteins = [
-          i for i in self.protein_name
+          i for i in self.labels
           if standardize_protein_name(i) in MARKER_ADT_GENE
       ]
     elif proteins is None:
-      proteins = self.protein_name
+      proteins = self.labels
     proteins = as_tuple(proteins, t=string_types)
 
     labels = {
         standardize_protein_name(j).lower(): i
-        for i, j in enumerate(self.protein_name)
+        for i, j in enumerate(self.labels)
     }
     prot_ids = []
     for i in proteins:
@@ -597,10 +628,10 @@ class Posterior(Visualizer):
     fig = ax.get_figure()
     # ====== plotting ====== #
     for i, (prot_idx, data) in enumerate(correlations_map.items()):
-      prot = self.protein_name[prot_idx]
+      prot = self.labels[prot_idx]
       for j, (gene_idx, pearson, spearman) in enumerate(data):
         ax = plt.subplot(nrow, ncol, i * ncol + j + 1)
-        gene = self.gene_name[gene_idx]
+        gene = self.gene_names[gene_idx]
         sns.scatterplot(x=y[:, prot_idx],
                         y=ydata[:, gene_idx],
                         ax=ax,
@@ -646,7 +677,7 @@ class Posterior(Visualizer):
       ]
 
     if imputed:
-      v = self.V
+      v = self.I
       name = 'Imputed'
     else:
       v = self.W
@@ -655,13 +686,13 @@ class Posterior(Visualizer):
     x, y = self.X, self.y_true
     original_series = correlation_scores(X=x,
                                          y=y,
-                                         gene_name=self.gene_name,
-                                         protein_name=self.protein_name,
+                                         gene_name=self.gene_names,
+                                         protein_name=self.labels,
                                          return_series=True)
     imputed_series = correlation_scores(X=v,
                                         y=y,
-                                        gene_name=self.gene_name,
-                                        protein_name=self.protein_name,
+                                        gene_name=self.gene_names,
+                                        protein_name=self.labels,
                                         return_series=True)
     # only select given protein
     if proteins is not None:
@@ -741,9 +772,9 @@ class Posterior(Visualizer):
     """(train_score, train_score_mean, train_score_std),
        (test_score, test_score_mean, test_score_std)"""
     return {
-        'all': imputation_score(self.X, self.V),
-        'mean': imputation_mean_score(self.X, self.T, self.V),
-        'std': imputation_std_score(self.X, self.T, self.V),
+        'all': imputation_score(self.X, self.I),
+        'mean': imputation_mean_score(self.X, self.T, self.I),
+        'std': imputation_std_score(self.X, self.T, self.I),
     }
 
   def scores_spearman(self):
@@ -757,7 +788,7 @@ class Posterior(Visualizer):
   def scores_clustering(self):
     return clustering_scores(latent=self.Z,
                              labels=self.y_true,
-                             n_labels=len(self.protein_name))
+                             n_labels=len(self.labels))
 
   def scores_classifier(self,
                         x_train: Optional[SingleCellOMIC] = None,
@@ -773,7 +804,7 @@ class Posterior(Visualizer):
                                  y_train,
                                  Z_test,
                                  y_test,
-                                 labels_name=self.protein_name,
+                                 labels_name=self.labels,
                                  return_figure=False,
                                  show_plot=False)
 
@@ -801,10 +832,11 @@ class Posterior(Visualizer):
   # ******************** learning curves and metrics ******************** #
   @property
   def learning_curves(self):
-    return {
-        'train': self.train_history['loss'],
-        'valid': self.valid_history['val_loss'],
-    }
+    r""" Return train and valid loss """
+    if self.epochs == 0:
+      return dict(train=[], valid=[])
+    return dict(train=self.train_history['loss'],
+                valid=self.valid_history['val_loss'])
 
   @property
   def train_history(self):
@@ -813,6 +845,11 @@ class Posterior(Visualizer):
   @property
   def valid_history(self):
     return self.scm.valid_history
+
+  @property
+  def epochs(self):
+    r""" How many epochs the model trained on"""
+    return self.scm.epochs
 
   def plot_learning_curves(self):
     r""" Plotting the loss or metrics returned during training progress """
@@ -847,8 +884,8 @@ class Posterior(Visualizer):
     X = getattr(self, data_type)
     corr = correlation_scores(X=X,
                               y=y,
-                              gene_name=self.gene_name,
-                              protein_name=self.protein_name,
+                              gene_name=self.gene_names,
+                              protein_name=self.labels,
                               return_series=False)
     score_idx = 0 if score_type == 'spearman' else 1
     return OrderedDict([(i, j[score_idx]) for i, j in corr.items()])
@@ -874,7 +911,7 @@ class Posterior(Visualizer):
     assert data_type in ('X', 'V', 'W', 'T')
 
     from scipy.stats import pearsonr, spearmanr
-    v, x, t, w, y = self.V, self.X, self.T, self.W, self.y_true
+    v, x, t, w, y = self.I, self.X, self.T, self.W, self.y_true
 
     n_proteins = y.shape[1]
     n_genes = x.shape[1]
@@ -915,7 +952,7 @@ class Posterior(Visualizer):
     if not self.is_binary_classes:
       y_true = log_norm(y_true, axis=1).numpy()
     # ====== override provided values ====== #
-    labels = self.protein_name if labels_new is None else labels_new
+    labels = self.labels if labels_new is None else labels_new
     if y_true_new is not None:
       y_true = y_true_new
     if y_pred_new is not None:
@@ -996,7 +1033,7 @@ class Posterior(Visualizer):
       return self
     # plot all protein in case of None
     if protein_name is None:
-      for name in self.protein_name:
+      for name in self.labels:
         self.plot_protein_scatter(algo=algo,
                                   protein_name=name,
                                   y_true_new=y_true_new,
@@ -1007,7 +1044,7 @@ class Posterior(Visualizer):
     protein_name = standardize_protein_name(protein_name).strip().lower()
     fig_name = 'multispaces_scatter_%s' % protein_name
 
-    labels = self.protein_name if labels_new is None else labels_new
+    labels = self.labels if labels_new is None else labels_new
     labels = [i.strip().lower() for i in labels]
 
     y_true = self.y_true if y_true_new is None else y_true_new
@@ -1015,13 +1052,13 @@ class Posterior(Visualizer):
 
     if protein_name not in labels:
       warnings.warn("Cannot find protein '%s', available protein are: %s" %
-                    (protein_name, self.protein_name))
+                    (protein_name, self.labels))
       return self
 
     idx = [i for i, j in enumerate(labels) if protein_name in j][0]
     y_true = y_true[:, idx]
     y_pred = y_pred[:, idx]
-    X, Z, V = self.X, self.Z, self.V
+    X, Z, V = self.X, self.Z, self.I
 
     fig = plot_figure(nrow=13, ncol=10)
     assert isinstance(fig, plt.Figure), \

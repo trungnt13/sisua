@@ -30,7 +30,7 @@ __all__ = [
 
 
 def _preprocess_output_distribution(y_pred):
-  """ In case of zero inflated distribution, extract the underlying count
+  r""" In case of zero inflated distribution, extract the underlying count
   distribution """
   if isinstance(y_pred, tfd.Independent) and \
     isinstance(y_pred.distribution, ZeroInflated):

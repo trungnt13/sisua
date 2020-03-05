@@ -20,21 +20,23 @@ tf.random.set_seed(8)
 np.random.seed(8)
 
 _DS = "8kly"
+_EPOCHS = 10
 
 
 class ModelTest(unittest.TestCase):
 
   def _loss_not_rise(self, loss):
     loss = loss[1:]  # first epoch is messy
-    is_decreasing = [int(i > j) for i, j in zip(loss, loss[1:])]
-    self.assertTrue(sum(is_decreasing) > 0.9 * len(loss), str(loss))
+    is_decreasing = [i > j for i, j in zip(loss, loss[1:])]
+    # 80% of the time, the training improving
+    self.assertTrue(np.sum(is_decreasing) > 0.8 * (len(loss) - 1), str(loss))
 
   def test_find_all_models(self):
     for m in get_all_models():
       self.assertTrue(inspect.isclass(m) and issubclass(m, SingleCellModel))
 
   def test_network_config(self):
-    pass
+    # TODO
 
   def test_random_variable(self):
     x = np.random.rand(8, 12).astype(np.float32)
@@ -95,8 +97,8 @@ class ModelTest(unittest.TestCase):
     dca = DeepCountAutoencoder(outputs=RandomVariable(dim=sco.n_vars,
                                                       posterior='mse'),
                                latent_dim=10)
-    dca.fit(train, epochs=4, verbose=False)
-    dca.fit(train.numpy(), epochs=4, verbose=False)
+    dca.fit(train, epochs=_EPOCHS, verbose=False)
+    dca.fit(train.numpy(), epochs=_EPOCHS, verbose=False)
     self._loss_not_rise(dca.train_history['loss'])
     self._loss_not_rise(dca.valid_history['val_loss'])
 
@@ -119,7 +121,7 @@ class ModelTest(unittest.TestCase):
         RandomVariable(dim=n_genes, posterior='zinb', name=OMIC.transcriptomic),
         RandomVariable(dim=n_prots, posterior='nbd', name=OMIC.proteomic)
     ])
-    vae.fit(sco, epochs=4, verbose=False)
+    vae.fit(sco, epochs=_EPOCHS, verbose=False)
     self._loss_not_rise(vae.train_history['loss'])
     self._loss_not_rise(vae.valid_history['val_loss'])
 
@@ -143,7 +145,7 @@ class ModelTest(unittest.TestCase):
     n_genes = sco.n_vars
     n_prots = sco.numpy(OMIC.proteomic).shape[1]
     sisua = SISUA(rna_dim=n_genes, adt_dim=n_prots, alternative_nb=True)
-    sisua.fit(sco, epochs=4, verbose=False)
+    sisua.fit(sco, epochs=_EPOCHS, verbose=False)
     self._loss_not_rise(sisua.train_history['loss'])
     self._loss_not_rise(sisua.valid_history['val_loss'])
 
@@ -166,7 +168,7 @@ class ModelTest(unittest.TestCase):
     sco = get_dataset(_DS)
     train, test = sco.split()
     scvi = SCVI(RandomVariable(sco.n_vars, posterior='zinbd', name='rna'))
-    scvi.fit(train, epochs=8, verbose=False)
+    scvi.fit(train, epochs=_EPOCHS, verbose=False)
     pX, (qZ, qL) = scvi.predict(test, verbose=False)
 
     self._loss_not_rise(scvi.train_history['loss'])

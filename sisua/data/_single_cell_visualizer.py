@@ -85,8 +85,10 @@ def _validate_arguments(kw):
       "Only visualize transcriptomic in case of rank_genes>0, but given: %s" \
         % X.name
   title = '_'.join(i for i in [
-      X.name, groupby.name,
-      str(clustering), \
+      kw['self'].name,\
+      X.name,
+      groupby.name,
+      str(clustering),
       ('rank' if rank_genes else ''),
       ('log' if log else 'raw')
   ] if len(i) > 0)
@@ -246,9 +248,37 @@ class SingleCellVisualizer(sc.AnnData, Visualizer):
     self.add_figure('heatmap_%s' % title, fig)
     return self
 
+  def plot_distance_heatmap(self,
+                            X=OMIC.transcriptomic,
+                            groupby=OMIC.transcriptomic,
+                            var_names=None,
+                            clustering='kmeans',
+                            cmap='bwr',
+                            legend=True,
+                            log=True,
+                            ax=None):
+    r""" Heatmap of the distance among latents vector from different classes
+    """
+    title = _validate_arguments(locals())
+    X, var_names = _process_varnames(self, X, var_names)
+    groupby, _ = _process_omics(self, groupby, clustering=clustering)
+    ax = vs.to_axis2D(ax)
+    ## prepare the data
+    vs.plot_distance_heatmap(self.numpy(X),
+                             labels=self.numpy(groupby),
+                             colormap=cmap,
+                             legend_enable=legend,
+                             lognorm=log,
+                             ax=ax,
+                             fontsize=8,
+                             legend_ncol=3,
+                             title=title)
+    self.add_figure('distance_heatmap_%s' % title, ax.get_figure())
+    return self
+
   def plot_percentile_histogram(self,
-                                n_hist=8,
                                 omic=OMIC.transcriptomic,
+                                n_hist=8,
                                 title=None,
                                 outlier=0.001,
                                 non_zeros=False,

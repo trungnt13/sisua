@@ -10,8 +10,8 @@ import tensorflow as tf
 from odin.backend import interpolation
 from odin.exp import Experimenter, ExperimentManager
 from odin.utils.crypto import md5_checksum
-from sisua.data import (CONFIG_PATH, DATA_DIR, EXP_DIR, get_dataset,
-                        get_dataset_meta)
+from sisua.data import (CONFIG_PATH, DATA_DIR, EXP_DIR, OMIC, SingleCellOMIC,
+                        get_dataset, get_dataset_meta)
 from sisua.models import (NetworkConfig, RandomVariable, get_all_models,
                           get_model, load, save)
 
@@ -41,29 +41,23 @@ def elbo_config(cfg):
               analytic=bool(cfg.get('analytic', True)))
 
 
-def random_variable(name: str,
-                    cfg: dict,
-                    dim: int = None,
-                    posterior: str = None,
-                    kwargs: dict = {},
-                    required: bool = True):
+def random_variable(omic: str, cfg: dict, sco: SingleCellOMIC):
   r""" Create RandomVariable from a named DictConfig
 
   name: the key name of the variable
   """
-  if required and name not in cfg:
-    raise ValueError("Cannot find variable with name='%s' in config: %s" %
-                     (name, str(cfg)))
+  name = omic.name
   if name not in cfg:
     return None
-  rv = cfg[name]
-  dim = rv.get('dim', dim)
-  posterior = rv.get('posterior', posterior)
-  kwargs = rv.get('kwargs', kwargs)
-  if any(i is None for i in (dim, posterior, kwargs)):
-    raise RuntimeError("Missing argument for random variable: "
-                       "name=%s dim=%s posterior=%s kwargs=%s" %
-                       (name, str(dim), str(posterior), str(kwargs)))
+  cfg = cfg[name]
+  dim = cfg.get('dim', None)
+  if dim is None:
+    if omic in sco.omics:
+      dim = sco.numpy(omic).shape[1]
+    else:  # cannot infer the dimension of the RandomVariable
+      return None
+  posterior = cfg.get('posterior')
+  kwargs = cfg.get('kwargs', {})
   return RandomVariable(dim=int(dim), posterior=posterior, name=name, **kwargs)
 
 
@@ -79,29 +73,34 @@ class SisuaExperimenter(Experimenter):
                      ncpu=int(ncpu))
 
   def on_load_data(self, cfg):
-    gene, prot = get_dataset(cfg.dataset.name)
+    sco = get_dataset(cfg.dataset.name)
     split = float(cfg.dataset.get('split', 0.8))
-    x_train, x_test = gene.split(split)
-    if prot is not None:
-      y_train, y_test = prot.split(split)
-      x_train.assert_matching_cells(y_train)
-      x_test.assert_matching_cells(y_test)
-    else:
-      y_train, y_test = None, None
-    self.x_train = x_train
-    self.y_train = y_train
-    self.x_test = x_test
-    self.y_test = y_test
-    self.rna_dim = x_train.shape[1]
-    self.adt_dim = y_train.shape[1] if y_train is not None else None
+    train, test = sco.split(split)
+    self.train = train
+    self.test = test
 
   def on_create_model(self, cfg):
     network = NetworkConfig(**cfg.network)
-    rv_latent = random_variable('latent', cfg)
-    rv_rna = random_variable('rna', cfg, dim=self.rna_dim)
-    rv_adt = random_variable('adt', cfg, dim=self.adt_dim, required=False)
+    rv_trans = None
+    rv_latent = None
+    rvs = []
+    for om in OMIC:
+      rv = random_variable(om, cfg, self.train)
+      if rv is not None:
+        if om == OMIC.transcriptomic:
+          rv_trans = rv
+        elif om == OMIC.latent:
+          rv_latent = rv
+        else:
+          rvs.append(rv)
     log_norm = cfg.get('log_norm', True)
     force_semi = cfg.get('force_semi', False)
+    if len(rvs) == 0:
+      force_semi = False
+    # ====== check required variable is provided ====== #
+    if rv_trans is None or rv_latent is None:
+      raise RuntimeError("RandomVariable description must be provided for "
+                         "'transcriptomic' and 'latent'")
     # ====== create model ====== #
     model_cls = get_model(cfg.model)
     args = inspect.getfullargspec(model_cls.__init__).args
@@ -109,13 +108,12 @@ class SisuaExperimenter(Experimenter):
     model_kwargs.update(elbo_config(cfg))
     # because every model could be semi-supervised
     if model_cls.is_multiple_outputs:
-      model_kwargs['rna_dim'] = rv_rna.dim
-      model_kwargs['adt_dim'] = rv_adt.dim
+      model_kwargs['rna_dim'] = rv_trans.dim
+      model_kwargs['adt_dim'] = rvs[0].dim
     elif force_semi:
-      model_kwargs['outputs'] = [rv_rna, rv_adt] \
-        if rv_adt is not None else rv_rna
+      model_kwargs['outputs'] = [rv_trans] + rvs
     else:
-      model_kwargs['outputs'] = [rv_rna]
+      model_kwargs['outputs'] = [rv_trans]
     if 'latent_dim' in args:
       model_kwargs['latent_dim'] = rv_latent.dim
     else:
@@ -130,9 +128,7 @@ class SisuaExperimenter(Experimenter):
     kwargs = Experimenter.match_arguments(self.model.fit,
                                           cfg.train,
                                           exclude_args='inputs')
-    self.model.fit(\
-      inputs=self.x_train if self.y_train is None else [self.x_train, self.y_train],
-      **kwargs)
+    self.model.fit(inputs=self.train, **kwargs)
     # save the best model after training
     save(model_path, self.model, max_to_keep=5)
 
@@ -145,6 +141,7 @@ class SisuaExperimenter(Experimenter):
 
 # ===========================================================================
 # Running the experiments
+# --reset model=sisua,dca,vae dataset.name=cortex,8kly,8klyall,8klyx,eccly,ecclyall,ecclyx,8k,8kall train.epochs=500 elbo.vmax=1,2,10 -m -ncpu 5
 # ===========================================================================
 if __name__ == "__main__":
   print("Path:")
