@@ -14,7 +14,7 @@ from matplotlib import pyplot as plt
 from odin import visual as vs
 from odin.ml import fast_pca, fast_umap
 from odin.utils import ArgController, md5_checksum
-from sisua.data import get_dataset, normalization_recipes
+from sisua.data import OMIC, get_dataset, normalization_recipes
 from sisua.models import (MISA, SCALE, SCVI, SISUA, DeepCountAutoencoder,
                           NetworkConfig, RandomVariable, VariationalAutoEncoder,
                           load, save)
@@ -89,15 +89,10 @@ def extract_pca(p_train, p_test):
 # ===========================================================================
 # Load data
 # ===========================================================================
-MD5 = "11f5092ce0a4500dde7ad4e79bba0a0b3a08ef4626d19a0ce84270dee58c0bda"
-x, y = get_dataset('cortex')
-x_train, x_test = x.split()
-y_train, y_test = y.split()
-x_train.assert_matching_cells(y_train)
-x_test.assert_matching_cells(y_test)
-n_gene = x_train.shape[1]
-n_prot = y_train.shape[1]
-assert md5_checksum(x_train.X) + md5_checksum(x_test.X) == MD5
+sco = get_dataset('cortex')
+train, test = sco.split(train_percent=0.8, seed=1)
+n_gene = sco.numpy(OMIC.transcriptomic).shape[1]
+n_prot = sco.numpy(OMIC.celltype).shape[1]
 
 gene_rv = RandomVariable(n_gene, 'zinb', 'rna')
 prot_rv = RandomVariable(n_prot, 'nb', 'adt')
@@ -174,9 +169,7 @@ for MODEL in all_models:
         plt.tight_layout()
         vs.plot_save(pca_path, dpi=120, clear_all=True, log=True)
         #
-        model.fit([x_train, y_train] if is_semi else x_train,
-                  epochs=2,
-                  verbose=False)
+        model.fit(train, epochs=2, verbose=False)
         model.plot_learning_curves()
         model.save_figures(hist_path)
       # ====== training mode ====== #
@@ -187,7 +180,7 @@ for MODEL in all_models:
                       latent_dim=10,
                       network=network)
         start_time = time.time()
-        model.fit([x_train, y_train] if is_semi else x_train,
+        model.fit(train,
                   epochs=epochs,
                   verbose=False)
         print(" Train   %.2f (sec/epoch)" %

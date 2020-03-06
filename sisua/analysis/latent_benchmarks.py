@@ -13,7 +13,6 @@ from sklearn.metrics import (adjusted_mutual_info_score, adjusted_rand_score,
 from sklearn.mixture import GaussianMixture
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.svm import SVC
-from sklearn.utils.linear_assignment_ import linear_assignment
 
 from odin import backend as K
 from odin.utils import catch_warnings_ignore, ctext, one_hot
@@ -53,6 +52,8 @@ def unsupervised_clustering_accuracy(y, y_pred):
   Author: scVI
   https://github.com/YosefLab/scVI/blob/a585f7d096f04ab0d50cadfdf8c2c9f78d907c19/scvi/inference/posterior.py#L637
   """
+  # from scipy.optimize import linear_sum_assignment
+  from sklearn.utils.linear_assignment_ import linear_assignment
   assert len(y_pred) == len(y)
   u = np.unique(np.concatenate((y, y_pred)))
   n_clusters = len(u)

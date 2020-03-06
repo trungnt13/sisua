@@ -80,7 +80,7 @@ def load(path: str, model_index=-1) -> SingleCellModel:
   from odin.backend import Trainer
   ## create new instance
   with open(os.path.join(path, 'singlecellmodel.pkl'), 'rb') as f:
-    class_name, kwargs, attrs = pickle.load(f)
+    class_name, kwargs = pickle.load(f)
   model = get_model(class_name)(**kwargs)
   ## restore the checkpoint
   model, optimizer, _ = Trainer.restore_checkpoint(path,
