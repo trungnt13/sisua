@@ -16,8 +16,7 @@ from sklearn.svm import SVC
 
 from odin import backend as K
 from odin.utils import catch_warnings_ignore, ctext, one_hot
-from odin.visual import (plot_colorbar, plot_figure, plot_scatter_heatmap,
-                         to_axis)
+from odin.visual import plot_colorbar, plot_figure, plot_scatter, to_axis
 from sisua.data.const import (MARKER_ADT_GENE, PROTEIN_PAIR_COMPARISON,
                               UNIVERSAL_RANDOM_SEED)
 from sisua.data.utils import standardize_protein_name
@@ -436,12 +435,12 @@ def plot_latents_protein_pairs(Z,
     # normalize again to [-1, 1]
     val = 2 * (val - np.min(val)) / (np.max(val) - np.min(val)) - 1
     # ====== let plotting ====== #
-    plot_scatter_heatmap(
+    plot_scatter(
         x=Z[:, 0],
         y=Z[:, 1],
         val=val,
         legend_enable=False,
-        colormap='bwr',
+        color='bwr',
         size=8,
         elev=elev,
         azim=azim,
@@ -513,11 +512,11 @@ def plot_latents_binary(Z,
     fig = plot_figure(nrow=4 * nrow, ncol=20)
     for i, lab in enumerate(labels_name):
       val = K.log_norm(y[:, i], axis=0)
-      plot_scatter_heatmap(x=Z[:, 0],
+      plot_scatter(x=Z[:, 0],
                            y=Z[:, 1],
                            val=val / np.sum(val),
                            ax=(nrow, ncol, i + 1),
-                           colormap=colormap,
+                           color=colormap,
                            size=size,
                            alpha=0.8,
                            fontsize=8,

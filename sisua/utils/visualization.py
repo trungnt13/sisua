@@ -16,11 +16,12 @@ from odin.utils import async_mpi, catch_warnings_ignore, ctext, one_hot
 from odin.visual import (generate_random_colors, generate_random_marker,
                          plot_confusion_matrix, plot_figure, plot_gridSpec,
                          plot_gridSubplot, plot_histogram, plot_save,
-                         plot_scatter, plot_scatter_heatmap,
-                         plot_scatter_layers, plot_series_statistics, subplot)
+                         plot_scatter, plot_scatter_layers,
+                         plot_series_statistics, subplot)
 from sisua.utils.others import anything2image
 
 sbn.set()
+
 
 # ===========================================================================
 # Some helper
@@ -331,39 +332,35 @@ def plot_evaluate_reconstruction(X,
 
     fast_log = lambda x: K.log_norm(x, axis=0)
 
-    plot_scatter_heatmap(
-        x=X_cell_tsne,
-        val=fast_log(X_cell_countsum),
-        title="[t-SNE]Original Cell Data + Original Cell Countsum",
-        ax=(n_plot, 2, 5),
-        colorbar=True)
-    plot_scatter_heatmap(
+    plot_scatter(x=X_cell_tsne,
+                 val=fast_log(X_cell_countsum),
+                 title="[t-SNE]Original Cell Data + Original Cell Countsum",
+                 ax=(n_plot, 2, 5),
+                 colorbar=True)
+    plot_scatter(
         x=X_cell_tsne,
         val=fast_log(W_cell_countsum),
         title="[t-SNE]Original Cell Data + Reconstructed Cell Countsum",
         ax=(n_plot, 2, 6),
         colorbar=True)
     # Genes
-    plot_scatter_heatmap(
-        x=X_gene_pca,
-        val=fast_log(X_gene_countsum),
-        title="[PCA]Original Gene Data + Original Gene Countsum",
-        ax=(n_plot, 2, 7),
-        colorbar=True)
-    plot_scatter_heatmap(
-        x=W_gene_pca,
-        val=fast_log(X_gene_countsum),
-        title="[PCA]Reconstructed Gene Data + Original Gene Countsum",
-        ax=(n_plot, 2, 8),
-        colorbar=True)
+    plot_scatter(x=X_gene_pca,
+                 val=fast_log(X_gene_countsum),
+                 title="[PCA]Original Gene Data + Original Gene Countsum",
+                 ax=(n_plot, 2, 7),
+                 colorbar=True)
+    plot_scatter(x=W_gene_pca,
+                 val=fast_log(X_gene_countsum),
+                 title="[PCA]Reconstructed Gene Data + Original Gene Countsum",
+                 ax=(n_plot, 2, 8),
+                 colorbar=True)
 
-    plot_scatter_heatmap(
-        x=X_gene_tsne,
-        val=fast_log(X_gene_countsum),
-        title="[t-SNE]Original Gene Data + Original Gene Countsum",
-        ax=(n_plot, 2, 9),
-        colorbar=True)
-    plot_scatter_heatmap(
+    plot_scatter(x=X_gene_tsne,
+                 val=fast_log(X_gene_countsum),
+                 title="[t-SNE]Original Gene Data + Original Gene Countsum",
+                 ax=(n_plot, 2, 9),
+                 colorbar=True)
+    plot_scatter(
         x=X_gene_tsne,
         val=fast_log(W_gene_countsum),
         title="[t-SNE]Original Gene Data + Reconstructed Gene Countsum",
@@ -371,31 +368,27 @@ def plot_evaluate_reconstruction(X,
         colorbar=True)
     # zero-inflation rate
     if pi is not None:
-      plot_scatter_heatmap(
-          x=X_cell_tsne,
-          val=X_cell_countsum,
-          title="[t-SNE]Original Cell Data + Original Cell Countsum",
-          ax=(n_plot, 2, 11),
-          colorbar=True)
-      plot_scatter_heatmap(
-          x=X_cell_tsne,
-          val=pi_cell_countsum,
-          title="[t-SNE]Original Cell Data + Zero-inflated rate",
-          ax=(n_plot, 2, 12),
-          colorbar=True)
+      plot_scatter(x=X_cell_tsne,
+                   val=X_cell_countsum,
+                   title="[t-SNE]Original Cell Data + Original Cell Countsum",
+                   ax=(n_plot, 2, 11),
+                   colorbar=True)
+      plot_scatter(x=X_cell_tsne,
+                   val=pi_cell_countsum,
+                   title="[t-SNE]Original Cell Data + Zero-inflated rate",
+                   ax=(n_plot, 2, 12),
+                   colorbar=True)
 
-      plot_scatter_heatmap(
-          x=X_gene_tsne,
-          val=X_gene_countsum,
-          title="[t-SNE]Original Gene Data + Original Gene Countsum",
-          ax=(n_plot, 2, 13),
-          colorbar=True)
-      plot_scatter_heatmap(
-          x=X_gene_tsne,
-          val=pi_gene_countsum,
-          title="[t-SNE]Original Gene Data + Zero-inflated rate",
-          ax=(n_plot, 2, 14),
-          colorbar=True)
+      plot_scatter(x=X_gene_tsne,
+                   val=X_gene_countsum,
+                   title="[t-SNE]Original Gene Data + Original Gene Countsum",
+                   ax=(n_plot, 2, 13),
+                   colorbar=True)
+      plot_scatter(x=X_gene_tsne,
+                   val=pi_gene_countsum,
+                   title="[t-SNE]Original Gene Data + Zero-inflated rate",
+                   ax=(n_plot, 2, 14),
+                   colorbar=True)
     plt.tight_layout()
   # ******************** sparsity ******************** #
   if enable_sparsity:
@@ -667,56 +660,56 @@ def plot_monitoring_epoch(X, X_drop, y, Z, Z_drop, W_outputs, W_drop_outputs,
       kws = dict(colorbar=True, fontsize=10, size=10, marker=y, n_samples=1200)
       # without dropout
       ax = subplot(grid[:3, 0:3])
-      plot_scatter_heatmap(x=X_pca,
-                           val=X_countsum,
-                           ax=ax,
-                           legend_enable=False,
-                           title='Original data (Count-sum)',
-                           **kws)
+      plot_scatter(x=X_pca,
+                   val=X_countsum,
+                   ax=ax,
+                   legend_enable=False,
+                   title='Original data (Count-sum)',
+                   **kws)
       ax = subplot(grid[:3, 3:6])
-      plot_scatter_heatmap(x=W_pca,
-                           val=W_countsum,
-                           ax=ax,
-                           legend_enable=False,
-                           title='Reconstruction (Count-sum)',
-                           **kws)
+      plot_scatter(x=W_pca,
+                   val=W_countsum,
+                   ax=ax,
+                   legend_enable=False,
+                   title='Reconstruction (Count-sum)',
+                   **kws)
       # with dropout
       ax = subplot(grid[3:6, 0:3])
-      plot_scatter_heatmap(x=X_pca_drop,
-                           val=X_drop_countsum,
-                           ax=ax,
-                           legend_enable=True if pi is None else False,
-                           legend_ncol=len(labels),
-                           title='[Dropped:%s]Original data (Count-sum)' %
-                           dropout_percentage_text,
-                           **kws)
+      plot_scatter(x=X_pca_drop,
+                   val=X_drop_countsum,
+                   ax=ax,
+                   legend_enable=True if pi is None else False,
+                   legend_ncol=len(labels),
+                   title='[Dropped:%s]Original data (Count-sum)' %
+                   dropout_percentage_text,
+                   **kws)
       ax = subplot(grid[3:6, 3:6])
-      plot_scatter_heatmap(x=W_pca_drop,
-                           val=W_drop_countsum,
-                           ax=ax,
-                           legend_enable=False,
-                           title='[Dropped:%s]Reconstruction (Count-sum)' %
-                           dropout_percentage_text,
-                           **kws)
+      plot_scatter(x=W_pca_drop,
+                   val=W_drop_countsum,
+                   ax=ax,
+                   legend_enable=False,
+                   title='[Dropped:%s]Reconstruction (Count-sum)' %
+                   dropout_percentage_text,
+                   **kws)
       row_start = 6
       # zero-inflated pi
       if pi is not None:
         ax = subplot(grid[6:9, 0:3])
-        plot_scatter_heatmap(x=X_pca,
-                             val=pi_sum,
-                             ax=ax,
-                             legend_enable=True,
-                             legend_ncol=len(labels),
-                             title='Zero-inflated probabilities',
-                             **kws)
+        plot_scatter(x=X_pca,
+                     val=pi_sum,
+                     ax=ax,
+                     legend_enable=True,
+                     legend_ncol=len(labels),
+                     title='Zero-inflated probabilities',
+                     **kws)
         ax = subplot(grid[6:9, 3:6])
-        plot_scatter_heatmap(x=X_pca,
-                             val=pi_drop_sum,
-                             ax=ax,
-                             legend_enable=False,
-                             title='[Dropped:%s]Zero-inflated probabilities' %
-                             dropout_percentage_text,
-                             **kws)
+        plot_scatter(x=X_pca,
+                     val=pi_drop_sum,
+                     ax=ax,
+                     legend_enable=False,
+                     title='[Dropped:%s]Zero-inflated probabilities' %
+                     dropout_percentage_text,
+                     **kws)
         row_start += 3
 
       # plot the count-sum series

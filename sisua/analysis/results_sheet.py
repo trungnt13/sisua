@@ -17,9 +17,7 @@ from odin.ml import fast_pca, fast_tsne
 from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore, ctext,
                         flatten_list, md5_checksum)
 from odin.visual import (plot_aspect, plot_confusion_matrix, plot_figure,
-                         plot_frame, plot_save, plot_scatter,
-                         plot_scatter_heatmap, to_axis2D)
-
+                         plot_frame, plot_save, plot_scatter, to_axis2D)
 from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
@@ -512,7 +510,7 @@ class ResultsSheet(object):
       v = fast_pca(v, n_components=2) if pca else fast_tsne(v, n_components=2)
       with catch_warnings_ignore(Warning):
         if color_by_library:
-          plot_scatter_heatmap(x=v, val=n, ax=ax, size=8,
+          plot_scatter(x=v, val=n, ax=ax, size=8,
                                legend_enable=False,
                                grid=False, title=name)
         else:

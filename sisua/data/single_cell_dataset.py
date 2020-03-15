@@ -15,6 +15,7 @@ import scipy as sp
 import tensorflow as tf
 from anndata._core.aligned_mapping import AxisArrays
 from scipy.sparse import issparse
+from scipy.stats import pearsonr, spearmanr
 from six import string_types
 
 from bigarray import MmapArrayWriter
@@ -349,6 +350,9 @@ class SingleCellOMIC(SingleCellVisualizer):
         return self.uns[om.name + '_var']
     raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                      (omic, self.omics))
+
+  def omic_varnames(self, omic):
+    return self.omic_var(omic).index.values
 
   def numpy(self, omic=OMIC.transcriptomic):
     r""" Return observation ndarray in `obsm` or `obs`"""
@@ -779,9 +783,9 @@ class SingleCellOMIC(SingleCellVisualizer):
       return self.obsm[name] if n_components is None else \
         self.obsm[name][:, :int(n_components)]
     X = self.numpy(omic)
+    n_components = min(n_components, X.shape[1])
     ## train new PCA model
     if algo == 'pca':
-      n_components = min(n_components, X.shape[1])
       X_ = np.empty(shape=(X.shape[0], n_components), dtype=X.dtype)
       model = IncrementalPCA(n_components=n_components)
       # fitting
@@ -796,20 +800,9 @@ class SingleCellOMIC(SingleCellVisualizer):
         X_[start:end] = model.transform(chunk)
     ## TSNE
     elif algo == 'tsne':
-      from multiprocessing import cpu_count
-      self.dimension_reduce(omic,
-                            n_components=n_components,
-                            algo='pca',
-                            random_state=random_state)
-      sc.tl.tsne(self,
-                 n_pcs=n_components,
-                 use_rep=omic.name + '_pca',
-                 copy=False,
-                 n_jobs=max(1, cpu_count() - 1),\
-                 random_state=random_state)
-      X_ = self.obsm['X_tsne']
+      from odin.ml import fast_tsne
+      X_ = fast_tsne(X, n_components=n_components, return_model=False)
       model = None
-      del self.obsm['X_tsne']
     ## UMAP
     elif algo == 'umap':
       try:
@@ -1318,17 +1311,17 @@ class SingleCellOMIC(SingleCellVisualizer):
     self.var['mean'] = gene_qc['mean_counts']
     self.var['total'] = gene_qc['total_counts']
     self.var['pct_dropout'] = gene_qc['pct_dropout_by_counts']
-    # cell quality
+    ## cell quality
     self.obs['n_%s' % name] = cell_qc['n_genes_by_counts']
     self.obs['total_%s' % name] = cell_qc['total_counts']
     if percent_top is not None:
       for i in as_tuple(percent_top, t=int):
         self.obs['pct_counts_in_top_%d_%s' % (i, name)] = \
           cell_qc['pct_counts_in_top_%d_genes' % i]
-    # Expects logarithmized data.
+    ## Expects logarithmized data.
     if log1p:
       sc.pp.log1p(self)
-    # highly_variable, means, dispersions, dispersions_norm
+    ## highly_variable, means, dispersions, dispersions_norm
     results = sc.pp.highly_variable_genes(self,
                                           n_bins=min(int(n_bins),
                                                      self.X.shape[1]),
@@ -1337,7 +1330,7 @@ class SingleCellOMIC(SingleCellVisualizer):
                                           inplace=False)
     self.var['highly_variable'] = [i[0] for i in results]
     self.var['dispersions'] = [i[2] for i in results]
-    # de-log
+    ## de-log
     if log1p:
       X = self.X
       for s, e in batching(_BATCH_SIZE, n=self.n_obs):
@@ -1349,6 +1342,54 @@ class SingleCellOMIC(SingleCellVisualizer):
     return self
 
   # ******************** logging and io ******************** #
+  @cache_memory
+  def omic_correlation(self, omic=OMIC.proteomic):
+    r""" Calculate the correlation scores between transcriptome and another
+      OMIC type (could be different or the same OMIC).
+
+    Return:
+      list of tuple contained 4 scalars:
+        (gene-idx, protein-idx, pearson, spearman)
+        sorted in order from high to low average correlation
+    """
+    om1 = OMIC.transcriptomic
+    om2 = omic
+    assert om2 in self.omics, \
+      "Cannot find omic:'%s', available are: %s" % (om2, self.omics)
+    ### prepare the data
+    x1 = self.numpy(om1)
+    x2 = self.numpy(om2)
+    n_om1 = x1.shape[1]
+    n_om2 = x2.shape[1]
+
+    ### search for most correlated series
+    def _corr(idx):
+      results = []
+      for i1, i2 in idx:
+        y1 = x1[:, i1]
+        y2 = x2[:, i2]
+        with catch_warnings_ignore(RuntimeWarning):
+          p = pearsonr(y1, y2)[0]
+          s = spearmanr(y1, y2, nan_policy='omit').correlation
+          # remove all NaNs
+          if p == p and s == s:
+            results.append((i1, i2, p, s))
+      yield results
+
+    ### multiprocessing
+    jobs = list(itertools.product(range(n_om1), range(n_om2)))
+    from odin.utils import MPI, cpu_count
+    ncpu = max(1, cpu_count() - 2)
+    results = []
+    for res in MPI(jobs, func=_corr, ncpu=ncpu, batch=len(jobs) // ncpu):
+      results += res
+
+    ### sorted by decreasing order
+    all_correlations = sorted(\
+      results,
+      key=lambda scores: (scores[-2] + scores[-1]) / 2)[::-1]
+    return all_correlations
+
   def save_to_mmaparray(self, path, dtype=None):
     """ This only save the data without row names and column names """
     self._record('save_to_mmaparray', locals())

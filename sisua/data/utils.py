@@ -4,6 +4,7 @@ import base64
 import gzip
 import os
 import pickle
+import warnings
 from copy import deepcopy
 
 import numpy as np
@@ -90,21 +91,21 @@ def get_library_size(X, return_log_count=False):
 
   size factor of X in log-space
 
-  Parameters
-  ----------
-  X : matrix
-    single-cell data matrix (n_samples, n_features)
-  return_log_count : bool (default=False)
-    if True, return the log-count library size
+  Arguments:
+    X : matrix
+      single-cell data matrix (n_samples, n_features)
+    return_log_count : bool (default=False)
+      if True, return the log-count library size
 
-  Return
-  ------
-  local_mean (n_samples, 1)
-  local_var (n_samples, 1)
+  Return:
+    local_mean (n_samples, 1)
+    local_var (n_samples, 1)
   """
   assert X.ndim == 2, "Only support 2-D matrix"
   total_counts = X.sum(axis=1)
-  assert np.all(total_counts >= 0), "Some cell contains negative-count!"
+  if not np.all(total_counts >= 0):
+    warnings.warn(
+        "Some cell contains negative-count, this results NaN log counts!")
   log_counts = np.log(total_counts + 1e-8)
   local_mean = (np.mean(log_counts) * np.ones(
       (X.shape[0], 1))).astype(np.float32)
@@ -183,7 +184,7 @@ def standardize_protein_name(name):
 # Gene identifier processing
 # ===========================================================================
 def get_gene_id2name():
-  """ Return the mapping from gene identifier to gene symbol (i.e. name)
+  r""" Return the mapping from gene identifier to gene symbol (i.e. name)
   for PBMC 8k data
   """
   from odin.utils import get_file
@@ -212,7 +213,7 @@ def is_binary_dtype(X):
 
 
 def remove_allzeros_columns(matrix, colname, print_log=True):
-  """ Remove all zero columns from both the matrix and column name vector
+  r""" Remove all zero columns from both the matrix and column name vector
 
   Return
   ------
@@ -254,8 +255,7 @@ def validating_dataset(path):
   else:
     y, y_col = None, None
 
-  X, X_col, rowname = \
-  ds['X'], ds['X_col'],  ds['X_row']
+  X, X_col, rowname = ds['X'], ds['X_col'], ds['X_row']
   _check_data(X, X_col, y, y_col, rowname)
 
 
@@ -266,14 +266,14 @@ def save_to_dataset(path,
                     y_col=None,
                     rowname=None,
                     print_log=True):
-  """
-  path : output folder path
-  X : (n_samples, n_genes) gene expression matrix
-  X_col : (n_genes,) name of each gene
-  y : (n_samples, n_proteins) protein marker level matrix
-  y_col : (n_proteins) name of each protein
-  rowname : (n_samples,) name of cells (i.e. the sample)
-  print_log : bool (default: True)
+  r"""
+    path : output folder path
+    X : (n_samples, n_genes) gene expression matrix
+    X_col : (n_genes,) name of each gene
+    y : (n_samples, n_proteins) protein marker level matrix
+    y_col : (n_proteins) name of each protein
+    rowname : (n_samples,) name of cells (i.e. the sample)
+    print_log : bool (default: True)
   """
   _check_data(X, X_col, y, y_col, rowname)
   assert os.path.isdir(path), "'%s' must be path to a folder" % path

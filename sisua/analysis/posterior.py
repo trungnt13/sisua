@@ -7,7 +7,7 @@ import shutil
 import time
 import warnings
 from collections import OrderedDict, defaultdict
-from itertools import product
+from itertools import product, zip_longest
 from typing import Optional
 
 import numpy as np
@@ -15,6 +15,7 @@ import pandas as pd
 import seaborn as sns
 import tensorflow as tf
 from matplotlib import pyplot as plt
+from scipy.stats import pearsonr, spearmanr
 from six import string_types
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
@@ -22,13 +23,14 @@ from sklearn.preprocessing import StandardScaler
 from odin import visual as vs
 from odin.backend import log_norm
 from odin.bay import vi
+from odin.bay.vi.evaluation import Criticizer
 from odin.fuel import Dataset
 from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore,
                         clean_folder, ctext, flatten_list, md5_checksum)
 from odin.utils.mpi import MPI
 from odin.visual import (Visualizer, plot_aspect, plot_confusion_matrix,
                          plot_figure, plot_frame, plot_save, plot_scatter,
-                         plot_scatter_heatmap, to_axis2D)
+                         to_axis2D)
 from sisua.analysis.imputation_benchmarks import (correlation_scores,
                                                   imputation_mean_score,
                                                   imputation_score,
@@ -95,7 +97,7 @@ class Posterior(Visualizer):
   def __init__(self,
                scm: SingleCellModel,
                sco: SingleCellOMIC,
-               batch_size=16,
+               batch_size=32,
                n_mcmc=10,
                random_state=2,
                verbose=True):
@@ -147,6 +149,7 @@ class Posterior(Visualizer):
     # initialize all the prediction
     self._initialize()
     self._datasets = dict()
+    self._criticizers = dict()
 
   def _initialize(self):
     scm = self.scm
@@ -182,33 +185,58 @@ class Posterior(Visualizer):
     self.outputs_corrupt = outputs_corrupt
     self.latents_corrupt = latents_corrupt
 
-  def create_sco(self, imputed=True, corrupted=True) -> SingleCellOMIC:
+  def _prepare(self, imputed, corrupted):
+    imputed &= self.scm.is_zero_inflated
+    if corrupted:
+      outputs, latents = self.outputs_corrupt, self.latents_corrupt
+      sco = self.sco_corrupt
+    else:
+      outputs, latents = self.outputs_clean, self.latents_clean
+      sco = self.sco
+    if imputed:
+      outputs = [_preprocess_output_distribution(o) for o in outputs]
+    # only get the mean
+    outputs = [tf.reduce_mean(o.mean(), axis=0).numpy() for o in outputs]
+    latents = [z.mean().numpy() for z in latents]
+    # special case for multi-latents
+    if len(latents) > 1:
+      if self.verbose:
+        warnings.warn(
+            "%d latents found, concatenate all the latent into single "
+            "2-D array" % len(latents))
+      latents = np.concatenate(latents, axis=1)
+    else:
+      latents = latents[0]
+    return sco, outputs, latents, imputed
+
+  def create_sco(self, imputed=True, corrupted=True,
+                 keep_omic=None) -> SingleCellOMIC:
     r""" Create a SingleCellOMIC dataset based on the output of
     SingleCellModel
+
+    Arguments:
+      imputed : a Boolean. If True, use the 'i'mputed transcriptome, otherwise,
+        'r'econstructed
+      corrupted : a Boolean. If True, use artificial corrupted data for
+        generating the outputs.
+      keep_omic : OMIC (optional). This OMIC type will be kept as original
+        data (i.e. not the output from the network)
 
     The output name of the dataset is concatenated with
       - 'i' if imputed, otherwise, 'r' for reconstructed
       - 'c' if corrupted, otherwise, 'o' for original
     """
-    if corrupted:
-      outputs, latents = self.outputs_corrupt, self.latents_corrupt
-    else:
-      outputs, latents = self.outputs_clean, self.latents_clean
-    imputed &= self.scm.is_zero_inflated
-    key = (imputed, corrupted)
+    sco, outputs, latents, imputed = self._prepare(imputed, corrupted)
+    key = (imputed, corrupted, str(keep_omic))
     if key not in self._datasets:
-      if imputed:
-        outputs = [_preprocess_output_distribution(o) for o in outputs]
-      outputs = [tf.reduce_mean(o.mean(), axis=0).numpy() for o in outputs]
-      latents = [z.mean().numpy() for z in latents]
-      if len(latents) > 1:
-        if self.verbose:
-          warnings.warn(
-              "%d latents found, concatenate all the latent into single "
-              "2-D array" % len(latents))
-        latents = np.concatenate(latents, axis=1)
-      else:
-        latents = latents[0]
+      ## check which omic should be kept as original
+      if keep_omic is not None:
+        keep_omic = OMIC.parse(keep_omic)
+        outputs = [
+            o if om is None or om not in keep_omic else sco.numpy(om)
+            for o, om in zip_longest(outputs, self.omics)
+        ]
+      ## create the experimental dataset
       sco = SingleCellOMIC(
           outputs[0],
           cell_id=self.cell_names,
@@ -225,6 +253,65 @@ class Posterior(Visualizer):
                    var_names=['Z#%d' % i for i in range(latents.shape[1])])
       self._datasets[key] = sco
     return self._datasets[key]
+
+  def create_criticizer(self,
+                        corrupted=True,
+                        predicted=False,
+                        n_bins=5,
+                        strategy='quantile',
+                        n_samples=10000) -> Criticizer:
+    r""" Create a probabilistic criticizer for evaluating the latent codes of
+    variational models.
+
+    Arguments:
+      corrupted : a Boolean. If True, an artificial corrupted dataset is used
+        as input.
+      predicted : a Boolean. If True, use predicted protein levels or celltype
+        as groundtruth factor.
+    """
+    sco = self.sco_corrupt if corrupted else self.sco
+    key = (corrupted, predicted, n_bins, strategy)
+    # OMIC for factor groundtruth
+    if len(self.omics) == 1:
+      raise ValueError("Need at least 2 OMICs in the dataset.")
+    support_omics = (OMIC.celltype, OMIC.proteomic)
+    factor = None
+    for om in support_omics:
+      if om in self.omics:
+        factor = om
+        break
+    if factor is None:  # no good candidate, just discretizing second OMIC
+      factor = support_omics[1]
+    factor_name = sco.omic_varnames(factor)
+    # predict or original factors
+    if predicted:
+      if not self.is_semi_supervised:
+        raise RuntimeError(
+            "Cannot use predicted factor, NOT a semi-supervised models")
+      outputs = self.outputs_corrupt if corrupted else self.outputs_clean
+      factor = tf.reduce_mean(outputs[self.omics.index(factor)].mean(),
+                              axis=0).numpy()
+    else:
+      factor = sco.numpy(factor)
+    # prepare the inputs
+    inputs = sco.numpy(OMIC.transcriptomic)
+    # create the Criticizer
+    if key not in self._criticizers:
+      # discretizing factors if necessary
+      kwargs = dict(discretizing=False, n_bins=n_bins, strategy=strategy)
+      if np.any(factor.astype(np.int64) != factor.astype(np.float64)):
+        kwargs['discretizing'] = True
+      # create the criticizer
+      crt = Criticizer(self.scm, random_state=self.rand.randint(1e8))
+      crt.sample_batch(inputs=inputs,
+                       factors=factor,
+                       factors_name=factor_name,
+                       n_samples=int(n_samples),
+                       batch_size=self.batch_size,
+                       verbose=self.verbose,
+                       **kwargs)
+      self._criticizers[key] = crt
+    return self._criticizers[key]
 
   # ******************** Basic matrices ******************** #
   @property
@@ -370,30 +457,11 @@ class Posterior(Visualizer):
       self.add_figure('latents_protein_pairs', fig)
     return self
 
-  def plot_latents_distance_heatmap(self, legend=True, ax=None, fig=(8, 8)):
-    r""" Heatmap of the distance among latents vector from different classes
-    """
-    ax = to_axis2D(ax, fig)
-    z, y = self.Z, self.y_true
-    title = self.name
-    if not self.is_binary_classes:
-      y = self.y_true_probability
-    plot_distance_heatmap(z,
-                          labels=y,
-                          labels_name=self.labels,
-                          legend_enable=bool(legend),
-                          ax=ax,
-                          fontsize=8,
-                          legend_ncol=2,
-                          title=title)
-    self.add_figure('latents_distance_heatmap', ax.get_figure())
-    return self
-
   def plot_latents_risk(self, n_mcmc=100, seed=1):
     r""" R.I.S.K :
      - Representative : llk from GMM of protein
      - Informative : mutual information
-     - Supportive : streamline task
+     - Supportive : downstream task
      - Knowledge : disentanglement and biological relevant
     """
     # only use clean data here
@@ -427,8 +495,8 @@ class Posterior(Visualizer):
                          yticklabels=self.labels,
                          xlabel="Latent dimension",
                          ylabel="Protein",
-                         colorbar_title="Log-likelihood",
-                         colorbar=True,
+                         cbar_title="Log-likelihood",
+                         cbar=True,
                          fontsize=14,
                          annotation=True,
                          text_colors=dict(diag="black",
@@ -439,35 +507,6 @@ class Posterior(Visualizer):
     self.add_figure('latents_llk_mcmc%d_seed%d' % (n_mcmc, seed),
                     ax.get_figure())
     # ====== mutual information ====== #
-
-    return self
-
-  def plot_latents_uncertainty_scatter(self, n_samples=2, seed=1):
-    for qZ_clean, qZ_corrupted in zip(self.latents_clean, self.latents_corrupt):
-      mean, samples = qZ_clean.mean(), qZ_clean.sample(n_samples, seed=seed)
-      print(mean, samples)
-
-  def plot_latents_binary_scatter(self,
-                                  legend=True,
-                                  algo='tsne',
-                                  size=8,
-                                  ax=None):
-    r""" Scatter plot of dimension using binarized protein labels """
-    ax = to_axis2D(ax, (8, 8))
-    z, y = self.Z, self.y_true
-    title = self.name_lines
-    plot_latents_binary(Z=z,
-                        y=y,
-                        title=title,
-                        show_legend=bool(legend),
-                        size=8,
-                        fontsize=8,
-                        ax=ax,
-                        labels_name=self.labels,
-                        algo=algo,
-                        enable_argmax=True,
-                        enable_separated=False)
-    self.add_figure('latents_scatter_%s' % str(algo).lower(), ax.get_figure())
     return self
 
   # ******************** Streamline classifier ******************** #
@@ -510,29 +549,33 @@ class Posterior(Visualizer):
     return self
 
   # ******************** Cellsize analysis ******************** #
-  def plot_cellsize_series(self, fontsize=10, ax=None, fig=None):
-    ax = to_axis2D(ax, fig)
-    mean, std, x = self.L_test, self.Lstddev_test, self.X_test_org
-    mean = mean.ravel()
-    std = std.ravel()
-    cell_size = np.sum(x, axis=-1)
-    sorted_ids = np.argsort(cell_size)
-
-    ax.plot(cell_size[sorted_ids], linewidth=1, label="Original")
-    ax.plot(mean[sorted_ids],
-            linestyle='--',
-            alpha=0.66,
-            linewidth=1,
-            label='Prediction')
-
-    ax.set_title('[%s]%s' % ('Test' if test else 'Train', self.name),
-                 fontsize=fontsize)
-    ax.set_ylabel('Cell Size')
-    ax.set_xlabel('Cell in sorted order of size')
+  def plot_cellsize_series(self, log=False, show_corrupted=False, ax=None):
+    import seaborn as sns
+    sns.set()
+    sco = self.sco_corrupt if show_corrupted else self.sco
+    outputs = self.outputs_corrupt if show_corrupted else self.outputs_clean
+    # original inputs
+    x = self.sco.X
+    w = np.mean(self.outputs_clean[0].mean(), axis=0)
+    if log:
+      x = np.log1p(x)
+      w = np.log1p(w)
+    x = np.sum(x, axis=1)
+    w = np.sum(w, axis=1)
+    # start plotting
+    ids = np.argsort(x)
+    ax = to_axis2D(ax)
+    styles = dict(linewidth=1.8, alpha=0.8)
+    # input data
+    x = x[ids]
+    w = w[ids]
+    ax.plot(x, color='blue', label='Library', **styles)
+    ax.plot(w, color='orange', label='Reconstruction', **styles)
+    # fine-tune
     ax.legend()
-
-    self.add_figure('cellsize_%s' % ('test' if test else 'train'),
-                    ax.get_figure())
+    ax.set_xlabel("Cell in increasing order of library size")
+    ax.set_ylabel("%s library size" % ('log' if log else 'raw'))
+    self.add_figure('library_%s' % ('log' if log else 'raw'), ax.get_figure())
     return self
 
   # ******************** Correlation analysis ******************** #
@@ -652,107 +695,6 @@ class Posterior(Visualizer):
     self.add_figure(
         'correlation_%s_%s%d' %
         (data_type_name.lower(), 'top' if top else 'bottom', n), fig)
-    return self
-
-  def plot_correlation_marker_pairs(self,
-                                    imputed=True,
-                                    fontsize=12,
-                                    proteins=None):
-    r""" Plotting the correlation series between marker gene and protein,
-    The original (uncorrupted data) is used for comparison to the
-    imputation.
-
-    Arguments:
-      imputed : `bool` (default: True)
-        if `True`, plot the imputed value (in case of zero-inflated distribution),
-        otherwise, plot the reconstructed value
-      proteins : {`None`, `str`, list of `str`} (default=`None`)
-        a list of protein names to be included, if `None`, include all marker
-        proteins.
-    """
-    from scipy.stats import pearsonr, spearmanr
-    if proteins is not None:
-      proteins = [
-          standardize_protein_name(i).lower() for i in as_tuple(proteins, t=str)
-      ]
-
-    if imputed:
-      v = self.I
-      name = 'Imputed'
-    else:
-      v = self.W
-      name = "Reconstructed"
-
-    x, y = self.X, self.y_true
-    original_series = correlation_scores(X=x,
-                                         y=y,
-                                         gene_name=self.gene_names,
-                                         protein_name=self.labels,
-                                         return_series=True)
-    imputed_series = correlation_scores(X=v,
-                                        y=y,
-                                        gene_name=self.gene_names,
-                                        protein_name=self.labels,
-                                        return_series=True)
-    # only select given protein
-    if proteins is not None:
-      original_series = {
-          i: j
-          for i, j in original_series.items()
-          if i.split('/')[0].lower() in proteins
-      }
-      imputed_series = {
-          i: j
-          for i, j in original_series.items()
-          if i.split('/')[0].lower() in proteins
-      }
-
-    assert len(original_series) == len(imputed_series)
-    n_pair = len(imputed_series)
-    if n_pair == 0:
-      return self
-
-    fig = plt.figure(figsize=(15, 5 * n_pair), constrained_layout=True)
-    width = 4
-    grids = fig.add_gridspec(n_pair, 2 * width)
-
-    for idx, prot_gene in enumerate(sorted(imputed_series.keys())):
-      prot_name, gene_name = prot_gene.split('/')
-      imputed_gene, prot1 = imputed_series[prot_gene]
-      original_gene, prot2 = original_series[prot_gene]
-      assert np.all(prot1 == prot2)
-      y = prot1
-      name = 'Imputed' if imputed else 'Reconstructed'
-
-      for j, (name, series) in enumerate(
-          (("Original", original_gene), (name, imputed_gene))):
-        ax = plt.subplot(grids[idx, width * j:(width * j + width - 1)])
-
-        # plot the points
-        ax.scatter(y, series, s=25, alpha=0.6, linewidths=0)
-        plot_aspect('auto', 'box', ax)
-
-        # annotations
-        ax.set_title('[%s]Pearson:%.2f Spearman:%.2f' % (
-            name,
-            pearsonr(series, y)[0],
-            spearmanr(series, y).correlation,
-        ),
-                     fontsize=fontsize)
-        ax.set_xlabel('[Protein] %s' % prot_name, fontsize=fontsize)
-        ax.set_ylabel('[Gene] %s' % gene_name, fontsize=fontsize)
-
-        # box plot for the distribution
-        ax = fig.add_subplot(grids[idx, (width * j + width - 1):(width * j +
-                                                                 width)])
-        ax.boxplot(series)
-        ax.set_xticks(())
-        ax.set_xlabel(name, fontsize=fontsize)
-    # set title and save the figure
-    plt.suptitle('[%s]%s' % (name, self.name), fontsize=fontsize + 2)
-    with catch_warnings_ignore(UserWarning):
-      plt.tight_layout(rect=[0, 0.04, 1, 0.96])
-    self.add_figure('correlation_marker_%s' % name.lower(), fig)
     return self
 
   # ******************** Simple analysis ******************** #
@@ -1065,24 +1007,24 @@ class Posterior(Visualizer):
     "fig must be instance of matplotlib.Figure"
 
     x = dimension_reduction(Z, algo=algo)
-    ax = plot_scatter_heatmap(x, val=y_true, ax=321, grid=False, colorbar=True)
+    ax = plot_scatter(x, val=y_true, ax=321, grid=False, colorbar=True)
     ax.set_ylabel('Scatter of Latent Space')
     ax.set_xlabel('Colored by "Protein Original"')
-    ax = plot_scatter_heatmap(x, val=y_pred, ax=322, grid=False, colorbar=True)
+    ax = plot_scatter(x, val=y_pred, ax=322, grid=False, colorbar=True)
     ax.set_xlabel('Colored by "Protein Predicted"')
 
     x = dimension_reduction(V, algo=algo)
-    ax = plot_scatter_heatmap(x, val=y_true, ax=323, grid=False, colorbar=True)
+    ax = plot_scatter(x, val=y_true, ax=323, grid=False, colorbar=True)
     ax.set_ylabel('Scatter of Imputed mRNA')
     ax.set_xlabel('Colored by "Protein Original"')
-    ax = plot_scatter_heatmap(x, val=y_pred, ax=324, grid=False, colorbar=True)
+    ax = plot_scatter(x, val=y_pred, ax=324, grid=False, colorbar=True)
     ax.set_xlabel('Colored by "Protein Predicted"')
 
     x = dimension_reduction(X, algo=algo)
-    ax = plot_scatter_heatmap(x, val=y_true, ax=325, grid=False, colorbar=True)
+    ax = plot_scatter(x, val=y_true, ax=325, grid=False, colorbar=True)
     ax.set_ylabel('Scatter of Original mRNA')
     ax.set_xlabel('Colored by "Protein Original"')
-    ax = plot_scatter_heatmap(x, val=y_pred, ax=326, grid=False, colorbar=True)
+    ax = plot_scatter(x, val=y_pred, ax=326, grid=False, colorbar=True)
     ax.set_xlabel('Colored by "Protein Predicted"')
 
     fig.suptitle(protein_name, fontsize=16)

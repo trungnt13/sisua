@@ -122,7 +122,6 @@ def create_sample(model):
   samples = pZ.sample(n_mcmc)
   return mean, samples
 
-
 scvi = create_sample(model=scvi)
 scale = create_sample(model=scale)
 scvae = create_sample(model=scvae)
@@ -141,7 +140,6 @@ fig_config1['linewidths'] = 1.0
 fig_config1['marker'] = 'x'
 
 vs.plot_figure(nrow=12, ncol=20)
-
 
 # ====== helper plotting ====== #
 def plot_latent(data, idx, title):
@@ -166,12 +164,12 @@ def plot_latent(data, idx, title):
                   legend_enable=True,
                   **fig_config)
 
-
 # ====== plot ====== #
 plot_latent(data=scvi, idx=1, title='scVI')
 plot_latent(data=scvae, idx=2, title='scVAE')
 plot_latent(data=scale, idx=3, title='SCALE')
 plot_latent(data=sisua, idx=4, title='SISUA')
 plt.suptitle(DS_NAME)
+
 # ====== save the figure ====== #
 vs.plot_save(os.path.join(SAVE_PATH, 'compare.pdf'), log=True)

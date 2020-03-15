@@ -18,7 +18,7 @@ os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 tf.random.set_seed(8)
 np.random.seed(8)
-
+# TODO: update this tutorial
 # ===========================================================================
 # Loading Data
 # ===========================================================================
