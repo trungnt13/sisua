@@ -62,7 +62,7 @@ _CORRUPTED_INPUTS = {}
 # ===========================================================================
 @add_metaclass(ABCMeta)
 class SingleCellMetric(Callback):
-  """ Single cell metrics for evaluating the imputation and latent space
+  r""" Single cell metrics for evaluating the imputation and latent space
   during training
 
   Parameters
@@ -70,7 +70,7 @@ class SingleCellMetric(Callback):
   inputs : {`SingleCellOMIC`, `numpy.ndarray`}
   extras : None
     extras object (e.g. protein) used for calculating the metric
-  n_mcmc : `int` (default=`1`)
+  sample_shape : `int` (default=`1`)
     number of MCMC samples for prediction
   batch_size : `int` (default=`64`)
   freq : `int` (default=`3`)
@@ -82,13 +82,13 @@ class SingleCellMetric(Callback):
                inputs: Union[SingleCellOMIC, List[SingleCellOMIC], np.
                              ndarray, List[np.ndarray], None] = None,
                extras=None,
-               n_mcmc=1,
+               sample_shape=1,
                batch_size=64,
                freq=3,
                name=None,
                **kwargs):
     super(SingleCellMetric, self).__init__(**kwargs)
-    self.n_mcmc = n_mcmc
+    self.sample_shape = sample_shape
     self.batch_size = batch_size
     self.inputs = inputs
     self.extras = extras
@@ -113,11 +113,11 @@ class SingleCellMetric(Callback):
            y_pred: List[Distribution], latents: List[Distribution], extras):
     raise NotImplementedError
 
-  def __call__(self, inputs=None, n_mcmc=None):
+  def __call__(self, inputs=None, sample_shape=None):
     if inputs is None:
       inputs = self.inputs
-    if n_mcmc is None:
-      n_mcmc = self.n_mcmc
+    if sample_shape is None:
+      sample_shape = self.sample_shape
     model = self.model
 
     if not isinstance(inputs, (tuple, list)):
@@ -140,7 +140,7 @@ class SingleCellMetric(Callback):
       inputs_corrupt = inputs
 
     outputs, latents = model.predict(inputs_corrupt,
-                                     n_mcmc=self.n_mcmc,
+                                     sample_shape=self.sample_shape,
                                      batch_size=self.batch_size,
                                      verbose=0,
                                      apply_corruption=False)
@@ -220,7 +220,7 @@ class NegativeLogLikelihood(SingleCellMetric):
   inputs : {`SingleCellOMIC`, `numpy.ndarray`}
   extras : None
     extras object (e.g. protein) used for calculating the metric
-  n_mcmc : `int` (default=`1`)
+  sample_shape : `int` (default=`1`)
     number of MCMC samples for prediction
   batch_size : `int` (default=`64`)
   freq : `int` (default=`3`)
@@ -249,7 +249,7 @@ class ImputationError(SingleCellMetric):
   inputs : {`SingleCellOMIC`, `numpy.ndarray`}
   extras : None
     extras object (e.g. protein) used for calculating the metric
-  n_mcmc : `int` (default=`1`)
+  sample_shape : `int` (default=`1`)
     number of MCMC samples for prediction
   batch_size : `int` (default=`64`)
   freq : `int` (default=`3`)
@@ -292,7 +292,7 @@ class CorrelationScores(SingleCellMetric):
   inputs : {`SingleCellOMIC`, `numpy.ndarray`}
   extras : {`SingleCellOMIC`, `numpy.ndarray`}
     the protein array
-  n_mcmc : `int` (default=`1`)
+  sample_shape : `int` (default=`1`)
     number of MCMC samples for prediction
   batch_size : `int` (default=`64`)
   freq : `int` (default=`3`)
@@ -355,7 +355,7 @@ class ClusteringScores(SingleCellMetric):
   inputs : {`SingleCellOMIC`, `numpy.ndarray`}
   extras : {`SingleCellOMIC`, `numpy.ndarray`}
     the protein array
-  n_mcmc : `int` (default=`1`)
+  sample_shape : `int` (default=`1`)
     number of MCMC samples for prediction
   batch_size : `int` (default=`64`)
   freq : `int` (default=`3`)

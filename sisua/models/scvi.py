@@ -7,11 +7,11 @@ import tensorflow as tf
 from tensorflow.python import keras
 from tensorflow_probability.python.distributions import Independent, Normal
 
+from odin.bay import RandomVariable
 from odin.bay.layers import (DenseDistribution, NegativeBinomialDispLayer,
                              ZINegativeBinomialDispLayer)
-from odin.networks import DenseNetwork, Identity
+from odin.networks import Identity, NetworkConfig
 from sisua.models.base import SingleCellModel
-from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 class SCVI(SingleCellModel):
@@ -78,18 +78,27 @@ class SCVI(SingleCellModel):
     # be used
     self.posteriors[0].trainable = False
 
-  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=1):
+  def encode(self,
+             x,
+             lmean=None,
+             lvar=None,
+             y=None,
+             training=None,
+             sample_shape=1):
     # applying encoding
     e_z = self.encoder(x, training=training)
     e_l = self.encoder_l(x, training=training)
     # latent space
-    qZ = self.latent(e_z, training=training, n_mcmc=n_mcmc)
+    qZ = self.latent(e_z, training=training, sample_shape=sample_shape)
     # library space
     if lmean is None or lvar is None:
       pL = None
     else:
       pL = Independent(Normal(loc=lmean, scale=tf.math.sqrt(lvar)), 1)
-    qL = self.library(e_l, training=training, n_mcmc=n_mcmc, prior=pL)
+    qL = self.library(e_l,
+                      training=training,
+                      sample_shape=sample_shape,
+                      prior=pL)
     return qZ, qL
 
   def decode(self, latents, training=None):

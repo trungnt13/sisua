@@ -102,13 +102,13 @@ class ModelTest(unittest.TestCase):
     self._loss_not_rise(dca.train_history['loss'])
     self._loss_not_rise(dca.valid_history['val_loss'])
 
-    pX, qZ = dca.predict(test, n_mcmc=2, verbose=False)
+    pX, qZ = dca.predict(test, sample_shape=2, verbose=False)
     self.assertTrue(isinstance(pX, bay.distributions.VectorDeterministic))
     self.assertTrue(pX.batch_shape[0] == 2 and pX.batch_shape[1] == test.n_obs)
     self.assertTrue(isinstance(qZ, bay.distributions.VectorDeterministic))
 
     X = sco.numpy()[:128]
-    pX, qZ = dca.predict(X, n_mcmc=2, verbose=False)
+    pX, qZ = dca.predict(X, sample_shape=2, verbose=False)
     self.assertTrue(isinstance(pX, bay.distributions.VectorDeterministic))
     self.assertTrue(pX.batch_shape[0] == 2 and pX.batch_shape[1] == X.shape[0])
     self.assertTrue(isinstance(qZ, bay.distributions.VectorDeterministic))
@@ -126,7 +126,7 @@ class ModelTest(unittest.TestCase):
     self._loss_not_rise(vae.valid_history['val_loss'])
 
     X = sco.numpy()[:128]
-    (pX, pY), qZ = vae.predict(X, n_mcmc=2, verbose=False)
+    (pX, pY), qZ = vae.predict(X, sample_shape=2, verbose=False)
 
     self.assertTrue(isinstance(pX.distribution, bay.distributions.ZeroInflated))
     self.assertTrue(
@@ -150,7 +150,7 @@ class ModelTest(unittest.TestCase):
     self._loss_not_rise(sisua.valid_history['val_loss'])
 
     X = sco.numpy()[:128]
-    (pX, pY), qZ = sisua.predict(X, n_mcmc=2, verbose=False)
+    (pX, pY), qZ = sisua.predict(X, sample_shape=2, verbose=False)
 
     self.assertTrue(isinstance(pX.distribution, bay.distributions.ZeroInflated))
     self.assertTrue(

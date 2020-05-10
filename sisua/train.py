@@ -120,7 +120,7 @@ class SisuaExperimenter(Experimenter):
       model_kwargs['latents'] = rv_latent
     self.model = model_cls(**model_kwargs)
 
-  def on_load_model(self, path):
+  def on_load_model(self, cfg, path):
     self.model = load(path, model_index=-1)
     return self.model
 

@@ -29,7 +29,7 @@ np.random.seed(8)
 epochs = 500
 batch_size = 64
 batch_size_pred = 16
-n_mcmc_prediction = 3
+sample_shape_prediction = 3
 VDJ_percent = 0.1  # 0.2 = ~10,000 cells
 
 # ====== flags ====== #
@@ -85,7 +85,7 @@ all_8k_latents = []
 if pbmc8k_predict:
   for m in all_models:
     outputs, latents = m.predict(x_test,
-                                 n_mcmc=n_mcmc_prediction,
+                                 sample_shape=sample_shape_prediction,
                                  batch_size=batch_size_pred,
                                  apply_corruption=False,
                                  enable_cache=False)
@@ -124,7 +124,7 @@ all_vdj_latents = []
 if cellvdj_predict:
   for m in all_models:
     outputs, latents = m.predict(x,
-                                 n_mcmc=n_mcmc_prediction,
+                                 sample_shape=sample_shape_prediction,
                                  batch_size=batch_size_pred,
                                  apply_corruption=False,
                                  enable_cache=False)

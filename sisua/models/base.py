@@ -23,13 +23,14 @@ from tqdm import tqdm
 from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
+from odin.bay import RandomVariable
 from odin.bay.distributions import concat_distribution
 from odin.bay.vi import VariationalAutoencoder
+from odin.networks import NetworkConfig
 from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
                         is_primitive)
 from odin.visual import Visualizer
 from sisua.data import OMIC, SingleCellOMIC
-from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 # ===========================================================================
@@ -61,8 +62,8 @@ def _to_sco(x, rvs) -> SingleCellOMIC:
 
 
 def _to_tfdata(sco: SingleCellOMIC, rvs: List[RandomVariable],
-               mask: Union[np.ndarray, None], batch_size: int, epochs: int,
-               training: bool):
+               mask: Union[np.ndarray,
+                           None], batch_size: int, epochs: int, training: bool):
   r""" Create tensorflow dataset for fitting or predicting """
   is_semi_supervised = len(rvs) > 1
   # matching OMIC with random variable description
@@ -121,14 +122,19 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
   def __init__(self,
                outputs: [RandomVariable, List[RandomVariable]],
                latents=RandomVariable(10, 'diag'),
-               network=NetworkConfig(),
+               encoder=NetworkConfig(units=[64, 64], network='dense'),
+               decoder=NetworkConfig(units=[64, 64], network='dense'),
                kl_interpolate=interpolation.const(vmax=1),
                kl_mcmc=1,
                analytic=True,
                log_norm=True,
                seed=8,
                name=None):
-    super(SingleCellModel, self).__init__(name=name)
+    super().__init__(outputs=outputs,
+                     latents=latents,
+                     encoder=encoder,
+                     decoder=decoder,
+                     name=name)
     self._epochs = self.add_weight(
         name='epochs',
         shape=(),
@@ -308,8 +314,13 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     return z[0] if len(self.latents) == 1 else z
 
   @abstractmethod
-  def encode(self, x, lmean=None, lvar=None, y=None, training=None,
-             n_mcmc=None):
+  def encode(self,
+             x,
+             lmean=None,
+             lvar=None,
+             y=None,
+             training=None,
+             sample_shape=None):
     r""" Encode the input matrix into latents
 
     Arguments:
@@ -319,11 +330,11 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       lvar : [batch_size], variance of library size
       y : [batch_size, n_protein], input for semi-supervised learning
       training : Boolean, flag mark training progress
-      n_mcmc : {`None`, `int`}, number of MCMC samples
+      sample_shape : {`None`, `int`}, number of MCMC samples
 
     Example:
       e = self.encoder(x, training=training)
-      qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
+      qZ = self.latents[0](e, training=training, sample_shape=sample_shape)
     """
     raise NotImplementedError
 
@@ -332,7 +343,7 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     r""" Decode the latents into input matrix
 
     Arguments:
-      z : [batch_size, latent_dim] or [n_mcmc, batch_size, latent_dim], latent
+      z : [batch_size, latent_dim] or [sample_shape, batch_size, latent_dim], latent
         codes
       training : Boolean, flag mark training progress
 
@@ -385,13 +396,18 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       return x, lmean, lvar, y
     return x, lmean, lvar, t, y, mask
 
-  def call(self, inputs, training=None, n_mcmc=1):
+  def call(self, inputs, training=None, sample_shape=1):
     # target : [batch_size, n_genes], target for reconstruction of gene-expression
     #   matrix (can be different from `x`)
     # mask : [batch_size, 1] binary mask for semi-supervised training
     inputs, lmean, lvar, target, y, mask = self.prepare_inputs(inputs)
     # postprocessing the returns
-    qZ = self.encode(inputs, lmean, lvar, y, training=training, n_mcmc=n_mcmc)
+    qZ = self.encode(inputs,
+                     lmean,
+                     lvar,
+                     y,
+                     training=training,
+                     sample_shape=sample_shape)
     pX = self.decode(qZ, training=training)
     # Add Log-likelihood, don't forget to apply mask for semi-supervised loss
     # we have to use the log_prob function from DenseDistribution class, not
@@ -407,12 +423,12 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     kl = tf.convert_to_tensor(0., dtype=inputs.dtype)
     track_kl = []
     for idx, qz in enumerate(tf.nest.flatten(qZ)):
-      div = qz.KL_divergence(analytic=self.analytic, n_mcmc=self._kl_mcmc)
+      div = qz.KL_divergence(analytic=self.analytic, sample_shape=self._kl_mcmc)
       # add mcmc dimension if used close-form KL
       if tf.rank(div) > 0 and self.analytic:
         div = tf.expand_dims(div, axis=0)
-        if n_mcmc > 1:
-          div = tf.tile(div, [n_mcmc] + [1] * (div.shape.ndims - 1))
+        if sample_shape > 1:
+          div = tf.tile(div, [sample_shape] + [1] * (div.shape.ndims - 1))
       track_kl.append((div, 'z%s' % qz.event_shape[0]))
       kl += div
     # Final ELBO
@@ -436,13 +452,13 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       pX = pX[0]
     return pX, qZ
 
-  def evaluate(self, inputs, n_mcmc=1, batch_size=128, verbose=1):
+  def evaluate(self, inputs, sample_shape=1, batch_size=128, verbose=1):
     raise Exception(
         "This method is not support, please use sisua.analysis.Posterior")
 
   def predict(self,
               inputs,
-              n_mcmc=1,
+              sample_shape=1,
               batch_size=64,
               apply_corruption=False,
               verbose=1):
@@ -482,7 +498,9 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       # the _to_tfddata will return (x, y) tuple for `fit` methods,
       # y=None and we only need x here.
       processed = self.prepare_inputs(inputs[0], without_target=True)
-      z = self.encode(*processed, training=False, n_mcmc=int(n_mcmc))
+      z = self.encode(*processed,
+                      training=False,
+                      sample_shape=int(sample_shape))
       x = self.decode(z, training=False)
       # post-processing the return
       if not self.is_semi_supervised and isinstance(x, (tuple, list)):
@@ -524,7 +542,7 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       optimizer: Union[Text, tf.optimizers.Optimizer] = 'adam',
       learning_rate=1e-4,
       clipnorm=100,
-      n_mcmc=1,
+      sample_shape=1,
       semi_percent=0.8,
       semi_weight=10.,
       corruption_rate=0.25,
@@ -562,12 +580,12 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     }
     self._fit_history.append(fit_kwargs)
     # check signature of `call` function
-    # inputs, training=None, n_mcmc=1
+    # inputs, training=None, sample_shape=1
     specs = inspect.getfullargspec(self.call)
-    if specs.args != ['self', 'inputs', 'training', 'n_mcmc']:
+    if specs.args != ['self', 'inputs', 'training', 'sample_shape']:
       raise ValueError(
           "call method must have following arguments %s; bug given %s" %
-          (['self', 'inputs', 'training', 'n_mcmc'], specs.args))
+          (['self', 'inputs', 'training', 'sample_shape'], specs.args))
     # corrupting the data (only the main data, the semi supervised data
     # remain clean)
     if corruption_rate > 0:
@@ -655,8 +673,8 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
 
     # start training loop
     org_fn = self.call
-    if 'n_mcmc' in self._call_fn_args:
-      self.call = partial(self.call, n_mcmc=n_mcmc)
+    if 'sample_shape' in self._call_fn_args:
+      self.call = partial(self.call, sample_shape=sample_shape)
     self._is_fitting = True
 
     # prepare the logging
@@ -688,15 +706,15 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       super(SingleCellModel, self).compile(optimizer,
                                            experimental_run_tf_function=False)
     # fitting
-    logs = super(SingleCellModel, self).fit(x=train_data,
-                                            validation_data=valid_data,
-                                            validation_freq=validation_freq,
-                                            callbacks=callbacks,
-                                            initial_epoch=self.epochs,
-                                            steps_per_epoch=steps_per_epoch,
-                                            validation_steps=validation_steps,
-                                            epochs=self.epochs + epochs,
-                                            verbose=verbose)
+    logs = super().fit(x=train_data,
+                       validation_data=valid_data,
+                       validation_freq=validation_freq,
+                       callbacks=callbacks,
+                       initial_epoch=self.epochs,
+                       steps_per_epoch=steps_per_epoch,
+                       validation_steps=validation_steps,
+                       epochs=self.epochs + epochs,
+                       verbose=verbose)
     # store the history
     for key, val in logs.history.items():
       self._history[key] += val

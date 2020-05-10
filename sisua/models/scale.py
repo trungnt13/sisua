@@ -4,9 +4,9 @@ import inspect
 
 import tensorflow as tf
 
-from odin.networks import Identity
+from odin.bay import RandomVariable
+from odin.networks import Identity, NetworkConfig
 from sisua.models.base import SingleCellModel
-from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 class SCALE(SingleCellModel):
@@ -35,11 +35,17 @@ class SCALE(SingleCellModel):
                              n_components=int(latent_components))
     super().__init__(outputs, latents, **kwargs)
 
-  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=1):
+  def encode(self,
+             x,
+             lmean=None,
+             lvar=None,
+             y=None,
+             training=None,
+             sample_shape=1):
     # applying encoding
     e = self.encoder(x, training=training)
     # latent distribution
-    qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
+    qZ = self.latents[0](e, training=training, sample_shape=sample_shape)
     return qZ
 
   def decode(self, z, training=None):

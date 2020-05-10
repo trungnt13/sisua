@@ -65,7 +65,7 @@ class Posterior(Visualizer):
     gene : a `numpy.ndarray` with shape `[n_samples, n_genes]`
     protein : a `numpy.ndarray` with shape `[n_samples, n_protein]`
     batch_size : an Integer, batch size for the prediction tasks.
-    n_mcmc : an Integer, number of MCMC samples for evaluation
+    sample_shape : an Integer, number of MCMC samples for evaluation
     verbose : a Boolean, turn on verbose
 
   Example
@@ -98,12 +98,12 @@ class Posterior(Visualizer):
                scm: SingleCellModel,
                sco: SingleCellOMIC,
                batch_size=32,
-               n_mcmc=10,
+               sample_shape=10,
                random_state=2,
                verbose=True):
     super(Posterior, self).__init__()
     self.verbose = bool(verbose)
-    self.n_mcmc = int(n_mcmc)
+    self.sample_shape = int(sample_shape)
     self.batch_size = int(batch_size)
     self.rand = random_state \
       if isinstance(random_state, np.random.RandomState) else \
@@ -160,7 +160,7 @@ class Posterior(Visualizer):
       print("Making prediction for clean data ...")
     outputs_clean, latents_clean = scm.predict(sco,
                                                apply_corruption=False,
-                                               n_mcmc=self.n_mcmc,
+                                               sample_shape=self.sample_shape,
                                                batch_size=self.batch_size,
                                                verbose=self.verbose)
     if not isinstance(outputs_clean, (tuple, list)):
@@ -172,7 +172,7 @@ class Posterior(Visualizer):
       print("Making prediction for corrupted data ...")
     outputs_corrupt, latents_corrupt = scm.predict(sco_corrupt,
                                                    apply_corruption=False,
-                                                   n_mcmc=self.n_mcmc,
+                                                   sample_shape=self.sample_shape,
                                                    batch_size=self.batch_size,
                                                    verbose=self.verbose)
     if not isinstance(outputs_corrupt, (tuple, list)):
@@ -426,7 +426,7 @@ class Posterior(Visualizer):
                               corruption_dist=self.scm.corruption_dist,
                               inplace=False)
     outputs, latents = self.scm.predict(x_train,
-                                        n_mcmc=self.n_mcmc,
+                                        sample_shape=self.sample_shape,
                                         batch_size=self.batch_size,
                                         enable_cache=False,
                                         verbose=self.verbose)
@@ -457,7 +457,7 @@ class Posterior(Visualizer):
       self.add_figure('latents_protein_pairs', fig)
     return self
 
-  def plot_latents_risk(self, n_mcmc=100, seed=1):
+  def plot_latents_risk(self, sample_shape=100, seed=1):
     r""" R.I.S.K :
      - Representative : llk from GMM of protein
      - Informative : mutual information
@@ -479,7 +479,7 @@ class Posterior(Visualizer):
       model.fit(np.expand_dims(f, axis=-1))
       gmm.append(model)
     # ====== llk ====== #
-    Z = qZ.sample(n_mcmc, seed=seed).numpy()
+    Z = qZ.sample(sample_shape, seed=seed).numpy()
     llk = np.empty(shape=(n_factor, n_latent), dtype=np.float64)
     for factor_idx in range(n_factor):
       for latent_idx in range(n_latent):
@@ -504,7 +504,7 @@ class Posterior(Visualizer):
                                           maxrow="red",
                                           other="black"),
                          title="Latent presentativeness matrix")
-    self.add_figure('latents_llk_mcmc%d_seed%d' % (n_mcmc, seed),
+    self.add_figure('latents_llk_mcmc%d_seed%d' % (sample_shape, seed),
                     ax.get_figure())
     # ====== mutual information ====== #
     return self

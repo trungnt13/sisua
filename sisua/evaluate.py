@@ -35,17 +35,25 @@ om1, om2 = sco.omics
 varnames1 = sco.omic_varnames(om1)
 varnames2 = sco.omic_varnames(om2)
 # ====== test ====== #
-pos = Posterior(scm=model, sco=test, batch_size=16, n_mcmc=10, verbose=True)
+pos = Posterior(scm=model,
+                sco=test,
+                batch_size=16,
+                sample_shape=10,
+                verbose=True)
 # pos.plot_cellsize_series(log=False)
 crt = pos.create_criticizer(predicted=False, n_samples=100)
 sco = pos.create_sco(keep_omic=OMIC.proteomic)
 # crt.plot_uncertainty_scatter()
-print(crt.cal_density_matrix())
-exit()
-crt.plot_histogram_heatmap(factors=['CD4', 'CD8'],
-                           factor_bins=20,
-                           n_codes_per_factor=None)
-crt.save_figures()
+# crt.cal_disentangled_density()
+# mat1 = crt.cal_density_matrix()
+# mat2, ids = crt.cal_density_matrix(decode=True)
+# vs.plot_heatmap(mat1, ax=(1, 2, 1))
+# vs.plot_heatmap(mat2, ax=(1, 2, 2))
+# vs.plot_save()
+# crt.plot_histogram_heatmap(factors=['CD4', 'CD8', 'CD45RA', 'CD45RO'],
+#                            factor_bins=20,
+#                            n_codes_per_factor=None)
+# crt.save_figures()
 exit()
 # crt.cal_factorvae_score()
 # crt.cal_betavae_score()

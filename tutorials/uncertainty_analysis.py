@@ -33,7 +33,7 @@ if not os.path.exists(SAVE_PATH):
 # or fast_pca, or fast_umap, or fast_tsne
 fn_dim_reduction = partial(fast_umap, n_components=2)
 train_config = dict(batch_size=64, epochs=200, verbose=True)
-n_mcmc = 2
+sample_shape = 2
 latent_dim = 10
 
 network = NetworkConfig(use_conv=True, pyramid=True, conv_proj=128)
@@ -119,7 +119,7 @@ def create_sample(model):
   if isinstance(pZ, tuple):
     pZ = pZ[0]
   mean = pZ.mean()
-  samples = pZ.sample(n_mcmc)
+  samples = pZ.sample(sample_shape)
   return mean, samples
 
 scvi = create_sample(model=scvi)

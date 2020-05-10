@@ -4,7 +4,6 @@ from sisua.models.autoencoder import *
 from sisua.models.base import *
 from sisua.models.scale import *
 from sisua.models.scvi import *
-from sisua.models.utils import *
 from sisua.models.variational_autoencoder import *
 
 

@@ -8,10 +8,10 @@ from typing import List
 import tensorflow as tf
 from tensorflow.python import keras
 
+from odin.bay import RandomVariable
 from odin.bay.layers import DenseDeterministic, DenseDistribution
-from odin.networks import Identity, Parallel
+from odin.networks import Identity, NetworkConfig, Parallel
 from sisua.models.base import SingleCellModel
-from sisua.models.utils import NetworkConfig, RandomVariable
 
 
 class DeepCountAutoencoder(SingleCellModel):
@@ -28,9 +28,15 @@ class DeepCountAutoencoder(SingleCellModel):
       latents = RandomVariable(latent_dim, 'relu', 'latent'),
     super().__init__(outputs, latents, network, **kwargs)
 
-  def encode(self, x, lmean=None, lvar=None, y=None, training=None, n_mcmc=1):
+  def encode(self,
+             x,
+             lmean=None,
+             lvar=None,
+             y=None,
+             training=None,
+             sample_shape=1):
     e = self.encoder(x, training=training)
-    qZ = self.latents[0](e, training=training, n_mcmc=n_mcmc)
+    qZ = self.latents[0](e, training=training, sample_shape=sample_shape)
     return qZ
 
   def decode(self, z, training=None):
