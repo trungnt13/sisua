@@ -1,10 +1,10 @@
 from typing import Dict, Optional, Text
 
-from sisua.models.autoencoder import *
-from sisua.models.base import *
+from sisua.models.dca import *
 from sisua.models.scale import *
 from sisua.models.scvi import *
-from sisua.models.variational_autoencoder import *
+from sisua.models.single_cell_model import *
+from sisua.models.vae import *
 
 
 def get_all_models() -> list:

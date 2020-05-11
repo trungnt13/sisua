@@ -1,6 +1,5 @@
 from __future__ import absolute_import, division, print_function
 
-import warnings
 from numbers import Number
 
 import numpy as np
@@ -12,9 +11,9 @@ from six import string_types
 from odin import search
 from odin import visual as vs
 from odin.bay.vi.utils import discretizing
-from odin.ml import dimension_reduce
 from odin.utils import as_tuple
 from odin.visual import Visualizer, to_axis
+from sisua.data._single_cell_analysis import _OMICanalyzer
 from sisua.data.const import (MARKER_ADT_GENE, MARKER_GENES, OMIC,
                               PROTEIN_PAIR_COMPARISON)
 from sisua.data.utils import is_categorical_dtype
@@ -114,7 +113,7 @@ def _check_proteomic(self):
 # ===========================================================================
 # Main class
 # ===========================================================================
-class SingleCellVisualizer(sc.AnnData, Visualizer):
+class _OMICvisualizer(_OMICanalyzer, Visualizer):
 
   #### Scatter plot
 

@@ -13,9 +13,8 @@ from odin.utils import cache_memory, ctext, one_hot
 from sisua.data import normalization_recipes
 from sisua.data.const import OMIC, UNIVERSAL_RANDOM_SEED
 from sisua.data.path import CONFIG_PATH, DATA_DIR, EXP_DIR
-from sisua.data.single_cell_dataset import (SingleCellOMIC,
-                                            apply_artificial_corruption,
-                                            get_library_size)
+from sisua.data.single_cell_dataset import SingleCellOMIC
+from sisua.data.utils import apply_artificial_corruption, get_library_size
 from sisua.data.utils import (get_gene_id2name, is_binary_dtype,
                               is_categorical_dtype, standardize_protein_name,
                               validating_dataset)

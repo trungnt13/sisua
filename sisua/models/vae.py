@@ -5,42 +5,13 @@ from typing import List
 
 import tensorflow as tf
 
-from odin.networks import Identity
-from sisua.models.base import SingleCellModel
-from sisua.models.utils import NetworkConfig, RandomVariable
+from odin.bay import RandomVariable
+from odin.networks import Identity, NetworkConfig
+from sisua.models.single_cell_model import SingleCellModel
 
 
 class VariationalAutoEncoder(SingleCellModel):
   r""" Variational Auto Encoder """
-
-  def __init__(self,
-               outputs: List[RandomVariable],
-               latent_dim=10,
-               network=NetworkConfig(),
-               **kwargs):
-    latents = kwargs.pop('latents', None)
-    if latents is None:
-      latents = RandomVariable(latent_dim, 'diag', 'latent'),
-    super().__init__(outputs, latents, network, **kwargs)
-
-  def encode(self,
-             x,
-             lmean=None,
-             lvar=None,
-             y=None,
-             training=None,
-             sample_shape=1):
-    # applying encoding
-    e = self.encoder(x, training=training)
-    # latent distribution
-    qZ = self.latents[0](e, training=training, sample_shape=sample_shape)
-    return qZ
-
-  def decode(self, z, training=None):
-    # decoding the latent
-    d = self.decoder(z, training=training)
-    pX = [p(d, training=training) for p in self.posteriors]
-    return pX
 
 
 class SISUA(VariationalAutoEncoder):
