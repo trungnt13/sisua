@@ -3,44 +3,25 @@
 # Modification by Trung Ngo 2019
 from __future__ import absolute_import, division, print_function
 
-from typing import List
+import warnings
 
 import tensorflow as tf
-from tensorflow.python import keras
 
-from odin.bay import RandomVariable
-from odin.bay.layers import DenseDeterministic, DenseDistribution
-from odin.networks import Identity, NetworkConfig, Parallel
-from sisua.models.base import SingleCellModel
+from sisua.models.single_cell_model import RandomVariable, SingleCellModel
 
 
 class DeepCountAutoencoder(SingleCellModel):
   r""" Deep Count Autoencoder """
 
   def __init__(self,
-               outputs: List[RandomVariable],
-               latent_dim=10,
-               network=NetworkConfig(),
+               latents=RandomVariable(10, 'relu', True, name="Latents"),
                **kwargs):
-    # force a deterministic latent space:
-    latents = kwargs.pop('latents', None)
-    if latents is None:
-      latents = RandomVariable(latent_dim, 'relu', 'latent'),
-    super().__init__(outputs, latents, network, **kwargs)
-
-  def encode(self,
-             x,
-             lmean=None,
-             lvar=None,
-             y=None,
-             training=None,
-             sample_shape=1):
-    e = self.encoder(x, training=training)
-    qZ = self.latents[0](e, training=training, sample_shape=sample_shape)
-    return qZ
-
-  def decode(self, z, training=None):
-    # the first dimension always the MCMC sample dimension
-    d = self.decoder(z, training=training)
-    pX = [p(d, training=training) for p in self.posteriors]
-    return pX
+    # force a deterministic latent space
+    latents = tf.nest.flatten(latents)
+    for z in latents:
+      if not z.is_deterministic:
+        warnings.warn(
+            "DeepCountAutoencoder only support deterministic latents, "
+            f"but given {z}, use default linear Dense layer for latents.")
+        z.posterior = 'linear'
+    super().__init__(latents=latents, **kwargs)

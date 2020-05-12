@@ -25,7 +25,7 @@ np.random.seed(8)
 
 exp = SisuaExperimenter()
 model, cfg = exp.sample_model({"model": "sisua", "dataset.name": "8kly"})
-sco = get_dataset(model.fitted_dataset)
+sco = get_dataset(model.dataset)
 split = float(cfg.dataset.get('split', 0.8))
 train, test = sco.split(0.98)
 x = test.dimension_reduce(algo='tsne')

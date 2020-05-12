@@ -14,6 +14,7 @@ import tensorflow as tf
 from six import add_metaclass, string_types
 from tensorflow import keras
 from tensorflow.python.data import Dataset
+from tensorflow.python.data.ops.dataset_ops import DatasetV2
 from tensorflow.python.keras.callbacks import (Callback, CallbackList,
                                                LambdaCallback,
                                                LearningRateScheduler,
@@ -26,21 +27,38 @@ from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
 from odin.bay import RandomVariable
 from odin.bay.distributions import concat_distribution
-from odin.bay.vi import VariationalAutoencoder
+from odin.bay.vi import BetaVAE
 from odin.networks import NetworkConfig
 from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
                         is_primitive)
 from odin.visual import Visualizer
 from sisua.data import OMIC, SingleCellOMIC
 
-__all__ = [
-  'SingleCellModel'
-]
+__all__ = ['SingleCellModel', 'NetworkConfig', 'RandomVariable', 'interpolation']
+
+
+def _to_data(x, batch_size=64) -> Dataset:
+  if isinstance(x, SingleCellOMIC):
+    inputs = x.create_dataset(batch_size=batch_size)
+  elif isinstance(x, DatasetV2):
+    inputs = x
+  # given numpy ndarrays
+  else:
+    x = tf.nest.flatten(x)
+    inputs = SingleCellOMIC(x[0])
+    if len(x) > 1:
+      omics = list(OMIC)
+      # we don't know what is the omic of data anyway, random assigning it
+      for arr, om_random in zip(x[1:], omics[1:]):
+        inputs.add_omic(omic=om_random, X=arr)
+    inputs = inputs.create_dataset(inputs.omics, batch_size=batch_size)
+  return inputs
+
 
 # ===========================================================================
 # SingleCell model
 # ===========================================================================
-class SingleCellModel(VariationalAutoencoder, Visualizer):
+class SingleCellModel(BetaVAE, Visualizer):
   r"""
   Note:
     It is recommend to call `tensorflow.random.set_seed` for reproducible
@@ -51,48 +69,32 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       self,
       outputs: RandomVariable,
       latents: RandomVariable = RandomVariable(10, 'diag', True, 'Latents'),
-      encoder: NetworkConfig = NetworkConfig(units=[64, 64], network='dense'),
-      decoder: NetworkConfig = NetworkConfig(units=[64, 64], network='dense'),
-      kl_interpolate=interpolation.const(vmax=1),
+      encoder: NetworkConfig = NetworkConfig([64, 64],
+                                             batchnorm=True,
+                                             input_dropout=0.3),
+      decoder: NetworkConfig = NetworkConfig([64, 64], batchnorm=True),
       analytic=True,
       log_norm=True,
+      beta=1.0,
       name=None,
+      **kwargs,
   ):
     super().__init__(outputs=outputs,
                      latents=latents,
                      encoder=encoder,
                      decoder=decoder,
-                     name=name)
-    # parameters for ELBO
+                     beta=beta,
+                     name=name,
+                     **kwargs)
     self._analytic = bool(analytic)
-    assert isinstance(kl_interpolate, interpolation.Interpolation), \
-      'kl_interpolate must be instance of odin.backend.interpolation.Interpolation,' + \
-        'but given type: %s' % str(type(kl_interpolate))
-    if kl_interpolate.norm is None and kl_interpolate != interpolation.const:
-      raise ValueError("interpolation normalization constant (i.e. 'norm') "
-                       "must be provided.")
-    self._kl_interpolate = kl_interpolate
     self._log_norm = bool(log_norm)
     self._dataset = None
+    self._n_inputs = max(len(l.inputs) for l in tf.nest.flatten(self.encoder))
 
   @property
-  def fitted_dataset(self):
+  def dataset(self):
     r""" Return the name of the last SingleCellOMIC dataset fitted on """
-    if not self.is_fitted:
-      return None
-    return self._fit_history[-1]['inputs']
-
-  @property
-  def corruption_rate(self):
-    if len(self.fit_history) == 0:
-      return 0.
-    return max(i['corruption_rate'] for i in self.fit_history)
-
-  @property
-  def corruption_dist(self):
-    if len(self.fit_history) == 0:
-      return 'binomial'
-    return list(set(i['corruption_dist'] for i in self.fit_history))[-1]
+    return self._dataset
 
   @property
   def log_norm(self):
@@ -109,24 +111,21 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
     args = inspect.getfullargspec(self.__init__).args
     return 'rna_dim' in args and 'adt_dim' in args
 
-  @property
-  def epochs(self):
-    return int(self._epochs.numpy())
-
-  @property
-  def analytic(self):
-    return self._analytic
-
-  @property
-  def kl_weight(self):
-    return self._kl_interpolate(self.step)
-
   def encode(self,
              inputs,
              library=None,
              training=None,
              mask=None,
              sample_shape=()):
+    if self.log_norm:
+      if tf.is_tensor(inputs):
+        inputs = tf.math.log1p(inputs)
+      else:
+        inputs = tf.nest.flatten(inputs)
+        inputs[0] = tf.math.log1p(inputs[0])
+    # just limit the number of inputs
+    if isinstance(inputs, (tuple, list)):
+      inputs = inputs[:self._n_inputs]
     return super().encode(inputs=inputs,
                           training=training,
                           mask=mask,
@@ -138,79 +137,8 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
                           mask=mask,
                           sample_shape=sample_shape)
 
-  def test(self,
-           inputs,
-           library=None,
-           mask=None,
-           sample_shape=(),
-           training=None):
-    # target : [batch_size, n_genes], target for reconstruction of gene-expression
-    #   matrix (can be different from `x`)
-    # mask : [batch_size, 1] binary mask for semi-supervised training
-    inputs, lmean, lvar, target, y, mask = self.prepare_inputs(inputs)
-    # postprocessing the returns
-    qZ = self.encode(inputs,
-                     lmean,
-                     lvar,
-                     y,
-                     training=training,
-                     sample_shape=sample_shape)
-    pX = self.decode(qZ, training=training)
-    # Add Log-likelihood, don't forget to apply mask for semi-supervised loss
-    # we have to use the log_prob function from DenseDistribution class, not
-    # the one in pX
-    llk_x = self.posteriors[0].log_prob(target)
-    llk_y = tf.convert_to_tensor(0, dtype=inputs.dtype)
-    track_llky = []
-    for i_true, m, post in zip(y, mask, self.posteriors[1:]):
-      llk = post.log_prob(i_true) * m
-      track_llky.append((llk, post.name.lower()))
-      llk_y += llk
-    # calculating the KL
-    kl = tf.convert_to_tensor(0., dtype=inputs.dtype)
-    track_kl = []
-    for idx, qz in enumerate(tf.nest.flatten(qZ)):
-      div = qz.KL_divergence(analytic=self.analytic, sample_shape=self._kl_mcmc)
-      # add mcmc dimension if used close-form KL
-      if tf.rank(div) > 0 and self.analytic:
-        div = tf.expand_dims(div, axis=0)
-        if sample_shape > 1:
-          div = tf.tile(div, [sample_shape] + [1] * (div.shape.ndims - 1))
-      track_kl.append((div, 'z%s' % qz.event_shape[0]))
-      kl += div
-    # Final ELBO
-    beta = self.kl_weight if training else 1.
-    self.add_metric(beta, 'mean', 'beta')
-    elbo = (llk_x + llk_y) - tf.expand_dims(kl, axis=-1) * beta
-    elbo = tf.reduce_logsumexp(elbo, axis=0)
-    loss = tf.reduce_mean(-elbo)
-    # add loss and metrics
-    self.add_loss(
-        tf.cond(training,
-                true_fn=lambda: loss,
-                false_fn=lambda: tf.stop_gradient(loss)))
-    self.add_metric(llk_x, 'mean', "llk_%s" % self.posteriors[0].name.lower())
-    for llk_val, name in track_llky:
-      self.add_metric(llk_val, 'mean', "llk_%s" % name)
-    for kl_val, name in track_kl:
-      self.add_metric(kl_val, 'mean', "klqp_%s" % name)
-    # post-processing the return
-    if not self.is_semi_supervised and isinstance(pX, (tuple, list)):
-      pX = pX[0]
-    return pX, qZ
-
-  def predict(self,
-              inputs,
-              sample_shape=1,
-              batch_size=64,
-              apply_corruption=False,
-              verbose=1):
+  def predict(self, inputs, sample_shape=(), batch_size=64, verbose=True):
     r"""
-    Arguments:
-      apply_corruption : `bool` (default=`False`)
-        if `True` applying corruption on data before prediction to match the
-        condition during fitting.
-
     Return:
       X : `Distribution` or tuple of `Distribution`
         output distribution, multiple distribution is return in case of
@@ -219,42 +147,21 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
         latent distribution, multiple distribution is return in case of
         multiple latents
     """
-    inputs = _to_sco(inputs, self.omic_outputs)
-    ## applying corruption for testing
-    if apply_corruption and self.corruption_rate is not None:
-      inputs = inputs.corrupt(dropout_rate=self.corruption_rate,
-                              distribution=self.corruption_dist,
-                              inplace=False)
-    n = inputs.n_obs
-    data = _to_tfdata(sco=inputs,
-                      rvs=self.omic_outputs,
-                      mask=None,
-                      batch_size=batch_size,
-                      epochs=1,
-                      training=False)
+    inputs = _to_data(inputs, batch_size=batch_size)
     ## making predictions
     X, Z = [], []
-    for inputs in tqdm(data,
-                       desc="Predicting",
-                       total=int(np.ceil(n / batch_size)),
-                       disable=not bool(verbose)):
-      # the _to_tfddata will return (x, y) tuple for `fit` methods,
-      # y=None and we only need x here.
-      processed = self.prepare_inputs(inputs[0], without_target=True)
-      z = self.encode(*processed,
-                      training=False,
-                      sample_shape=int(sample_shape))
-      x = self.decode(z, training=False)
-      # post-processing the return
-      if not self.is_semi_supervised and isinstance(x, (tuple, list)):
-        x = x[0]
-      X.append(x)
-      Z.append(z)
+    prog = tqdm(inputs, desc="Predicting", disable=not bool(verbose))
+    for data in prog:
+      pX_Z, qZ_X = self(**data, training=False, sample_shape=sample_shape)
+      X.append(pX_Z)
+      Z.append(qZ_X)
+    prog.clear()
+    prog.close()
     # merging the batch distributions
-    if isinstance(x, (tuple, list)):
-      merging_axis = 0 if x[0].batch_shape.ndims == 1 else 1
+    if isinstance(pX_Z, (tuple, list)):
+      merging_axis = 0 if pX_Z[0].batch_shape.ndims == 1 else 1
     else:
-      merging_axis = 0 if x.batch_shape.ndims == 1 else 1
+      merging_axis = 0 if pX_Z.batch_shape.ndims == 1 else 1
     # multiple outputs
     if isinstance(X[0], (tuple, list)):
       X = tuple([
@@ -281,17 +188,17 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
 
   def fit(
       self,
-      train: Union[SingleCellOMIC, Dataset],
-      valid: Union[SingleCellOMIC, Dataset] = None,
+      train: Union[SingleCellOMIC, DatasetV2],
+      valid: Union[SingleCellOMIC, DatasetV2] = None,
       valid_freq=500,
       valid_interval=0,
       optimizer='adam',
       learning_rate=1e-3,
-      clipnorm=None,
+      clipnorm=100,
       epochs=-1,
       max_iter=1000,
       sample_shape=(),  # for ELBO
-      analytic=False,  # for ELBO
+      analytic=None,  # for ELBO
       callback=None,
       compile_graph=True,
       autograph=False,
@@ -308,16 +215,14 @@ class SingleCellModel(VariationalAutoencoder, Visualizer):
       allow_none_gradients=False):
     r""" This fit function is the combination of both
     `Model.compile` and `Model.fit` """
-    assert isinstance(train, (SingleCellOMIC, Dataset))
-    if valid is not None:
-      assert isinstance(valid, (SingleCellOMIC, Dataset))
+    if analytic is None:
+      analytic = self._analytic
     ## preprocessing the data
     if isinstance(train, SingleCellOMIC):
       self._dataset = train.name
-      train = train.create_dataset()
-    if isinstance(valid, SingleCellOMIC):
-      self._dataset = valid.name
-      valid = valid.create_dataset()
+    train = _to_data(train)
+    if valid is not None:
+      valid = _to_data(valid)
     ## call fit
     kw = locals()
     del kw['self']

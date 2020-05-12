@@ -7,11 +7,11 @@ import tensorflow as tf
 from tensorflow.python import keras
 from tensorflow_probability.python.distributions import Independent, Normal
 
-from odin.bay import RandomVariable
 from odin.bay.layers import (DenseDistribution, NegativeBinomialDispLayer,
                              ZINegativeBinomialDispLayer)
-from odin.networks import Identity, NetworkConfig
-from sisua.models.base import SingleCellModel
+from odin.networks import Identity
+from sisua.models.single_cell_model import (NetworkConfig, RandomVariable,
+                                            SingleCellModel)
 
 
 class SCVI(SingleCellModel):
@@ -28,45 +28,48 @@ class SCVI(SingleCellModel):
 
   """
 
-  def __init__(self,
-               outputs: List[RandomVariable],
-               latent_dim=10,
-               network=NetworkConfig(),
-               clip_library=1e4,
-               **kwargs):
-    latents = kwargs.pop('latents', None)
-    if latents is None:
-      latents = [
-          RandomVariable(latent_dim, 'diag', 'latent'),
-          RandomVariable(1, 'gaus', 'library')
-      ]
-    super().__init__(outputs=outputs,
-                     latents=latents,
-                     network=network,
-                     **kwargs)
-    self.encoder_l = DenseNetwork(
-        units=tf.nest.flatten(self.network_config.hidden_dim)[0],
-        activation=self.network_config.activation,
-        batchnorm=self.network_config.batchnorm,
-        input_dropout=self.network_config.input_dropout,
-        output_dropout=self.network_config.encoder_dropout,
-        name='EncoderL')
-    assert self.omic_outputs[0].posterior in ('zinbd', 'nbd'), \
+  def __init__(
+      self,
+      outputs,
+      latents=RandomVariable(10, 'diag', True, "Latents"),
+      library=RandomVariable(1, 'normal', True, "Library"),
+      encoder=NetworkConfig([64, 64],
+                            batchnorm=True,
+                            dropout=0.1,
+                            name='Encoder'),
+      encoder_l=NetworkConfig([64],
+                              batchnorm=True,
+                              dropout=0.1,
+                              name='EncoderL'),
+      clip_library=1e4,
+      **kwargs,
+  ):
+    outputs = tf.nest.flatten(outputs)
+    assert outputs[0].posterior in ('zinbd', 'nbd'), \
       "scVI only support transcriptomic distribution: 'zinbd' or 'nbd', " + \
-        "but given: %s" % self.omic_outputs[0].posterior
-    self.latent = self.latents[0]
-    self.library = self.latents[1]
+        "but given: %s" % str(outputs)
+    outputs[0].projection = False
+    super().__init__(outputs,
+                     latents=[latents, library],
+                     encoder=[encoder, encoder_l],
+                     reduce_latent=lambda Zs: Zs[0],
+                     **kwargs)
+    ### prepare the library
     self.clip_library = float(clip_library)
     n_dims = self.posteriors[0].event_shape[0]
+    # decoder outputs
+    decoder_output = self.decoder.outputs[0]
     # mean gamma (logits value, applying softmax later)
     self.px_scale = keras.layers.Dense(units=n_dims,
                                        activation='linear',
                                        name="MeanScale")
+    self.px_scale(decoder_output)  # build the layer
     # dropout logits value
     if self.is_zero_inflated:
       self.px_dropout = keras.layers.Dense(n_dims,
                                            activation='linear',
                                            name="DropoutLogits")
+      self.px_dropout(decoder_output)  # build the layer
     else:
       self.px_dropout = Identity(name="DropoutLogits")
     # dispersion (NOTE: while this is different implementation, it ensures the
@@ -74,34 +77,31 @@ class SCVI(SingleCellModel):
     self.px_r = keras.layers.Dense(n_dims,
                                    activation='linear',
                                    name='Dispersion')
+    self.px_r(decoder_output)  # build the layer
     # since we feed the params directly, the DenseDistribution parameters won't
     # be used
     self.posteriors[0].trainable = False
 
   def encode(self,
-             x,
-             lmean=None,
-             lvar=None,
-             y=None,
+             inputs,
+             library=None,
              training=None,
-             sample_shape=1):
-    # applying encoding
-    e_z = self.encoder(x, training=training)
-    e_l = self.encoder_l(x, training=training)
-    # latent space
-    qZ = self.latent(e_z, training=training, sample_shape=sample_shape)
-    # library space
-    if lmean is None or lvar is None:
-      pL = None
+             mask=None,
+             sample_shape=()):
+    qZ_X = super().encode(inputs=inputs,
+                          library=library,
+                          training=training,
+                          mask=mask,
+                          sample_shape=sample_shape)
+    if library is not None:
+      mean, var = tf.split(tf.nest.flatten(library)[0], 2, axis=1)
+      pL = Independent(Normal(loc=mean, scale=tf.math.sqrt(var)), 1)
     else:
-      pL = Independent(Normal(loc=lmean, scale=tf.math.sqrt(lvar)), 1)
-    qL = self.library(e_l,
-                      training=training,
-                      sample_shape=sample_shape,
-                      prior=pL)
-    return qZ, qL
+      pL = None
+    qZ_X[-1].KL_divergence.prior = pL
+    return qZ_X
 
-  def decode(self, latents, training=None):
+  def decode(self, latents, training=None, mask=None, sample_shape=()):
     qZ, qL = latents
     Z_samples = qZ
     # clipping L value to avoid overflow, softplus(12) = 12
@@ -111,13 +111,13 @@ class SCVI(SingleCellModel):
     # ====== parameterizing the distribution ====== #
     # mean parameterizations
     px_scale = tf.nn.softmax(self.px_scale(d), axis=1)
-    px_scale = tf.clip_by_value(px_scale, 1e-8, 1. - 1e-8)
+    px_scale = tf.clip_by_value(px_scale, 1e-7, 1. - 1e-7)
     # NOTE: scVI use exp but we use softplus here
-    px_rate = tf.nn.softplus(L_samples) * px_scale
+    px_rate = tf.exp(L_samples) * px_scale
     # dispersion parameterizations
     px_r = self.px_r(d)
     # NOTE: scVI use exp but we use softplus here
-    px_r = tf.nn.softplus(px_r)
+    px_r = tf.exp(px_r)
     # dropout for zero inflation
     px_dropout = self.px_dropout(d)
     # mRNA expression distribution

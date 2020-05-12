@@ -5,21 +5,27 @@ from typing import List
 
 import tensorflow as tf
 
-from odin.bay import RandomVariable
-from odin.networks import Identity, NetworkConfig
-from sisua.models.single_cell_model import SingleCellModel
+from odin.bay.vi.autoencoder import MultitaskVAE
+from sisua.models.single_cell_model import RandomVariable, SingleCellModel
 
 
 class VariationalAutoEncoder(SingleCellModel):
   r""" Variational Auto Encoder """
 
 
-class SISUA(VariationalAutoEncoder):
-  r""" SemI-SUpervised Autoencoder
+class SISUA(MultitaskVAE, SingleCellModel):
+  r""" Multi-task SemI-SUpervised Autoencoder
 
     - Transcriptomic : zero-inflated negative binomial distribution
     - Proteomic : negative binomial or onehot-categorical distribution
     - Latent : multi-variate normal with diagonal covariance
+
+    The following RandomVariable configurations are used in the paper:
+
+    ```
+    RandomVariable(rna_dim, 'zinbd'/'zinb', projection=True, name='RNA')
+    RandomVariable(adt_dim, 'onehot'/'nbd'/'nb', True, 'ADT')
+    ```
 
   Arguments:
     rna_dim : Integer, number of input dimension for scRNA-seq.
@@ -28,59 +34,35 @@ class SISUA(VariationalAutoEncoder):
       otherwise, use `NegativeBinomial`.
     alternative_nb : Boolean, if True, use mean-dispersion parameterization
       for negative binomial distribution.
+
+  Reference:
+    Ngo Trong, T., Kramer, R., Mehtonen, J., González, G., Hautamäki,
+      V., Heinäniemi, M., 2019. "SISUA: Semi-Supervised Generative Autoencoder
+      for Single Cell Data". bioRxiv. https://doi.org/10.1101/631382
+
   """
 
-  def __init__(self,
-               rna_dim=None,
-               adt_dim=None,
-               latent_dim=10,
-               is_adt_probability=False,
-               alternative_nb=False,
-               **kwargs):
-    outputs = kwargs.pop('outputs', None)
-    if outputs is None:
-      rna = RandomVariable(dim=rna_dim,
-                           posterior='zinbd' if alternative_nb else 'zinb',
-                           name='RNA')
-      adt = RandomVariable(dim=adt_dim,
-                           posterior='onehot' if is_adt_probability else
-                           ('nbd' if alternative_nb else 'nb'),
-                           name='ADT')
-      outputs = [rna, adt]
-    super().__init__(outputs, latent_dim=latent_dim, **kwargs)
+  def __init__(self, outputs, labels, **kwargs):
+    super().__init__(outputs=outputs,
+                     labels=labels,
+                     input_shape=tf.nest.flatten(outputs)[0].event_shape,
+                     **kwargs)
 
 
-class MISA(VariationalAutoEncoder):
-  r""" MIxture Semi-supervised Autoencoder
+class MISA(SISUA):
+  r""" MIxture labels for Semi-supervised Autoencoder """
 
-  Arguments:
-    rna_dim : Integer, number of input dimension for scRNA-seq.
-    adt_dim : Integer, number of input dimension for ADT.
-    mixture_gaussian : Boolean, if True, use GMM for modeling the ADT,
-      otherwise, use mixture of `NegativeBinomial`.
-    alternative_nb : Boolean, if True, use mean-dispersion parameterization
-      for negative binomial distribution.
-  """
-
-  def __init__(self,
-               rna_dim=None,
-               adt_dim=None,
-               latent_dim=10,
-               mixture_gaussian=False,
-               alternative_nb=False,
-               **kwargs):
-    outputs = kwargs.pop('outputs', None)
-    if outputs is None:
-      rna = RandomVariable(dim=rna_dim,
-                           posterior='zinbd' if alternative_nb else 'zinb',
-                           name='RNA')
-      kw = dict(n_components=2)
-      if not mixture_gaussian:
-        kw['alternative'] = alternative_nb
-      adt = RandomVariable(
-          dim=adt_dim,
-          posterior='mixgaussian' if mixture_gaussian else 'mixnb',
-          name='ADT',
-          **kw)
-      outputs = [rna, adt]
-    super().__init__(outputs, latent_dim=latent_dim, **kwargs)
+  def __init__(self, labels, n_components=2, zero_inflated=False, **kwargs):
+    labels = tf.nest.flatten(labels)
+    n_components = int(n_components)
+    zero_inflated = bool(zero_inflated)
+    for rv in labels:
+      if 'n_components' not in rv.kwargs:
+        rv.kwargs['n_components'] = n_components
+      if 'zero_inflated' not in rv.kwargs:
+        rv.kwargs['zero_inflated'] = zero_inflated
+      if rv.is_discrete or rv.is_binary:
+        rv.posterior = 'mixnb'
+      else:
+        rv.posterior = 'mixgaussian'
+    super().__init__(labels=labels, **kwargs)

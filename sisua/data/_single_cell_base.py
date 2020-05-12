@@ -139,7 +139,7 @@ class _OMICbase(sc.AnnData):
         break
     return name
 
-  def _record_call(self, name: str, local: dict):
+  def _record(self, name: str, local: dict):
     method = getattr(self, name)
     specs = inspect.getfullargspec(method)
     assert inspect.ismethod(method)
@@ -156,7 +156,7 @@ class _OMICbase(sc.AnnData):
         print(" ", k, ':', v)
 
   def add_omic(self, omic: OMIC, X: np.ndarray, var_names=None):
-    self._record_call('add_omic', locals())
+    self._record('add_omic', locals())
     omic = OMIC.parse(omic)
     assert X.shape[0] == self.X.shape[0], \
       "Number of samples of new omic type mismatch, given: %s, require: %s" % \
@@ -178,7 +178,7 @@ class _OMICbase(sc.AnnData):
 
   # ******************** shape manipulation ******************** #
   def assert_matching_cells(self, sco):
-    assert isinstance(sco, SingleCellOMIC), \
+    assert isinstance(sco, _OMICbase), \
       "sco must be instance of SingleCellOMIC"
     assert sco.shape[0] == self.shape[0], \
       "Number of cell mismatch %d and %d" % (self.shape[0], sco.shape[0])
@@ -201,18 +201,8 @@ class _OMICbase(sc.AnnData):
     self.obsm[omic.name + '_stats'] = np.hstack(
         [total_counts, log_counts, local_mean, local_var])
 
-  def copy(self, filename=None):
-    r""" Full copy, optionally on disk. (this code is copied from
-    `AnnData`, modification to return `SingleCellOMIC` instance.
-    """
-    self._record_call('copy', locals())
-    anndata = super().copy(filename)
-    anndata._name = self.name
-    sco = self.__class__(anndata, asview=False)
-    return sco
-
   def __getitem__(self, index):
-    """Returns a sliced view of the object."""
+    r"""Returns a sliced view of the object."""
     oidx, vidx = self._normalize_indices(index)
     om = self.__class__(self, oidx=oidx, vidx=vidx, asview=True)
     om._n_obs, om._n_vars = om.X.shape
@@ -237,7 +227,7 @@ class _OMICbase(sc.AnnData):
         if True, applying the indices to the observation (i.e. axis=0),
         otherwise, to the variable (i.e. axis=1)
     """
-    self._record_call('apply_indices', locals())
+    self._record('apply_indices', locals())
     indices = np.array(indices)
     itype = indices.dtype.type
     if not issubclass(itype, (np.bool, np.bool_, np.integer)):
@@ -255,46 +245,6 @@ class _OMICbase(sc.AnnData):
       self._varm = AxisArrays(
           self, 1, vals={i: j[indices] for i, j in self._varm.items()})
     return self
-
-  def split(self,
-            train_percent=0.8,
-            copy=True,
-            seed=1) -> Tuple['_OMICbase', '_OMICbase']:
-    r""" Spliting the data into training and test dataset
-
-    Arguments:
-      train_percent : `float` (default=0.8)
-        the percent of data used for training, the rest is for testing
-      copy : a Boolean. if True, copy the data before splitting.
-      seed : `int` (default=8)
-        the same seed will ensure the same partition of any `SingleCellOMIC`,
-        as long as all the data has the same number of `SingleCellOMIC.nsamples`
-
-    Returns:
-      train : `SingleCellOMIC`
-      test : `SingleCellOMIC`
-
-    Example:
-    >>> x_train, x_test = x.split()
-    >>> y_train, y_test = y.split()
-    >>> assert np.all(x_train.obs['cellid'] == y_train.obs['cellid'])
-    >>> assert np.all(x_test.obs['cellid'] == y_test.obs['cellid'])
-    >>> #
-    >>> x_train_train, x_train_test = x_train.split()
-    >>> assert np.all(x_train_train.obs['cellid'] ==
-    >>>               y_train[x_train_train.indices].obs['cellid'])
-    """
-    self._record_call('split', locals())
-    assert 0 < train_percent < 1
-    ids = np.random.RandomState(seed=seed).permutation(
-        self.n_obs).astype('int32')
-    ntrain = int(train_percent * self.n_obs)
-    train_ids = ids[:ntrain]
-    test_ids = ids[ntrain:]
-    om = self.copy() if copy else self
-    train = om[train_ids]
-    test = om[test_ids]
-    return train, test
 
   # ******************** properties ******************** #
   @property
@@ -488,6 +438,8 @@ class _OMICbase(sc.AnnData):
     framework = str(framework).lower().strip()
     assert framework in ('tf', 'pt', 'tensorflow', 'pytorch'), \
       f"Only support tensorflow or pytorch framework, given: {framework}"
+    if isinstance(omics, OMIC):
+      omics = list(omics)
     omics = [OMIC.parse(o) for o in tf.nest.flatten(omics)]
     inputs = [self.get_omic_data(o) for o in omics]
     # library size
@@ -507,12 +459,14 @@ class _OMICbase(sc.AnnData):
 
     def masking(*data):
       if labels_percent == 0.:
-        mask = (False,)
+        mask = False
       else:
         mask = gen.uniform(shape=(1,)) < labels_percent
       inputs = data[:len(omics)]
       library = data[len(omics):]
-      return dict(inputs=inputs, library=library, mask=mask)
+      return dict(inputs=inputs[0] if len(inputs) == 1 else inputs,
+                  library=library[0] if len(library) == 1 else library,
+                  mask=mask)
 
     ds = ds.map(masking, tf.data.experimental.AUTOTUNE)
     # post processing
@@ -527,7 +481,7 @@ class _OMICbase(sc.AnnData):
 
   def save_to_mmaparray(self, path, dtype=None):
     """ This only save the data without row names and column names """
-    self._record_call('save_to_mmaparray', locals())
+    self._record('save_to_mmaparray', locals())
     with MmapArrayWriter(path=path,
                          shape=self.shape,
                          dtype=self.dtype if dtype is None else dtype,

@@ -1,12 +1,11 @@
 from __future__ import absolute_import, division, print_function
 
-import inspect
+import warnings
 
 import tensorflow as tf
 
-from odin.bay import RandomVariable
-from odin.networks import Identity, NetworkConfig
-from sisua.models.base import SingleCellModel
+from sisua.models.single_cell_model import RandomVariable, SingleCellModel
+from sisua.models.vae import SISUA
 
 
 class SCALE(SingleCellModel):
@@ -22,65 +21,28 @@ class SCALE(SingleCellModel):
       https://www.nature.com/articles/s41467-019-12630-7
   """
 
-  def __init__(self, outputs, latent_dim=10, latent_components=8, **kwargs):
-    kwargs['analytic'] = False
-    latents = kwargs.pop('latents', None)
-    if hasattr(latents, 'dim'):
-      latent_dim = latents.dim
-    elif isinstance(latents, (tuple, list)):
-      latent_dim = latents[0].dim
-    # override the latent
-    latents = RandomVariable(int(latent_dim),
-                             'mixdiag',
-                             n_components=int(latent_components))
-    super().__init__(outputs, latents, **kwargs)
-
-  def encode(self,
-             x,
-             lmean=None,
-             lvar=None,
-             y=None,
-             training=None,
-             sample_shape=1):
-    # applying encoding
-    e = self.encoder(x, training=training)
-    # latent distribution
-    qZ = self.latents[0](e, training=training, sample_shape=sample_shape)
-    return qZ
-
-  def decode(self, z, training=None):
-    # decoding the latent
-    d = self.decoder(z, training=training)
-    pX = [p(d, training=training) for p in self.posteriors]
-    return pX
+  def __init__(self,
+               latents=RandomVariable(10, 'mixdiag', True, name="Latents"),
+               latent_components=8,
+               **kwargs):
+    latents = tf.nest.flatten(latents)
+    latent_components = int(latent_components)
+    for z in latents:
+      if z.posterior != 'mixdiag':
+        warnings.warn("SCALE only allow 'mixdiag' posterior for latents, "
+                      f"given: {z.posterior}")
+      z.posterior = 'mixdiag'
+      if 'n_components' not in z.kwargs:
+        z.kwargs['n_components'] = latent_components
+    super().__init__(latents=latents, analytic=False, **kwargs)
 
 
-class SCALAR(SCALE):
+class SCALAR(SCALE, SISUA):
   r""" SCALE with semi-supervised extension -
     "Single-Cell ATAC-seq analysis via Latent and ADT Recombination"
 
   ADT: (antibody-derived tags)
   """
 
-  def __init__(self,
-               rna_dim=None,
-               adt_dim=None,
-               latent_dim=10,
-               is_adt_probability=False,
-               alternative_nb=False,
-               **kwargs):
-    # ====== output space ====== #
-    outputs = kwargs.pop('outputs', None)
-    if outputs is None:
-      rna = RandomVariable(dim=rna_dim,
-                           posterior='zinbd' if alternative_nb else 'zinb',
-                           name='RNA')
-      adt = RandomVariable(dim=adt_dim,
-                           posterior='onehot' if is_adt_probability else
-                           ('nbd' if alternative_nb else 'nb'),
-                           name='ADT')
-      outputs = [rna, adt]
-    super().__init__(outputs,
-                     latent_dim=latent_dim,
-                     latent_components=int(adt_dim),
-                     **kwargs)
+  def __init__(self, outputs, labels, **kwargs):
+    super().__init__(outputs=outputs, labels=labels, **kwargs)
