@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
 import inspect
+import warnings
 from typing import List
 
 import tensorflow as tf
@@ -52,17 +53,29 @@ class SISUA(MultitaskVAE, SingleCellModel):
 class MISA(SISUA):
   r""" MIxture labels for Semi-supervised Autoencoder """
 
-  def __init__(self, labels, n_components=2, zero_inflated=False, **kwargs):
+  def __init__(self,
+               outputs,
+               labels,
+               n_components=2,
+               zero_inflated=False,
+               **kwargs):
     labels = tf.nest.flatten(labels)
     n_components = int(n_components)
     zero_inflated = bool(zero_inflated)
     for rv in labels:
       if 'n_components' not in rv.kwargs:
         rv.kwargs['n_components'] = n_components
-      if 'zero_inflated' not in rv.kwargs:
-        rv.kwargs['zero_inflated'] = zero_inflated
+      # discrete count
       if rv.is_discrete or rv.is_binary:
-        rv.posterior = 'mixnb'
-      else:
+        if rv.posterior[:3] != 'mix':
+          warnings.warn("MISA only support labels is a mixture distribution "
+                        f", given: {rv.posterior}")
+          rv.posterior = 'mixnb'
+        if 'zero_inflated' not in rv.kwargs:
+          rv.kwargs['zero_inflated'] = zero_inflated
+      # continuous
+      elif rv.posterior[:3] not in ('mix', 'mdn'):
+        warnings.warn("MISA only support labels is a mixture distribution "
+                      f", given: {rv.posterior}")
         rv.posterior = 'mixgaussian'
-    super().__init__(labels=labels, **kwargs)
+    super().__init__(outputs=outputs, labels=labels, **kwargs)

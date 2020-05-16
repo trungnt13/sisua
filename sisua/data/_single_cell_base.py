@@ -296,18 +296,26 @@ class _OMICbase(sc.AnnData):
 
   def numpy(self, omic=OMIC.transcriptomic):
     r""" Return observation ndarray in `obsm` or `obs` """
+    arr = None
     # obs
     if isinstance(omic, string_types) and \
       not isinstance(omic, OMIC) and \
         omic in self.obs:
-      return self.obs[omic].values
+      arr = self.obs[omic].values
     # obsm
     omic = OMIC.parse(omic)
     for om in list(omic):
       if om in self.omics:
-        return self.obsm[om.name]
-    raise ValueError("OMIC not found, give: '%s', support: '%s'" %
-                     (omic, self.omics))
+        arr = self.obsm[om.name]
+        break
+    # not found
+    if arr is None:
+      raise ValueError("OMIC not found, give: '%s', support: '%s'" %
+                       (omic, self.omics))
+    # post-processing
+    if hasattr(arr, 'toarray'):
+      arr = arr.toarray()
+    return arr
 
   def labels(self, omic=OMIC.proteomic):
     omic = OMIC.parse(omic)

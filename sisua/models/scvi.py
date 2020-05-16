@@ -41,7 +41,7 @@ class SCVI(SingleCellModel):
                               batchnorm=True,
                               dropout=0.1,
                               name='EncoderL'),
-      clip_library=1e4,
+      clip_library=1e3,
       **kwargs,
   ):
     outputs = tf.nest.flatten(outputs)
@@ -49,10 +49,12 @@ class SCVI(SingleCellModel):
       "scVI only support transcriptomic distribution: 'zinbd' or 'nbd', " + \
         "but given: %s" % str(outputs)
     outputs[0].projection = False
+    kwargs['reduce_latent'] = lambda Zs: Zs[0]
+    self.dispersion = outputs[0].kwargs.get('dispersion', 'full')
+    self.inflation = outputs[0].kwargs.get('inflation', 'full')
     super().__init__(outputs,
                      latents=[latents, library],
                      encoder=[encoder, encoder_l],
-                     reduce_latent=lambda Zs: Zs[0],
                      **kwargs)
     ### prepare the library
     self.clip_library = float(clip_library)
@@ -65,19 +67,18 @@ class SCVI(SingleCellModel):
                                        name="MeanScale")
     self.px_scale(decoder_output)  # build the layer
     # dropout logits value
-    if self.is_zero_inflated:
+    if self.is_zero_inflated and self.inflation == 'full':
       self.px_dropout = keras.layers.Dense(n_dims,
                                            activation='linear',
                                            name="DropoutLogits")
       self.px_dropout(decoder_output)  # build the layer
-    else:
-      self.px_dropout = Identity(name="DropoutLogits")
     # dispersion (NOTE: while this is different implementation, it ensures the
     # same method as scVI, i.e. cell-gene, gene dispersion)
-    self.px_r = keras.layers.Dense(n_dims,
-                                   activation='linear',
-                                   name='Dispersion')
-    self.px_r(decoder_output)  # build the layer
+    if self.dispersion == 'full':
+      self.px_r = keras.layers.Dense(n_dims,
+                                     activation='linear',
+                                     name='Dispersion')
+      self.px_r(decoder_output)  # build the layer
     # since we feed the params directly, the DenseDistribution parameters won't
     # be used
     self.posteriors[0].trainable = False
@@ -106,28 +107,67 @@ class SCVI(SingleCellModel):
     Z_samples = qZ
     # clipping L value to avoid overflow, softplus(12) = 12
     L_samples = tf.clip_by_value(qL, 0., self.clip_library)
+    if sample_shape:
+      output_shape = tf.concat(
+          [tf.nest.flatten(sample_shape),
+           tf.convert_to_tensor(qZ.batch_shape)],
+          axis=0)
+      Z_samples = tf.reshape(qZ, (-1, qZ.shape[-1]))
+      L_samples = tf.reshape(tf.clip_by_value(qL, 0., self.clip_library),
+                             (-1, 1))
     # decoding the latent
     d = self.decoder(Z_samples, training=training)
     # ====== parameterizing the distribution ====== #
     # mean parameterizations
     px_scale = tf.nn.softmax(self.px_scale(d), axis=1)
     px_scale = tf.clip_by_value(px_scale, 1e-7, 1. - 1e-7)
-    # NOTE: scVI use exp but we use softplus here
+    # NOTE: tried to use softplus1 here but it doesn't work, the model
+    # reconstruction loss is extremely high!
     px_rate = tf.exp(L_samples) * px_scale
     # dispersion parameterizations
-    px_r = self.px_r(d)
-    # NOTE: scVI use exp but we use softplus here
-    px_r = tf.exp(px_r)
-    # dropout for zero inflation
-    px_dropout = self.px_dropout(d)
+    if self.dispersion == 'full':
+      px_r = self.px_r(d)
+      px_r = tf.exp(px_r)
+    # recover the sample shape
+    if sample_shape:
+      px_rate = tf.reshape(
+          px_rate,
+          tf.concat([output_shape,
+                     tf.convert_to_tensor(px_rate.shape[1:])],
+                    axis=0))
+      if self.dispersion == 'full':
+        px_r = tf.reshape(
+            px_r,
+            tf.concat([output_shape,
+                       tf.convert_to_tensor(px_r.shape[1:])],
+                      axis=0))
     # mRNA expression distribution
     # this order is the same as how the parameters are splited in distribution
     # layer
-    if self.is_zero_inflated:
-      params = tf.concat((px_rate, px_r, px_dropout), axis=-1)
+    params = [px_rate, px_r] if self.dispersion == 'full' else [px_rate]
+    if self.is_zero_inflated and self.inflation == 'full':
+      # dropout for zero inflation
+      px_dropout = self.px_dropout(d)
+      if sample_shape:
+        px_dropout = tf.reshape(
+            px_dropout,
+            tf.concat(
+                [output_shape,
+                 tf.convert_to_tensor(px_dropout.shape[1:])],
+                axis=0))
+      params.append(px_dropout)
+      params = tf.concat(params, axis=-1)
     else:
-      params = tf.concat((px_rate, px_r), axis=-1)
+      params = tf.concat(params, axis=-1) if len(params) > 1 else params[0]
     pX = self.posteriors[0](params, training=training, projection=False)
     # for semi-supervised learning
+    if sample_shape:
+      d = tf.reshape(
+          d, tf.concat(
+              [output_shape, tf.convert_to_tensor(d.shape[1:])], axis=0))
     pY = [p(d, training=training) for p in self.posteriors[1:]]
     return [pX] + pY
+
+
+class TotalVI(SingleCellModel):
+  pass
