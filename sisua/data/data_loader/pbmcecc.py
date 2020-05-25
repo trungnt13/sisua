@@ -9,8 +9,9 @@ import numpy as np
 
 from odin.fuel import Dataset
 from odin.utils import get_file
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
+from sisua.data.single_cell_dataset import SingleCellOMIC
 
 _URL_LYMPHOID = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWNlY2NfbHkubnB6\n'
 _URL_MYELOID = None
@@ -30,14 +31,13 @@ def read_PBMCeec(subset, override=False, verbose=False, filtered_genes=False):
     os.mkdir(download_path)
 
   preprocessed_path = os.path.join(
-      PREPROCESSED_BASE_DIR,
+      DATA_DIR,
       'PBMCecc_%s_preprocessed' % (subset + ('' if filtered_genes else 'full')))
 
   if override and os.path.exists(preprocessed_path):
     shutil.rmtree(preprocessed_path)
   if not os.path.exists(preprocessed_path):
     os.mkdir(preprocessed_path)
-
   # ******************** preprocessed ******************** #
   if not os.path.exists(os.path.join(preprocessed_path, 'X')):
     # ====== full ====== #
@@ -65,7 +65,6 @@ def read_PBMCeec(subset, override=False, verbose=False, filtered_genes=False):
         X = data['X_full']
         X_col = data['X_full_col']
       cell_types = None
-
     # ====== save everything ====== #
     X, X_col = remove_allzeros_columns(matrix=X,
                                        colname=X_col,

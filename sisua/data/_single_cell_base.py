@@ -40,14 +40,18 @@ def get_all_omics(sco: sc.AnnData):
   assert isinstance(sco, sc.AnnData)
   if hasattr(sco, 'omics'):
     return sco.omics
-  om = OMIC.transcriptomic
+  om = []
   all_omics = {o.name: o for o in OMIC}
   for k in sco.obsm.keys():
     if isinstance(k, OMIC):
-      om |= k
+      om.append(k)
     elif k in all_omics:
-      om |= all_omics[k]
-  return om
+      om.append(all_omics[k])
+  # merge
+  o = om[0]
+  for i in om:
+    o |= i
+  return o
 
 
 class _OMICbase(sc.AnnData):
@@ -57,8 +61,10 @@ class _OMICbase(sc.AnnData):
                cell_id=None,
                gene_id=None,
                dtype=None,
+               omic=OMIC.transcriptomic,
                name=None,
                **kwargs):
+    omic = OMIC.parse(omic)
     # directly first time init from file
     if 'filename' in kwargs:
       X = None
@@ -70,9 +76,11 @@ class _OMICbase(sc.AnnData):
         IndexedList()
       asview = kwargs.get('asview', False)
       name = X._name
+      if hasattr(X, '_current_omic'):
+        omic = X._current_omic
     # init as completely new dataset
     else:
-      self._omics = OMIC.transcriptomic
+      self._omics = omic
       self._history = IndexedList()
       if cell_id is None:
         cell_id = ['Cell#%d' % i for i in range(X.shape[0])]
@@ -90,15 +98,16 @@ class _OMICbase(sc.AnnData):
     super().__init__(X, **kwargs)
     self._name = str(name)
     self._verbose = False
-    # store transcriptomic
-    if OMIC.transcriptomic.name + '_var' not in self.uns:
-      self.uns[OMIC.transcriptomic.name + '_var'] = self.var
+    self._current_omic = omic
+    # store given omic
+    if omic.name + '_var' not in self.uns:
+      self.uns[omic.name + '_var'] = self.var
     if not kwargs.get('asview', False):
-      self.obsm[OMIC.transcriptomic.name] = self._X
+      self.obsm[omic.name] = self._X
     # The class is created for first time
     if not isinstance(X, sc.AnnData):
       self.obs['indices'] = np.arange(self.X.shape[0], dtype='int64')
-      self._calculate_statistics(OMIC.transcriptomic)
+      self._calculate_statistics(omic)
 
   def set_verbose(self, verbose):
     r""" If True, print out all method call and its arguments """
@@ -111,10 +120,12 @@ class _OMICbase(sc.AnnData):
 
   @contextmanager
   def _swap_omic(self, omic):
-    r""" Temporary change the main OMIC type to other than transcriptomic """
+    r""" Temporary change the main OMIC type to other than the default
+    transcriptomic """
     omic = OMIC.parse(omic)
+    current_omic = self._current_omic
     # do nothing if transcriptomic (the default)
-    if omic == OMIC.transcriptomic:
+    if omic == current_omic:
       yield self
     # swap then reset back to transcriptomic
     else:
@@ -124,20 +135,13 @@ class _OMICbase(sc.AnnData):
       self._var = var
       self._n_vars = self._X.shape[1]
       yield self
-      self._X = self.numpy(OMIC.transcriptomic)
-      self._var = self.omic_var(OMIC.transcriptomic)
+      self._X = self.numpy(current_omic)
+      self._var = self.omic_var(current_omic)
       self._n_vars = self._X.shape[1]
 
   @property
-  def _current_omic_name(self):
-    x = self.X
-    name = OMIC.transcriptomic.name
-    for omic in self.omics:
-      x1 = self.numpy(omic)
-      if x.shape == x1.shape and np.all(x[:BATCH_SIZE] == x1[:BATCH_SIZE]):
-        name = omic.name
-        break
-    return name
+  def current_omic(self) -> OMIC:
+    return self._current_omic
 
   def _record(self, name: str, local: dict):
     method = getattr(self, name)
@@ -188,12 +192,17 @@ class _OMICbase(sc.AnnData):
       assert np.all(sco.obs.iloc[:, 0] == self.obs.iloc[:, 0])
     return self
 
-  def _calculate_statistics(self, omic=OMIC.transcriptomic):
-    omic = OMIC.parse(omic)
+  def _calculate_statistics(self, omic=None):
+    if omic is None:
+      omic = self.current_omic
+    else:
+      omic = OMIC.parse(omic)
     X = self.numpy(omic)
     # start processing
     if sp.sparse.issparse(X):
-      total_counts = np.expand_dims(np.sum(X, axis=1), axis=-1)
+      total_counts = np.sum(X, axis=1)
+      if total_counts.ndim < 2:
+        total_counts = np.expand_dims(total_counts, axis=-1)
     else:
       total_counts = np.sum(X, axis=1, keepdims=True)
     log_counts, local_mean, local_var = get_library_size(X,
@@ -290,12 +299,17 @@ class _OMICbase(sc.AnnData):
   def omic_varnames(self, omic):
     return self.omic_var(omic).index.values
 
+  def get_omic_dim(self, omic):
+    return self.numpy(omic=omic).shape[1]
+
   def get_omic_data(self, omic):
     r""" Return observation ndarray in `obsm` or `obs` """
     return self.numpy(omic=omic)
 
-  def numpy(self, omic=OMIC.transcriptomic):
+  def numpy(self, omic=None):
     r""" Return observation ndarray in `obsm` or `obs` """
+    if omic is None:
+      omic = self._current_omic
     arr = None
     # obs
     if isinstance(omic, string_types) and \
@@ -312,9 +326,6 @@ class _OMICbase(sc.AnnData):
     if arr is None:
       raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                        (omic, self.omics))
-    # post-processing
-    if hasattr(arr, 'toarray'):
-      arr = arr.toarray()
     return arr
 
   def labels(self, omic=OMIC.proteomic):
@@ -366,46 +377,44 @@ class _OMICbase(sc.AnnData):
   def dtype(self):
     return self.X.dtype
 
-  def stats(self, omic=OMIC.transcriptomic):
+  def stats(self, omic=None):
     r""" Return a matrix of shape `[n_obs, 4]`.
 
     The columns are: 'total_counts', 'log_counts', 'local_mean', 'local_var'
     """
+    if omic is None:
+      omic = self._current_omic
     return self.obsm[omic.name + '_stats']
 
-  def get_library_size(self, omic=OMIC.transcriptomic):
+  def get_library_size(self, omic=None):
     r""" Return the mean and variance for library size modeling in log-space """
+    if omic is None:
+      omic = self._current_omic
     return self.library_size(omic=omic)
 
-  def library_size(self, omic=OMIC.transcriptomic):
+  def library_size(self, omic=None):
     r""" Return the mean and variance for library size modeling in log-space """
+    if omic is None:
+      omic = self._current_omic
     return self.local_mean(omic), self.local_var(omic)
 
-  def total_counts(self, omic=OMIC.transcriptomic):
+  def total_counts(self, omic=None):
     return self.stats(omic)[:, 0:1]
 
-  def log_counts(self, omic=OMIC.transcriptomic):
+  def log_counts(self, omic=None):
     return self.stats(omic)[:, 1:2]
 
-  def local_mean(self, omic=OMIC.transcriptomic):
+  def local_mean(self, omic=None):
     return self.stats(omic)[:, 2:3]
 
-  def local_var(self, omic=OMIC.transcriptomic):
+  def local_var(self, omic=None):
     return self.stats(omic)[:, 3:4]
 
-  def probability(self, omic=OMIC.proteomic):
-    r""" Return the probability embedding of an OMIC """
-    return self.probabilistic_embedding(omic=omic)[1]
-
-  def binary(self, omic=OMIC.proteomic):
-    r""" Return the binary embedding of an OMIC """
-    return self.probabilistic_embedding(omic=omic)[2]
-
   # ====== statistics ====== #
-  def sparsity(self, omic=OMIC.transcriptomic):
+  def sparsity(self, omic=None):
     return sparsity_percentage(self.numpy(omic))
 
-  def counts_per_cell(self, omic=OMIC.transcriptomic):
+  def counts_per_cell(self, omic=None):
     r""" Return total number of counts per cell. This method
     is scalable. """
     counts = 0
@@ -414,7 +423,7 @@ class _OMICbase(sc.AnnData):
       counts += np.sum(X[:, s:e], axis=1)
     return counts
 
-  def counts_per_gene(self, omic=OMIC.transcriptomic):
+  def counts_per_gene(self, omic=None):
     r""" Return total number of counts per gene. This method
     is scalable. """
     counts = 0
@@ -425,7 +434,7 @@ class _OMICbase(sc.AnnData):
 
   # ******************** logging and io ******************** #
   def create_dataset(self,
-                     omics: OMIC = OMIC.transcriptomic,
+                     omics: OMIC = None,
                      labels_percent=0,
                      batch_size=64,
                      drop_remainder=False,
@@ -443,6 +452,8 @@ class _OMICbase(sc.AnnData):
       labels_percent : a Scalar [0., 1.]. If > 0, create a mask with given
         percent set to True.
     """
+    if omics is None:
+      omics = self.current_omic
     framework = str(framework).lower().strip()
     assert framework in ('tf', 'pt', 'tensorflow', 'pytorch'), \
       f"Only support tensorflow or pytorch framework, given: {framework}"
@@ -487,24 +498,24 @@ class _OMICbase(sc.AnnData):
     ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
     return ds
 
-  def save_to_mmaparray(self, path, dtype=None):
-    """ This only save the data without row names and column names """
-    self._record('save_to_mmaparray', locals())
-    with MmapArrayWriter(path=path,
-                         shape=self.shape,
-                         dtype=self.dtype if dtype is None else dtype,
-                         remove_exist=True) as f:
-      for s, e in batching(batch_size=BATCH_SIZE, n=self.n_obs):
-        x = self.X[s:e]
-        if dtype is not None:
-          x = x.astype(dtype)
-        f.write(x)
-
   def _get_str(self):
     text = super().__repr__()
     text = text.replace('AnnData object', self.name)
     pad = "\n     "
+    for omic in self.omics:
+      X = self.numpy(omic)
+      text += pad[:-1] + \
+        f" {'*' if omic == self.current_omic else ''}OMIC:{omic.name} " + \
+        f"shape:{X.shape} dtype:{X.dtype} sparsity:{self.sparsity(omic):.2f}"
+    text += pad[:-1] + "History: %d methods" % len(self.history)
+    for idx, (method, args) in enumerate(self.history[::-1]):
+      text += pad + '%d) %s : %s' % (idx, method, ', '.join(
+          ['%s:%s' % (k, v) for k, v in args.items()]))
+    return text
 
+  def describe(self) -> str:
+    text = f"SingleCellOMICs: {self.name}"
+    pad = "\n     "
     for omic in self.omics:
       X = self.numpy(omic)
       all_nonzeros = []
@@ -513,7 +524,6 @@ class _OMICbase(sc.AnnData):
         ids = np.nonzero(x)
         all_nonzeros.append(x[ids[0], ids[1]])
       all_nonzeros = np.concatenate(all_nonzeros)
-
       text += pad[:-1] + "OMIC: '%s' - dtype: '%s'" % (
           omic.name, "binary" if self.is_binary(omic) else "continuous")
       text += pad + 'Sparsity  : %.2f' % self.sparsity(omic)
@@ -529,11 +539,6 @@ class _OMICbase(sc.AnnData):
           self.local_mean(omic), shorten=True, float_precision=2)
       text += pad + 'LocalVar  : %s' % describe(
           self.local_var(omic), shorten=True, float_precision=2)
-
-    text += pad[:-1] + "History: %d methods" % len(self.history)
-    for method, args in self.history:
-      text += pad + '%s : %s' % (method, ', '.join(
-          ['%s:%s' % (k, v) for k, v in args.items()]))
     return text
 
   def __repr__(self):

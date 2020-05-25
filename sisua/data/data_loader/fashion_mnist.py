@@ -8,7 +8,7 @@ import numpy as np
 
 from odin import fuel as F
 from odin.utils import ctext, one_hot, select_path
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 
 
 
@@ -66,7 +66,7 @@ def _validate_dataset(path):
 # ===========================================================================
 # Original FMNIST
 # ===========================================================================
-_FMNIST_PREPROCESSED = select_path(os.path.join(PREPROCESSED_BASE_DIR,
+_FMNIST_PREPROCESSED = select_path(os.path.join(DATA_DIR,
                                                 'FMNIST_preprocessed'),
                                    create_new=True)
 

@@ -1,22 +1,59 @@
-model: dca
-force_semi: False
+verbose: False
+
+model:
+  name: dca
+  log_norm: True
+  alpha: 10.
+  beta: 1.
+  gamma: 6.
+  lamda: 1.
+  encoder:
+    units: [64, 64]
+    batchnorm: True
+    dropout: 0.1
+  decoder:
+    units: [64, 64]
+    batchnorm: True
+    dropout: 0.1
 
 dataset:
   name: cortex
-  split: 0.8
+  train_percent: 0.8
+  labels_percent: 0.1
+  batch_size: 64
+  dropout_rate: 0.2
+  retain_rate: 0.2
 
-elbo:
-  interpolation: const
-  vmin: 0.
-  vmax: 1.
-  norm: 50
-  cyclical: False
-  delayIn: 0
-  delayOut: 0
-  mcmc: 1
-  analytic: True
+variables:
+  latents:
+    event_shape: 12
+    posterior: 'diag'
+    kwargs: {}
+  transcriptomic:
+    posterior: 'zinbd'
+    kwargs: {}
+  proteomic:
+    posterior: 'nbd'
+    kwargs: {}
+  celltype:
+    posterior: 'onehot'
+    kwargs: {}
 
-defaults:
-  - network: fc_2_64
-  - variable: basis
-  - train: adam
+train:
+  optimizer: adam
+  learning_rate: 1e-3
+  valid_freq: 500
+  valid_interval: 0
+  clipnorm: 100
+  epochs: 500
+  max_iter: -1
+  sample_shape: []
+  logging_interval: 2
+  earlystop_threshold: 0.001
+  earlystop_progress_length: 0
+  earlystop_patience: 10
+  earlystop_min_epoch: -1
+  terminate_on_nan: True
+  allow_rollback: False
+  allow_none_gradients: False
+  track_gradient_norms: False

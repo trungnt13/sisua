@@ -7,6 +7,8 @@ import tensorflow as tf
 from sisua.models.single_cell_model import RandomVariable, SingleCellModel
 from sisua.models.vae import SISUA
 
+__all__ = ['SCALE', 'SCALAR']
+
 
 class SCALE(SingleCellModel):
   r""" Tensorflow implementation of SCALE -
@@ -22,19 +24,29 @@ class SCALE(SingleCellModel):
   """
 
   def __init__(self,
-               latents=RandomVariable(10, 'mixdiag', True, name="Latents"),
-               latent_components=8,
+               outputs,
+               latents=RandomVariable(10, 'mixgaus', True, name="Latents"),
+               n_components=10,
+               covariance='none',
+               tie_mixtures=False,
+               tie_loc=False,
+               tie_scale=False,
                **kwargs):
     latents = tf.nest.flatten(latents)
-    latent_components = int(latent_components)
+    kw = dict(n_components=int(n_components),
+              covariance=str(covariance),
+              tie_mixtures=bool(tie_mixtures),
+              tie_loc=bool(tie_loc),
+              tie_scale=bool(tie_scale))
     for z in latents:
-      if z.posterior != 'mixdiag':
-        warnings.warn("SCALE only allow 'mixdiag' posterior for latents, "
-                      f"given: {z.posterior}")
-      z.posterior = 'mixdiag'
-      if 'n_components' not in z.kwargs:
-        z.kwargs['n_components'] = latent_components
-    super().__init__(latents=latents, analytic=False, **kwargs)
+      if not z.is_mixture:
+        warnings.warn("SCALE only allow mixture distribution for latents "
+                      f" posterior, but given: {z.posterior}")
+        z.posterior = 'mixgaus'
+      for k, v in kw.items():
+        if k not in z.kwargs:
+          z.kwargs[k] = v
+    super().__init__(outputs=outputs, latents=latents, analytic=False, **kwargs)
 
 
 class SCALAR(SCALE, SISUA):

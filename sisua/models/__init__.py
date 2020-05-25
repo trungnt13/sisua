@@ -1,6 +1,7 @@
 from typing import Dict, Optional, Text, Type
 
 from sisua.models.dca import *
+from sisua.models.fvae import *
 from sisua.models.scale import *
 from sisua.models.scvi import *
 from sisua.models.single_cell_model import *
@@ -26,7 +27,7 @@ def get_model(model) -> Type[SingleCellModel]:
   raise RuntimeError("Cannot find SingleCellModel with type '%s'" % model)
 
 
-def save_model(path: str, model: SingleCellModel):
+def save_model(model_dir: str, model: SingleCellModel):
   assert isinstance(model, SingleCellModel), \
     "model must be instance of SingleCellModel but given type: %s" % \
       str(type(model))
@@ -34,28 +35,31 @@ def save_model(path: str, model: SingleCellModel):
   import pickle
   # ====== SingleCellModel arguments ====== #
   class_name = model.__class__.__name__
+  dataset = model.dataset
   kwargs = dict(model.init_args)
   # ====== save the model ====== #
-  if os.path.exists(path) and os.path.isfile(path):
+  if os.path.exists(model_dir) and os.path.isfile(model_dir):
     raise ValueError(
-        "Cannot only save model to a folder, given path to a file: %s" % path)
-  if not os.path.exists(path):
-    os.makedirs(path)
-  model.save_weights(os.path.join(path, 'weights'))
-  with open(os.path.join(path, 'arguments'), 'wb') as f:
-    pickle.dump([class_name, kwargs], f)
-  return path
+        "Cannot only save model to a folder, given path to a file: %s" %
+        model_dir)
+  if not os.path.exists(model_dir):
+    os.makedirs(model_dir)
+  model.save_weights(os.path.join(model_dir, 'weights'))
+  with open(os.path.join(model_dir, 'arguments'), 'wb') as f:
+    pickle.dump([class_name, dataset, kwargs], f)
+  return model_dir
 
 
-def load_model(path: str) -> SingleCellModel:
+def load_model(model_dir: str) -> SingleCellModel:
   import os
   import pickle
-  assert os.path.exists(path) and os.path.isdir(path), \
-    f"{path} must be directory"
+  assert os.path.exists(model_dir) and os.path.isdir(model_dir), \
+    f"{model_dir} must be directory"
   ## create new instance
-  with open(os.path.join(path, 'arguments'), 'rb') as f:
-    class_name, kwargs = pickle.load(f)
+  with open(os.path.join(model_dir, 'arguments'), 'rb') as f:
+    class_name, dataset, kwargs = pickle.load(f)
   model = get_model(class_name)(**kwargs)
+  model.dataset = dataset
   ## restore the checkpoint
-  model.load_weights(os.path.join(path, 'weights'), raise_notfound=True)
+  model.load_weights(os.path.join(model_dir, 'weights'), raise_notfound=True)
   return model

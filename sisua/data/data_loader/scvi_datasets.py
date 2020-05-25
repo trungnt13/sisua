@@ -8,7 +8,7 @@ import numpy as np
 
 from odin.fuel import Dataset
 from odin.utils import ctext, one_hot, select_path
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 
 
 
@@ -34,7 +34,7 @@ def _save_data_to_path(preprocessed_path, X, y, gene_names, label_names,
 # Common dataset
 # ===========================================================================
 def _read_scvi_dataset(name, clazz_name, override, verbose):
-  preprocessed_path = select_path(os.path.join(PREPROCESSED_BASE_DIR,
+  preprocessed_path = select_path(os.path.join(DATA_DIR,
                                                '%s_preprocessed' % name),
                                   create_new=True)
   if override:
@@ -103,7 +103,7 @@ def read_Retina(override=False, verbose=False):
 # HEMATO dataset
 # ===========================================================================
 def read_Hemato(override=False, verbose=False):
-  preprocessed_path = select_path(os.path.join(PREPROCESSED_BASE_DIR,
+  preprocessed_path = select_path(os.path.join(DATA_DIR,
                                                'HEMATO_preprocessed'),
                                   create_new=True)
 

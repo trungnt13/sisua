@@ -10,7 +10,7 @@ import numpy as np
 from odin.fuel import Dataset
 from odin.utils import batching, ctext, get_file, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 # ===========================================================================
@@ -29,10 +29,10 @@ _URL_PROTEIN = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0dTRTEwMDg2Nl9
 _MD5_PROTEIN = '7dc5f64c2916d864568f1b739679717e'
 
 _CITEseq_PBMC_PREPROCESSED = select_path(os.path.join(
-    PREPROCESSED_BASE_DIR, 'PBMC_citeseq_preprocessed'),
+    DATA_DIR, 'PBMC_citeseq_preprocessed'),
                                          create_new=True)
 _5000_PBMC_PREPROCESSED = select_path(os.path.join(
-    PREPROCESSED_BASE_DIR, 'PBMC_citeseq_5000_preprocessed'),
+    DATA_DIR, 'PBMC_citeseq_5000_preprocessed'),
                                       create_new=True)
 
 _PASSWORD = 'uef-czi'

@@ -6,59 +6,44 @@ import sys
 
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm
 
 from odin.backend import interpolation
-from odin.exp import Experimenter, ExperimentManager
-from odin.utils.crypto import md5_checksum
+from odin.exp import Experimenter
 from sisua.data import (CONFIG_PATH, DATA_DIR, EXP_DIR, OMIC, SingleCellOMIC,
                         get_dataset, get_dataset_meta)
 from sisua.models import (NetworkConfig, RandomVariable, get_all_models,
-                          get_model, load, save)
+                          get_model, load_model, save_model)
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 tf.random.set_seed(8)
 np.random.seed(8)
 
+# Example:
+# model.name=sisua,dca,vae,scvi,scale,misa,scalar,fvae,sfvae
+# dataset.name=cortex,8kly,8klyall,8klyx,eccly,ecclyall,ecclyx,8k,8kall
+# -m -ncpu 5 --reset
+
 
 # ===========================================================================
-# Helper
+# Helpers
 # ===========================================================================
-def elbo_config(cfg):
-  assert 'elbo' in cfg, \
-    "Configuration must contain key: 'elbo' for elbo configuraiton "
-  cfg = cfg.elbo
-  itp = interpolation.get(str(cfg.get(interpolation, 'const')))
-  itp = itp(vmin=cfg.get('vmin', 0.),
-            vmax=cfg.get('vmax', 1.),
-            norm=cfg.get('norm', 50),
-            cyclical=cfg.get('cyclical', False),
-            delayIn=cfg.get('delayIn', 0),
-            delayOut=cfg.get('delayOut', 0))
-  return dict(kl_interpolate=itp,
-              kl_mcmc=int(cfg.get('mcmc', 1)),
-              analytic=bool(cfg.get('analytic', True)))
-
-
-def random_variable(omic: str, cfg: dict, sco: SingleCellOMIC):
-  r""" Create RandomVariable from a named DictConfig
-
-  name: the key name of the variable
-  """
-  name = omic.name
-  if name not in cfg:
-    return None
-  cfg = cfg[name]
-  dim = cfg.get('dim', None)
-  if dim is None:
-    if omic in sco.omics:
-      dim = sco.numpy(omic).shape[1]
-    else:  # cannot infer the dimension of the RandomVariable
-      return None
-  posterior = cfg.get('posterior')
-  kwargs = cfg.get('kwargs', {})
-  return RandomVariable(dim=int(dim), posterior=posterior, name=name, **kwargs)
+def _from_config(cfg, fn, overrides={}):
+  assert callable(fn)
+  spec = inspect.getfullargspec(fn)
+  kw = {
+      k: v for k, v in cfg.items() if k in spec.args or spec.varkw is not None
+  }
+  overrides = {
+      k: v
+      for k, v in overrides.items()
+      if k in spec.args or spec.varkw is not None
+  }
+  kw.update(overrides)
+  return fn(**kw)
 
 
 # ===========================================================================
@@ -66,87 +51,140 @@ def random_variable(omic: str, cfg: dict, sco: SingleCellOMIC):
 # ===========================================================================
 class SisuaExperimenter(Experimenter):
 
-  def __init__(self, ncpu=1):
+  def __init__(self):
     super().__init__(save_path=EXP_DIR,
                      config_path=CONFIG_PATH,
-                     exclude_keys="train",
-                     ncpu=int(ncpu))
+                     exclude_keys=["train", "verbose"],
+                     hash_length=5)
 
   def on_load_data(self, cfg):
-    sco = get_dataset(cfg.dataset.name)
-    split = float(cfg.dataset.get('split', 0.8))
-    train, test = sco.split(split)
+    ds = cfg.dataset
+    sco = get_dataset(ds.name)
+    if cfg.verbose:
+      print(sco)
+    train, test = sco.split(train_percent=ds.train_percent)
+    self.sco = sco
     self.train = train
     self.test = test
 
-  def on_create_model(self, cfg):
-    network = NetworkConfig(**cfg.network)
-    rv_trans = None
-    rv_latent = None
-    rvs = []
-    for om in OMIC:
-      rv = random_variable(om, cfg, self.train)
-      if rv is not None:
-        if om == OMIC.transcriptomic:
-          rv_trans = rv
-        elif om == OMIC.latent:
-          rv_latent = rv
-        else:
-          rvs.append(rv)
-    log_norm = cfg.get('log_norm', True)
-    force_semi = cfg.get('force_semi', False)
-    if len(rvs) == 0:
-      force_semi = False
-    # ====== check required variable is provided ====== #
-    if rv_trans is None or rv_latent is None:
-      raise RuntimeError("RandomVariable description must be provided for "
-                         "'transcriptomic' and 'latent'")
-    # ====== create model ====== #
-    model_cls = get_model(cfg.model)
-    args = inspect.getfullargspec(model_cls.__init__).args
-    model_kwargs = dict(network=network, log_norm=log_norm)
-    model_kwargs.update(elbo_config(cfg))
-    # because every model could be semi-supervised
-    if model_cls.is_multiple_outputs:
-      model_kwargs['rna_dim'] = rv_trans.dim
-      model_kwargs['adt_dim'] = rvs[0].dim
-    elif force_semi:
-      model_kwargs['outputs'] = [rv_trans] + rvs
-    else:
-      model_kwargs['outputs'] = [rv_trans]
-    if 'latent_dim' in args:
-      model_kwargs['latent_dim'] = rv_latent.dim
-    else:
-      model_kwargs['latents'] = rv_latent
-    self.model = model_cls(**model_kwargs)
+  def on_create_model(self, cfg, model_dir, md5):
+    model = cfg.model
+    cls = get_model(model.name)
+    # parse networks
+    encoder = _from_config(model.encoder, NetworkConfig)
+    decoder = _from_config(model.decoder, NetworkConfig)
+    # parse random variables
+    omics = {o.name: self.sco.get_omic_dim(o) for o in self.sco.omics}
+    rv = {
+        k:
+        _from_config(v,
+                     RandomVariable,
+                     overrides=dict(
+                         event_shape=omics[k] if k in omics else v.event_shape,
+                         projection=True,
+                         name=k))
+        for k, v in cfg.variables.items()
+        if k in omics or k in ('latents')
+    }
+    # create the model
+    overrides = dict(outputs=rv['transcriptomic'],
+                     latents=rv['latents'],
+                     encoder=encoder,
+                     decoder=decoder)
+    # check if semi-supervised
+    if 'labels' in inspect.getfullargspec(cls.__init__).args:
+      overrides['labels'] = [
+          rv[o.name] for o in list(self.sco.omics)[1:] if o.name in rv
+      ]
+    if cfg.verbose:
+      for i, j in overrides.items():
+        print(f"{i}:\n\t{j}")
+    self.model = _from_config(model, cls, overrides=overrides)
+    self.model.dataset = cfg.dataset.name
+    self.model.load_weights(os.path.join(model_dir, 'weights'),
+                            verbose=cfg.verbose)
+    self.omics = [i.name for i in self.sco.omics] \
+      if self.model.is_semi_supervised else \
+      ['transcriptomic']
+    if cfg.verbose:
+      print(self.model)
+      print("Training OMICs:", self.omics)
 
-  def on_load_model(self, cfg, path):
-    self.model = load(path, model_index=-1)
-    return self.model
+  def on_train(self, cfg, output_dir, model_dir):
+    train, valid = self.train.split(0.9)
+    train.corrupt(dropout_rate=cfg.dataset.dropout_rate,
+                  retain_rate=cfg.dataset.retain_rate,
+                  inplace=True)
+    if cfg.verbose:
+      print(train)
+    train = train.create_dataset(self.omics,
+                                 labels_percent=cfg.dataset.labels_percent,
+                                 batch_size=cfg.dataset.batch_size,
+                                 drop_remainder=True,
+                                 shuffle=1000)
+    valid = valid.create_dataset(self.omics,
+                                 labels_percent=cfg.dataset.labels_percent,
+                                 batch_size=cfg.dataset.batch_size,
+                                 drop_remainder=True,
+                                 shuffle=1000)
+    if cfg.verbose:
+      print(train)
+    sample_shape = tuple(cfg.train.sample_shape)
+    _from_config(cfg.train,
+                 self.model.fit,
+                 overrides=dict(
+                     train=train,
+                     valid=valid,
+                     sample_shape=sample_shape,
+                     checkpoint=lambda: save_model(model_dir, self.model)))
 
-  def on_train(self, cfg, model_path):
-    kwargs = Experimenter.match_arguments(self.model.fit,
-                                          cfg.train,
-                                          exclude_args='inputs')
-    self.model.fit(inputs=self.train, **kwargs)
-    # save the best model after training
-    save(model_path, self.model, max_to_keep=5)
+  def on_eval(self, cfg, output_dir):
+    model = self.model
+    name = f"{model.id}-{model.dataset}"
+    # very easy to OOM here, reduce batch size as much as possible
+    mllk, llk = [], []
+    prog = tqdm(self.test.create_dataset(self.omics,
+                                         labels_percent=1.0,
+                                         batch_size=2,
+                                         drop_remainder=True),
+                desc=f"[{name}] Marginal LLK")
+    for data in prog:
+      outputs = model.marginal_log_prob(**data, sample_shape=100)
+      mllk.append(outputs[0])
+      llk.append(outputs[1]['transcriptomic'])
+    mllk = tf.reduce_mean(tf.concat(mllk, axis=0)).numpy()
+    llk = tf.reduce_mean(tf.concat(llk, axis=0)).numpy()
+    prog.clear()
+    prog.close()
+    # save the score
+    self.write_scores('llk',
+                      replace=True,
+                      model=model.id,
+                      dataset=model.dataset,
+                      mllk=mllk,
+                      llk=llk)
 
-  @property
-  def args_help(self):
-    all_models = [i.id for i in get_all_models()]
-    all_datasets = list(get_dataset_meta().keys())
-    return {'model': all_models, 'dataset.name': all_datasets}
+  def on_plot(self, cfg, output_dir):
+    model = self.model
+    name = f"{model.id}-{model.dataset}"
+    # plot learning rate
+    model.plot_learning_curves(
+        os.path.join(output_dir, 'learning_curves.png'),
+        summary_steps=[100, 10],
+        title=f"{name}",
+    )
+
+  def on_compare(self, models, save_path):
+    print(models)
 
 
 # ===========================================================================
 # Running the experiments
-# --reset model=sisua,dca,vae dataset.name=cortex,8kly,8klyall,8klyx,eccly,ecclyall,ecclyx,8k,8kall train.epochs=500 elbo.vmax=1,2,10 -m -ncpu 5
 # ===========================================================================
 if __name__ == "__main__":
   print("Path:")
   print(" - exp:", EXP_DIR)
   print(" - dat:", DATA_DIR)
   print(" - cfg:", CONFIG_PATH)
-  exp = SisuaExperimenter(ncpu=1)
+  exp = SisuaExperimenter()
   exp.run()

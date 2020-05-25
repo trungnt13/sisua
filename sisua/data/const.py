@@ -61,14 +61,42 @@ MARKER_ADT_GENE = {
 MARKER_ADTS = list(MARKER_ADT_GENE.keys())
 MARKER_GENES = list(set(list(MARKER_ADT_GENE.values()) + \
   ['CD8B', 'CD79A', 'LYZ', 'LGALS3', 'S100A8', 'GNLY', 'NKG7',
-   'KLRB1', 'FCER1A', 'CST3']))
+   'KLRB1', 'FCER1A', 'CST3'] + \
+     ["MS4A1", "CD19", "MME", "VPREB1", "VPREB3", "DNTT", "CD79A", "MZB1", "NKG7",
+      "CD3D", "CD8A", "CD34", "CST3", "LYZ", "HBA1", "FCGR3A", "GATA1", "GATA2"]))
 
 # ['CD77' 'CCR7' 'CD19' 'CD1a' 'CD2' 'CD27' 'PD-L1;CD274' 'CD28'
 #  'PECAM;CD31' 'CD34' 'CD3' 'CD4' 'CD44' 'CD5' 'CD69' 'CD7' 'CD8' 'CD66b'
 #  'CTLA4' 'CD26;Adenosine' 'CD16' 'CD366;tim3' 'HLA-A' 'MHCII;HLA-DR'
 #  'IL7Ralpha;CD127' 'CD11b' 'CD11c' 'LAMP1' 'CD56' 'PD-1;CD279' 'PD1;CD279'
 #  'B220;CD45R' 'CD45RA' 'CD45RO' 'CD138' 'CD62L' 'Siglec-8' 'Ox40;CD134']
+MARKER_REGIONS = {
+    'GZMK classic promoter': 'chr13:113180223:113181928',
+    'GZMK alternative promoter': 'chr13:113182148:113184892',
+    'CD68 promoter': 'chr11:69665600:69667000',
+    'CD3D promoter': 'chr9:44981200:44982800',
+    'CD19 promoter': 'chr7:126414200:126415200',
+    'NCR1 promoter': 'chr7:4337400:4337800',
+}
 
+_MARKER_REGIONS_URL = [
+    r"https://www.encodeproject.org/files/ENCFF108APF/@@download/ENCFF108APF.bed.gz"
+]
+  #   # other data types (matrix or dataframe)
+  #   else:
+  #     data = read_r_matrix(data)
+  #     data.to_pickle(outpath)
+  # # tsv files
+  # elif '.tsv.gz' in path.lower():
+  #   data = pd.read_csv(path, compression='gzip', header=0, sep='\t')
+  #   data.to_pickle(outpath)
+
+    # peak2gene=
+    # (r"https://jeffgranja.s3.amazonaws.com/MPAL-10x/Supplementary_Data/Integration/MPAL-Significant-Peak2Gene-Links.tsv.gz",
+    #  r"8258d7eb424f5d977bd849ba0cc37c6f"),
+    # rna2atac=
+    # (r"https://jeffgranja.s3.amazonaws.com/MPAL-10x/Supplementary_Data/Integration/scATAC-scRNA-mappings.rds",
+    #  r"c41bddd79cda449058ad46cd53064ac5"),
 
 # ===========================================================================
 # Omic Enum
@@ -78,6 +106,7 @@ class OMIC(OrderedFlag):
 
   genomic = 'genomic'
   epigenomic = 'epigenomic'
+  chromatin = 'chromatin'
   transcriptomic = 'transcriptomic'
   proteomic = 'proteomic'
   metabolomic = 'metabolomic'

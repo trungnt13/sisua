@@ -4,8 +4,13 @@ import base64
 import gzip
 import os
 import pickle
+import shutil
+import tarfile
 import warnings
+import zipfile
+from contextlib import contextmanager
 from copy import deepcopy
+from urllib.request import urlretrieve
 
 import numpy as np
 from scipy import sparse
@@ -14,6 +19,146 @@ from six import string_types
 from bigarray import MmapArrayWriter
 from odin.fuel import Dataset
 from odin.utils import as_tuple, ctext
+from odin.utils.crypto import md5_checksum, md5_folder
+
+__all__ = [
+    'apply_artificial_corruption',
+    'get_library_size',
+    'read_compressed',
+    'standardize_protein_name',
+    'get_gene_id2name',
+    'validating_dataset',
+    'save_to_dataset',
+]
+
+
+# ===========================================================================
+# For reading compressed files
+# ===========================================================================
+def validate_data_dir(path_dir, md5):
+  if not os.path.exists(path_dir):
+    os.makedirs(path_dir)
+  elif md5_folder(path_dir) != md5:
+    shutil.rmtree(path_dir)
+    print(f"MD5 preprocessed at {path_dir} mismatch, remove and override!")
+    os.makedirs(path_dir)
+  return path_dir
+
+
+def download_file(url, filename, override, md5=None):
+  if md5 is None:
+    md5 = r""
+  from tqdm import tqdm
+  if os.path.exists(filename) and os.path.isfile(filename):
+    if override:
+      os.remove(filename)
+    if len(md5) > 0:
+      if md5 == md5_checksum(filename):
+        return filename
+      else:
+        print(f"MD5 of file {filename} mismatch, re-download the file.")
+        os.remove(filename)
+    else:  # no MD5 provide just ignore the download if file exist
+      return filename
+  prog = [None]
+
+  def progress(blocknum, blocksize, total):
+    if prog[0] is None:
+      prog[0] = tqdm(desc=f"Download {os.path.basename(filename)}",
+                     total=int(total / 1024. / 1024.) + 1,
+                     unit="MB")
+    prog[0].update(int(blocknum * blocksize / 1024. / 1024.) - prog[0].n)
+
+  urlretrieve(url=url, filename=filename, reporthook=progress)
+  prog[0].clear()
+  prog[0].close()
+  print(f"File '{filename}' md5:{md5_checksum(filename)}")
+  return filename
+
+
+def read_r_matrix(matrix):
+  r"""Convert (and transpose) a dgCMatrix from R to a csr_matrix in python
+
+  Author:
+    Isaac Virshup (ivirshup)
+      https://github.com/theislab/anndata2ri/issues/8#issuecomment-482925685
+  """
+  import rpy2.robjects as ro
+  from rpy2.robjects import pandas2ri
+  from rpy2.robjects.conversion import localconverter
+  from scipy.sparse import csr_matrix
+  rclass = list(matrix.rclass)[0]
+  if rclass == 'dgCMatrix':
+    ro.r['options'](warn=-1)
+    ro.r("library(Matrix)")
+    with localconverter(ro.default_converter + pandas2ri.converter):
+      X = csr_matrix((matrix.slots["x"], matrix.slots["i"], matrix.slots["p"]),
+                     shape=tuple(ro.r("dim")(matrix))[::-1]).T
+  elif rclass == 'matrix':
+    X = np.array(matrix)
+  elif isinstance(matrix, ro.vectors.DataFrame):
+    pandas2ri.activate()
+    X = ro.conversion.rpy2py(matrix)
+  else:
+    raise NotImplementedError(
+        f"No support for R matrix of class {rclass}-{type(matrix)}")
+  return X
+
+
+@contextmanager
+def read_compressed(in_file,
+                    md5_download=None,
+                    override=False,
+                    verbose=False) -> dict:
+  r"""
+  Return:
+    a Dictionary : mapping from name of files to extracted buffer
+  """
+  if md5_download is None:
+    md5_download = ''
+  assert os.path.isfile(in_file)
+  ext = os.path.splitext(in_file.lower())[-1]
+  extracted_name = {}
+  opened_files = []
+  ### validate md5
+  if len(md5_download) > 0 and md5_download != md5_checksum(in_file):
+    raise RuntimeError(f"MD5 file {in_file} mismatch")
+  ### '.tar' file
+  if tarfile.is_tarfile(in_file):
+    if ext == '.tar':
+      mode = 'r'
+    elif ext == '.tar.gz':
+      mode = 'r:gz'
+    else:
+      raise NotImplementedError(f"No support for decompressing {in_file}")
+    f = tarfile.open(in_file, mode=mode)
+    opened_files.append(f)
+    for info in f.getmembers():
+      name = info.name
+      data = f.extractfile(info)
+      if os.path.splitext(name)[-1] == '.gz':
+        data = gzip.GzipFile(mode='rb', fileobj=data)
+        name = name[:-3]
+      extracted_name[name] = data
+  ### zip file
+  elif zipfile.is_zipfile(in_file):
+    raise NotImplementedError(in_file)
+  ### '.gz' file
+  elif ext == '.gz':
+    name = os.path.basename(in_file)[:-3]
+    f = gzip.open(in_file, mode='rb')
+    extracted_name[name[:-3]] = f
+    opened_files.append(f)
+  ### '.gz' file
+  else:
+    raise NotImplementedError(in_file)
+  ### return a dictionary of file name to path
+  yield extracted_name
+  for f in opened_files:
+    try:
+      f.close()
+    except:
+      pass
 
 
 # ===========================================================================
@@ -112,7 +257,9 @@ def get_library_size(X, return_log_count=False):
   local_var = (np.var(log_counts) * np.ones((X.shape[0], 1))).astype(np.float32)
   if not return_log_count:
     return local_mean, local_var
-  return np.expand_dims(log_counts, -1), local_mean, local_var
+  if log_counts.ndim < 2:
+    log_counts = np.expand_dims(log_counts, axis=-1)
+  return log_counts, local_mean, local_var
 
 
 # ===========================================================================
@@ -132,17 +279,6 @@ def _check_data(X, X_col, y, y_col, rowname):
     assert X.shape[0] == y.shape[0], \
     "Number of sample mismatch `X=%s` and `y=%s`" % (X.shape, y.shape)
     assert y_col.ndim == 1 and len(y_col) == y.shape[1]
-
-
-def read_gzip_csv(path):
-  with gzip.open(path, 'rb') as file_obj:
-    data = []
-    for line in file_obj:
-      line = str(line, 'utf-8').strip()
-      line = line.split(',')
-      data.append(line)
-    data = np.array(data)
-    return data
 
 
 # ===========================================================================
@@ -171,7 +307,9 @@ def standardize_protein_name(name):
   if isinstance(name, (tuple, list, np.ndarray)):
     return [standardize_protein_name(i) for i in name]
   assert isinstance(name, string_types), "Protein name must be string types"
-  name = name.replace('-TotalSeqB', '')
+  for i in ('-', '_'):
+    for j in ('TotalSeqB', 'control', 'TotalSeqC', 'TotalSeqA'):
+      name = name.replace(f'{i}{j}', '')
   name = name.strip()
   # regular expression could be used but it could brutally remove
   # a lot of things without our notice

@@ -13,11 +13,11 @@ import scipy as sp
 
 from odin.fuel import Dataset
 from odin.utils import crypto, ctext, get_file
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 _URL = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0tJX0ZBQ1NfJWRwcm90ZWluLnpp\ncA==\n'
-_FACS_PREPROCESSED = os.path.join(PREPROCESSED_BASE_DIR, 'FACS%d_preprocessed')
+_FACS_PREPROCESSED = os.path.join(DATA_DIR, 'FACS%d_preprocessed')
 
 _PASSWORD = 'uef-czi'
 

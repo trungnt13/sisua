@@ -11,10 +11,10 @@ import scipy as sp
 
 from odin.fuel import Dataset
 from odin.utils import batching, crypto, ctext, get_file
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
-_CITEseq_CBMC_PREPROCESSED = os.path.join(PREPROCESSED_BASE_DIR,
+_CITEseq_CBMC_PREPROCESSED = os.path.join(DATA_DIR,
                                           'CBMC_preprocessed')
 
 _URL = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL0NCTUMuemlw\n'

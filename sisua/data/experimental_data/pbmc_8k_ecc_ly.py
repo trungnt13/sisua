@@ -10,7 +10,7 @@ from odin.fuel import Dataset
 from odin.utils import as_tuple
 from sisua.data.data_loader.pbmc8k import read_PBMC8k
 from sisua.data.data_loader.pbmcecc import read_PBMCeec
-from sisua.data.path import PREPROCESSED_BASE_DIR
+from sisua.data.path import DATA_DIR
 from sisua.data.utils import save_to_dataset, standardize_protein_name
 
 
@@ -25,7 +25,7 @@ def read_PBMCcross_ecc_8k(subset,
   It will select the most overlap subset when `filtered_genes=True`
   """
   preprocessed_path = os.path.join(
-      PREPROCESSED_BASE_DIR,
+      DATA_DIR,
       'PBMCcross_%s_%s_preprocessed' % ('ecc' if return_ecc else '8k', subset +
                                         ('' if filtered_genes else 'full')))
   if override and os.path.exists(preprocessed_path):
@@ -96,7 +96,7 @@ def read_PBMCcross_remove_protein(subset,
   remove_protein = sorted(
       [i.lower() for i in as_tuple(remove_protein, t=string_types)])
   preprocessed_path = os.path.join(
-      PREPROCESSED_BASE_DIR, 'PBMCcross_%s_%s_no%s_preprocessed' %
+      DATA_DIR, 'PBMCcross_%s_%s_no%s_preprocessed' %
       ('ecc' if return_ecc else '8k', subset +
        ('' if filtered_genes else 'full'), ''.join(
            [i.lower() for i in remove_protein])))

@@ -24,8 +24,11 @@ with open('README.rst') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai==1.2.1", "seaborn>=0.9", "pandas", "scanpy==1.4.4",
-    "hyperopt==0.1.2"
+    "odin-ai==1.2.1",
+    "seaborn>=0.9",
+    "pandas",
+    "scanpy==1.5.1", # 1.4.6
+    "hyperopt==0.1.2",
 ]
 
 setup(

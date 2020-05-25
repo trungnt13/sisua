@@ -35,9 +35,17 @@ from sisua.label_threshold import ProbabilisticEmbedding
 
 class _OMICanalyzer(_OMICbase):
 
+  def probability(self, omic=None):
+    r""" Return the probability embedding of an OMIC """
+    return self.probabilistic_embedding(omic=omic)[1]
+
+  def binary(self, omic=None):
+    r""" Return the binary embedding of an OMIC """
+    return self.probabilistic_embedding(omic=omic)[2]
+
   # ******************** transformation ******************** #
   def corrupt(self,
-              omic=OMIC.transcriptomic,
+              omic=None,
               dropout_rate=0.2,
               retain_rate=0.2,
               distribution='binomial',
@@ -55,6 +63,8 @@ class _OMICanalyzer(_OMICbase):
         new `SingleCellOMIC` with the corrupted data.
       seed : `int` (default=8). Seed for the random state.
     """
+    if omic is None:
+      omic = self.current_omic
     om = self if inplace else self.copy()
     om._record('corrupt', locals())
     if not (0. < retain_rate < 1. or 0. < dropout_rate < 1.):
@@ -70,15 +80,17 @@ class _OMICanalyzer(_OMICbase):
     return om
 
   def filter_highly_variable_genes(self,
-                                   min_disp=0.5,
+                                   min_disp=1.0,
                                    max_disp=np.inf,
-                                   min_mean=0.0125,
-                                   max_mean=3,
+                                   min_mean=0.01,
+                                   max_mean=8,
                                    n_top_genes=1000,
                                    n_bins=20,
-                                   flavor='cell_ranger',
+                                   flavor='seurat',
                                    inplace=True):
     r""" Annotate highly variable genes [Satija15]_ [Zheng17]_.
+
+    https://www.rdocumentation.org/packages/Seurat/versions/2.3.4/topics/FindVariableGenes
 
     Expects logarithmized data.
 
@@ -139,7 +151,6 @@ class _OMICanalyzer(_OMICbase):
     if n_top_genes is not None:
       if 0. < n_top_genes < 1.:
         n_top_genes = int(n_top_genes * self.n_vars)
-      n_top_genes += 1
     # prepare the data
     # this function will take the exponential of X all the time,
     # so non-logarithmzed data might led to overflow
@@ -267,7 +278,7 @@ class _OMICanalyzer(_OMICbase):
     return omics
 
   def probabilistic_embedding(self,
-                              omic,
+                              omic=None,
                               n_components_per_class=2,
                               positive_component=1,
                               log_norm=False,
@@ -288,6 +299,8 @@ class _OMICanalyzer(_OMICbase):
       pbe : {`sisua.ProbabilisticEmbedding`, `None`}, optional pretrained
         instance of `ProbabilisticEmbedding`
     """
+    if omic is None:
+      omic = self.current_omic
     self._record('probabilistic_embedding', locals())
     # We turn-off default log_norm here since the data can be normalized
     # separately in advance.
@@ -340,11 +353,13 @@ class _OMICanalyzer(_OMICbase):
     return pbe, self.obsm[prob_name], self.obsm[bin_name]
 
   def dimension_reduce(self,
-                       omic=OMIC.transcriptomic,
+                       omic=None,
                        n_components=100,
                        algo='pca',
                        random_state=1):
     r""" Perform dimension reduction on given OMIC data. """
+    if omic is None:
+      omic = self.current_omic
     self._record('dimension_reduce', locals())
     from sklearn.decomposition import IncrementalPCA
     algo = str(algo).lower().strip()
@@ -399,7 +414,9 @@ class _OMICanalyzer(_OMICbase):
     return self.obsm[name] if n_components is None else \
       self.obsm[name][:, :int(n_components)]
 
-  def expm1(self, omic=OMIC.transcriptomic, inplace=True):
+  def expm1(self, omic=None, inplace=True):
+    if omic is None:
+      omic = self.current_omic
     om = self if inplace else self.copy()
     om._record('expm1', locals())
     _expm1 = lambda x: (np.expm1(x.data, out=x.data)
@@ -411,7 +428,7 @@ class _OMICanalyzer(_OMICbase):
     return om
 
   def normalize(self,
-                omic=OMIC.transcriptomic,
+                omic=None,
                 total=False,
                 log1p=False,
                 scale=False,
@@ -457,6 +474,8 @@ class _OMICanalyzer(_OMICbase):
       Proxy to `scanpy.pp.normalize_total`,  `scanpy.pp.log1p` and
         `scanpy.pp.scale`
     """
+    if omic is None:
+      omic = self.current_omic
     om = self if inplace else self.copy()
     om._record('normalize', locals())
     if omic != OMIC.transcriptomic:
@@ -487,31 +506,9 @@ class _OMICanalyzer(_OMICbase):
     om._calculate_statistics(omic)
     return om
 
-  # ====== statistics ====== #
-  def sparsity(self, omic=OMIC.transcriptomic):
-    return sparsity_percentage(self.numpy(omic))
-
-  def counts_per_cell(self, omic=OMIC.transcriptomic):
-    r""" Return total number of counts per cell. This method
-    is scalable. """
-    counts = 0
-    X = self.numpy(omic)
-    for s, e in batching(batch_size=BATCH_SIZE, n=X.shape[1]):
-      counts += np.sum(X[:, s:e], axis=1)
-    return counts
-
-  def counts_per_gene(self, omic=OMIC.transcriptomic):
-    r""" Return total number of counts per gene. This method
-    is scalable. """
-    counts = 0
-    X = self.numpy(omic)
-    for s, e in batching(batch_size=BATCH_SIZE, n=X.shape[0]):
-      counts += np.sum(X[s:e], axis=0)
-    return counts
-
   # ******************** metrics ******************** #
   def neighbors(self,
-                omic=OMIC.transcriptomic,
+                omic=None,
                 n_neighbors=15,
                 n_pcs=100,
                 knn=True,
@@ -564,6 +561,8 @@ class _OMICanalyzer(_OMICbase):
           Instead of decaying weights, this stores distances for each pair of
           neighbors.
     """
+    if omic is None:
+      omic = self.current_omic
     self._record('neighbors', locals())
     omic = OMIC.parse(omic)
     name = omic + '_neighbors'
@@ -584,7 +583,7 @@ class _OMICanalyzer(_OMICbase):
     return self.uns[name]
 
   def clustering(self,
-                 omic=OMIC.transcriptomic,
+                 omic=None,
                  n_clusters=OMIC.proteomic | OMIC.celltype,
                  n_init='auto',
                  matching_labels=True,
@@ -599,6 +598,8 @@ class _OMICanalyzer(_OMICbase):
       return_key : a Boolean. If True, return the name of the labels
         stored in `.obs` instead of the labels array.
     """
+    if omic is None:
+      omic = self.current_omic
     self._record('clustering', locals())
     ## clustering algorithm
     algo = str(algo).strip().lower()
@@ -678,7 +679,7 @@ class _OMICanalyzer(_OMICbase):
     return output_name if return_key else labels
 
   def louvain(self,
-              omic=OMIC.transcriptomic,
+              omic=None,
               resolution=None,
               restrict_to=None,
               adjacency=None,
@@ -725,6 +726,8 @@ class _OMICanalyzer(_OMICbase):
           if ``vtraag`` method is being used.
       random_state : Change the initialization of the optimization.
     """
+    if omic is None:
+      omic = self.current_omic
     self._record('louvain', locals())
     try:
       import louvain
@@ -916,22 +919,20 @@ class _OMICanalyzer(_OMICbase):
 
   # ******************** logging and io ******************** #
   @cache_memory
-  def omic_correlation(self, omic=OMIC.proteomic):
-    r""" Calculate the correlation scores between transcriptome and another
-      OMIC type (could be different or the same OMIC).
+  def omic_correlation(self, omic1=None, omic2=None):
+    r""" Calculate the correlation scores between two omic types
+    (could be different or the same OMIC).
 
     Return:
       list of tuple contained 4 scalars:
         (gene-idx, protein-idx, pearson, spearman)
         sorted in order from high to low average correlation
     """
-    om1 = OMIC.transcriptomic
-    om2 = omic
-    assert om2 in self.omics, \
-      "Cannot find omic:'%s', available are: %s" % (om2, self.omics)
+    omic1 = self.current_omic if omic1 is None else OMIC.parse(omic1)
+    omic2 = self.current_omic if omic2 is None else OMIC.parse(omic2)
     ### prepare the data
-    x1 = self.numpy(om1)
-    x2 = self.numpy(om2)
+    x1 = self.numpy(omic1)
+    x2 = self.numpy(omic2)
     n_om1 = x1.shape[1]
     n_om2 = x2.shape[1]
 

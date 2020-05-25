@@ -9,7 +9,7 @@ import numpy as np
 from odin.fuel import Dataset
 from odin.utils import batching, ctext, get_file, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
-from sisua.data.path import DOWNLOAD_DIR, PREPROCESSED_BASE_DIR
+from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
 # ===========================================================================
@@ -35,7 +35,7 @@ def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
     os.mkdir(download_path)
 
   preprocessed_path = os.path.join(
-      PREPROCESSED_BASE_DIR,
+      DATA_DIR,
       'PBMC8k_%s_preprocessed' % (subset + ('' if filtered_genes else 'full')))
 
   if override and os.path.exists(preprocessed_path):

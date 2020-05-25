@@ -14,6 +14,7 @@ class DeepCountAutoencoder(SingleCellModel):
   r""" Deep Count Autoencoder """
 
   def __init__(self,
+               outputs,
                latents=RandomVariable(10, 'relu', True, name="Latents"),
                **kwargs):
     # force a deterministic latent space
@@ -24,4 +25,4 @@ class DeepCountAutoencoder(SingleCellModel):
             "DeepCountAutoencoder only support deterministic latents, "
             f"but given {z}, use default linear Dense layer for latents.")
         z.posterior = 'linear'
-    super().__init__(latents=latents, **kwargs)
+    super().__init__(outputs=outputs, latents=latents, **kwargs)

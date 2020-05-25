@@ -34,7 +34,9 @@ from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
 from odin.visual import Visualizer
 from sisua.data import OMIC, SingleCellOMIC
 
-__all__ = ['SingleCellModel', 'NetworkConfig', 'RandomVariable', 'interpolation']
+__all__ = [
+    'SingleCellModel', 'NetworkConfig', 'RandomVariable', 'interpolation'
+]
 
 
 def _to_data(x, batch_size=64) -> Dataset:
@@ -79,22 +81,22 @@ class SingleCellModel(BetaVAE, Visualizer):
       name=None,
       **kwargs,
   ):
+    reduce_latent = kwargs.pop('reduce_latent', 'concat')
+    input_shape = kwargs.pop('input_shape', None)
+    step = kwargs.pop('step', 0.)
     super().__init__(outputs=outputs,
                      latents=latents,
                      encoder=encoder,
                      decoder=decoder,
                      beta=beta,
                      name=name,
-                     **kwargs)
+                     reduce_latent=reduce_latent,
+                     input_shape=input_shape,
+                     step=step)
     self._analytic = bool(analytic)
     self._log_norm = bool(log_norm)
-    self._dataset = None
+    self.dataset = None
     self._n_inputs = max(len(l.inputs) for l in tf.nest.flatten(self.encoder))
-
-  @property
-  def dataset(self):
-    r""" Return the name of the last SingleCellOMIC dataset fitted on """
-    return self._dataset
 
   @property
   def log_norm(self):
@@ -104,19 +106,13 @@ class SingleCellModel(BetaVAE, Visualizer):
   def is_zero_inflated(self):
     return self.posteriors[0].is_zero_inflated
 
-  @classproperty
-  def is_multiple_outputs(self):
-    r""" Return true if __init__ contains both 'rna_dim' and 'adt_dim'
-    as arguments """
-    args = inspect.getfullargspec(self.__init__).args
-    return 'rna_dim' in args and 'adt_dim' in args
-
   def encode(self,
              inputs,
              library=None,
              training=None,
              mask=None,
-             sample_shape=()):
+             sample_shape=(),
+             **kwargs):
     if self.log_norm:
       if tf.is_tensor(inputs):
         inputs = tf.math.log1p(inputs)
@@ -129,13 +125,20 @@ class SingleCellModel(BetaVAE, Visualizer):
     return super().encode(inputs=inputs,
                           training=training,
                           mask=mask,
-                          sample_shape=sample_shape)
+                          sample_shape=sample_shape,
+                          **kwargs)
 
-  def decode(self, latents, training=None, mask=None, sample_shape=()):
+  def decode(self,
+             latents,
+             training=None,
+             mask=None,
+             sample_shape=(),
+             **kwargs):
     return super().decode(latents=latents,
                           training=training,
                           mask=mask,
-                          sample_shape=sample_shape)
+                          sample_shape=sample_shape,
+                          **kwargs)
 
   def predict(self, inputs, sample_shape=(), batch_size=64, verbose=True):
     r"""
@@ -186,51 +189,22 @@ class SingleCellModel(BetaVAE, Visualizer):
       Z = concat_distribution(Z, axis=0)
     return X, Z
 
-  def fit(
-      self,
-      train: Union[SingleCellOMIC, DatasetV2],
-      valid: Union[SingleCellOMIC, DatasetV2] = None,
-      valid_freq=500,
-      valid_interval=0,
-      optimizer='adam',
-      learning_rate=1e-3,
-      clipnorm=100,
-      epochs=-1,
-      max_iter=1000,
-      sample_shape=(),  # for ELBO
-      analytic=None,  # for ELBO
-      callback=None,
-      compile_graph=True,
-      autograph=False,
-      logging_interval=2,
-      skip_fitted=False,
-      log_path=None,
-      earlystop_threshold=0.001,
-      earlystop_progress_length=0,
-      earlystop_patience=-1,
-      earlystop_min_epoch=-np.inf,
-      terminate_on_nan=True,
-      checkpoint=None,
-      allow_rollback=False,
-      allow_none_gradients=False):
+  def fit(self,
+          train: Union[SingleCellOMIC, DatasetV2],
+          valid: Union[SingleCellOMIC, DatasetV2] = None,
+          analytic=None,
+          **kwargs):
     r""" This fit function is the combination of both
     `Model.compile` and `Model.fit` """
     if analytic is None:
       analytic = self._analytic
     ## preprocessing the data
     if isinstance(train, SingleCellOMIC):
-      self._dataset = train.name
+      self.dataset = train.name
     train = _to_data(train)
     if valid is not None:
       valid = _to_data(valid)
-    ## call fit
-    kw = locals()
-    del kw['self']
-    args = inspect.getfullargspec(super().fit).args
-    for k in list(kw.keys()):
-      if k not in args:
-        del kw[k]
-    return super().fit(**kw)
+    return super().fit(train=train, valid=valid, analytic=analytic, **kwargs)
 
   @classproperty
   def id(cls):

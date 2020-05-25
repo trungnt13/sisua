@@ -9,8 +9,10 @@ import tensorflow as tf
 from odin.bay.vi.autoencoder import MultitaskVAE
 from sisua.models.single_cell_model import RandomVariable, SingleCellModel
 
+__all__ = ['VAE', 'SISUA', 'MISA']
 
-class VariationalAutoEncoder(SingleCellModel):
+
+class VAE(SingleCellModel):
   r""" Variational Auto Encoder """
 
 
@@ -28,14 +30,6 @@ class SISUA(MultitaskVAE, SingleCellModel):
     RandomVariable(adt_dim, 'onehot'/'nbd'/'nb', True, 'ADT')
     ```
 
-  Arguments:
-    rna_dim : Integer, number of input dimension for scRNA-seq.
-    adt_dim : Integer, number of input dimension for ADT.
-    is_adt_probability : Boolean, if True, use `Bernoulli` for modeling the ADT,
-      otherwise, use `NegativeBinomial`.
-    alternative_nb : Boolean, if True, use mean-dispersion parameterization
-      for negative binomial distribution.
-
   Reference:
     Ngo Trong, T., Kramer, R., Mehtonen, J., González, G., Hautamäki,
       V., Heinäniemi, M., 2019. "SISUA: Semi-Supervised Generative Autoencoder
@@ -51,7 +45,29 @@ class SISUA(MultitaskVAE, SingleCellModel):
 
 
 class MISA(SISUA):
-  r""" MIxture labels for Semi-supervised Autoencoder """
+  r""" MIxture labels for Semi-supervised Autoencoder
+
+  Example:
+  ```
+  sco = get_dataset("8kly")
+  train, test = sco.split()
+  print(train)
+  # train.corrupt()
+  rna = RandomVariable(sco.get_omic_dim('transcriptomic'), 'zinb', True,
+                       'transcriptomic')
+  adt = RandomVariable(sco.get_omic_dim('proteomic'), 'mixtril', True, 'proteomic')
+  ######## Test
+  vae = MISA(rna, adt, n_components=2)
+  print(vae)
+  vae.fit(train.create_dataset(train.omics, labels_percent=0.1),
+          valid=test.create_dataset(test.omics, labels_percent=1.0),
+          learning_rate=1e-3,
+          valid_freq=500,
+          compile_graph=True,
+          max_iter=25000)
+  vae.plot_learning_curves('/tmp/tmp.png')
+  ```
+  """
 
   def __init__(self,
                outputs,
@@ -63,8 +79,6 @@ class MISA(SISUA):
     n_components = int(n_components)
     zero_inflated = bool(zero_inflated)
     for rv in labels:
-      if 'n_components' not in rv.kwargs:
-        rv.kwargs['n_components'] = n_components
       # discrete count
       if rv.is_discrete or rv.is_binary:
         if rv.posterior[:3] != 'mix':
@@ -78,4 +92,7 @@ class MISA(SISUA):
         warnings.warn("MISA only support labels is a mixture distribution "
                       f", given: {rv.posterior}")
         rv.posterior = 'mixgaussian'
+      # modify the n_components
+      if 'n_components' not in rv.kwargs:
+        rv.kwargs['n_components'] = n_components
     super().__init__(outputs=outputs, labels=labels, **kwargs)

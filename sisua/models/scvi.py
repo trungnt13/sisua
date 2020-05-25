@@ -13,6 +13,8 @@ from odin.networks import Identity
 from sisua.models.single_cell_model import (NetworkConfig, RandomVariable,
                                             SingleCellModel)
 
+__all__ = ['SCVI']
+
 
 class SCVI(SingleCellModel):
   r""" Re-implementation of single cell variational inference (scVI) in
@@ -88,7 +90,8 @@ class SCVI(SingleCellModel):
              library=None,
              training=None,
              mask=None,
-             sample_shape=()):
+             sample_shape=(),
+             **kwargs):
     qZ_X = super().encode(inputs=inputs,
                           library=library,
                           training=training,
@@ -102,7 +105,12 @@ class SCVI(SingleCellModel):
     qZ_X[-1].KL_divergence.prior = pL
     return qZ_X
 
-  def decode(self, latents, training=None, mask=None, sample_shape=()):
+  def decode(self,
+             latents,
+             training=None,
+             mask=None,
+             sample_shape=(),
+             **kwargs):
     qZ, qL = latents
     Z_samples = qZ
     # clipping L value to avoid overflow, softplus(12) = 12
@@ -130,17 +138,13 @@ class SCVI(SingleCellModel):
       px_r = tf.exp(px_r)
     # recover the sample shape
     if sample_shape:
-      px_rate = tf.reshape(
-          px_rate,
-          tf.concat([output_shape,
-                     tf.convert_to_tensor(px_rate.shape[1:])],
-                    axis=0))
+      shape = tf.concat(
+          [output_shape, tf.convert_to_tensor(px_rate.shape[1:])], axis=0)
+      px_rate = tf.reshape(px_rate, shape)
       if self.dispersion == 'full':
-        px_r = tf.reshape(
-            px_r,
-            tf.concat([output_shape,
-                       tf.convert_to_tensor(px_r.shape[1:])],
-                      axis=0))
+        shape = tf.concat(
+            [output_shape, tf.convert_to_tensor(px_r.shape[1:])], axis=0)
+        px_r = tf.reshape(px_r, shape)
     # mRNA expression distribution
     # this order is the same as how the parameters are splited in distribution
     # layer
@@ -149,12 +153,10 @@ class SCVI(SingleCellModel):
       # dropout for zero inflation
       px_dropout = self.px_dropout(d)
       if sample_shape:
-        px_dropout = tf.reshape(
-            px_dropout,
-            tf.concat(
-                [output_shape,
-                 tf.convert_to_tensor(px_dropout.shape[1:])],
-                axis=0))
+        shape = tf.concat(
+            [output_shape,
+             tf.convert_to_tensor(px_dropout.shape[1:])], axis=0)
+        px_dropout = tf.reshape(px_dropout, shape)
       params.append(px_dropout)
       params = tf.concat(params, axis=-1)
     else:
@@ -162,9 +164,9 @@ class SCVI(SingleCellModel):
     pX = self.posteriors[0](params, training=training, projection=False)
     # for semi-supervised learning
     if sample_shape:
-      d = tf.reshape(
-          d, tf.concat(
-              [output_shape, tf.convert_to_tensor(d.shape[1:])], axis=0))
+      shape = tf.concat(
+          [output_shape, tf.convert_to_tensor(d.shape[1:])], axis=0)
+      d = tf.reshape(d, shape)
     pY = [p(d, training=training) for p in self.posteriors[1:]]
     return [pX] + pY
 
