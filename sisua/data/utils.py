@@ -46,6 +46,7 @@ def validate_data_dir(path_dir, md5):
 
 
 def download_file(url, filename, override, md5=None):
+  f""" Download file and check the MD5 (if provided) """
   if md5 is None:
     md5 = r""
   from tqdm import tqdm

@@ -82,21 +82,23 @@ MARKER_REGIONS = {
 _MARKER_REGIONS_URL = [
     r"https://www.encodeproject.org/files/ENCFF108APF/@@download/ENCFF108APF.bed.gz"
 ]
-  #   # other data types (matrix or dataframe)
-  #   else:
-  #     data = read_r_matrix(data)
-  #     data.to_pickle(outpath)
-  # # tsv files
-  # elif '.tsv.gz' in path.lower():
-  #   data = pd.read_csv(path, compression='gzip', header=0, sep='\t')
-  #   data.to_pickle(outpath)
 
-    # peak2gene=
-    # (r"https://jeffgranja.s3.amazonaws.com/MPAL-10x/Supplementary_Data/Integration/MPAL-Significant-Peak2Gene-Links.tsv.gz",
-    #  r"8258d7eb424f5d977bd849ba0cc37c6f"),
-    # rna2atac=
-    # (r"https://jeffgranja.s3.amazonaws.com/MPAL-10x/Supplementary_Data/Integration/scATAC-scRNA-mappings.rds",
-    #  r"c41bddd79cda449058ad46cd53064ac5"),
+#   # other data types (matrix or dataframe)
+#   else:
+#     data = read_r_matrix(data)
+#     data.to_pickle(outpath)
+# # tsv files
+# elif '.tsv.gz' in path.lower():
+#   data = pd.read_csv(path, compression='gzip', header=0, sep='\t')
+#   data.to_pickle(outpath)
+
+# peak2gene=
+# (r"https://jeffgranja.s3.amazonaws.com/MPAL-10x/Supplementary_Data/Integration/MPAL-Significant-Peak2Gene-Links.tsv.gz",
+#  r"8258d7eb424f5d977bd849ba0cc37c6f"),
+# rna2atac=
+# (r"https://jeffgranja.s3.amazonaws.com/MPAL-10x/Supplementary_Data/Integration/scATAC-scRNA-mappings.rds",
+#  r"c41bddd79cda449058ad46cd53064ac5"),
+
 
 # ===========================================================================
 # Omic Enum
@@ -112,6 +114,7 @@ class OMIC(OrderedFlag):
   metabolomic = 'metabolomic'
   microbiomic = 'microbiomic'
   celltype = 'celltype'
+  progenitor = 'progenitor'
   latent = 'latent'
 
   @classmethod

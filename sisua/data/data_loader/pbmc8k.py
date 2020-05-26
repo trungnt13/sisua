@@ -9,8 +9,10 @@ import numpy as np
 from odin.fuel import Dataset
 from odin.utils import batching, ctext, get_file, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
-from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
-from sisua.data.utils import remove_allzeros_columns, save_to_dataset
+from sisua.data.path import DATA_DIR, DOWNLOAD_DIR
+from sisua.data.single_cell_dataset import SingleCellOMIC
+from sisua.data.utils import (download_file, remove_allzeros_columns,
+                              save_to_dataset)
 
 # ===========================================================================
 # Constants
@@ -24,52 +26,50 @@ _URL_PBMC8k = b'aHR0cHM6Ly9zMy5hbWF6b25hd3MuY29tL2FpLWRhdGFzZXRzL3BibWM4a19mdWxs
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
+def read_PBMC8k(subset='full',
+                override=False,
+                verbose=True,
+                filtered_genes=True,
+                return_arrays=False) -> SingleCellOMIC:
   subset = str(subset).strip().lower()
   if subset not in ('ly', 'my', 'full'):
     raise ValueError(
         "subset can only be 'ly'-lymphoid and 'my'-myeloid or 'full'")
-
-  download_path = os.path.join(DOWNLOAD_DIR, "PBMC8k_%s_original" % subset)
+  # prepare the path
+  download_path = os.path.join(DOWNLOAD_DIR, f"PBMC8k_{subset}_original")
   if not os.path.exists(download_path):
     os.mkdir(download_path)
-
   preprocessed_path = os.path.join(
       DATA_DIR,
-      'PBMC8k_%s_preprocessed' % (subset + ('' if filtered_genes else 'full')))
-
+      f"PBMC8k_{subset}_{'filtered' if filtered_genes else 'all'}_preprocessed")
   if override and os.path.exists(preprocessed_path):
     shutil.rmtree(preprocessed_path)
   if not os.path.exists(preprocessed_path):
     os.mkdir(preprocessed_path)
-
   # ******************** preprocessed ******************** #
-  if not os.path.exists(os.path.join(preprocessed_path, 'X')):
+  if len(os.listdir(preprocessed_path)) == 0:
     # ====== pbmc 8k ====== #
     if subset == 'full':
-      ly = read_PBMC8k('ly', override=override, filtered_genes=filtered_genes)
-      my = read_PBMC8k('my', override=override, filtered_genes=filtered_genes)
-
+      ly = read_PBMC8k('ly', filtered_genes=filtered_genes, return_arrays=True)
+      my = read_PBMC8k('my', filtered_genes=filtered_genes, return_arrays=True)
       url = str(base64.decodebytes(_URL_PBMC8k), 'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name,
-               origin=url,
-               outdir=download_path,
-               verbose=verbose)
-
-      data = np.load(os.path.join(download_path, base_name))
+      path = os.path.join(download_path, base_name)
+      download_file(filename=path, url=url, override=False)
+      # load data
+      data = np.load(path)
       X = data['X']
       X_row = data['X_row']
       X_col = data['X_col'].tolist()
       y = data['y']
       y_col = data['y_col'].tolist()
-
+      # merge all genes from my and ly subset
       all_genes = set(ly['X_col'].tolist() + my['X_col'].tolist())
       all_genes = sorted([X_col.index(i) for i in all_genes])
-
+      # same for protein
       all_proteins = set(ly['y_col'].tolist() + my['y_col'].tolist())
       all_proteins = sorted([y_col.index(i) for i in all_proteins])
-
+      #
       X = X[:, all_genes]
       y = y[:, all_proteins]
       X_col = np.array(X_col)[all_genes]
@@ -81,12 +81,10 @@ def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
           base64.decodebytes(_URL_LYMPHOID if subset == 'ly' else _URL_MYELOID),
           'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name,
-               origin=url,
-               outdir=download_path,
-               verbose=verbose)
-      # ====== extract the data ====== #
-      data = np.load(os.path.join(download_path, base_name))
+      path = os.path.join(download_path, base_name)
+      download_file(filename=path, url=url, override=False)
+      # extract the data
+      data = np.load(path)
       X_row = data['X_row']
       y = data['y']
       y_col = data['y_col']
@@ -96,8 +94,7 @@ def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
       else:
         X = data['X_full']
         X_col = data['X_full_col']
-      cell_types = None
-
+      cell_types = np.array([subset] * X.shape[0])
     # ====== save everything ====== #
     X, X_col = remove_allzeros_columns(matrix=X,
                                        colname=X_col,
@@ -105,10 +102,8 @@ def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
     assert X.shape == (len(X_row), len(X_col))
     assert len(X) == len(y)
     assert y.shape[1] == len(y_col)
-
-    if cell_types is not None:
-      with open(os.path.join(preprocessed_path, 'cell_types'), 'wb') as f:
-        pickle.dump(cell_types, f)
+    with open(os.path.join(preprocessed_path, 'cell_types'), 'wb') as f:
+      pickle.dump(cell_types, f)
     save_to_dataset(preprocessed_path,
                     X,
                     X_col,
@@ -116,7 +111,21 @@ def read_PBMC8k(subset, override=False, verbose=False, filtered_genes=False):
                     y_col,
                     rowname=X_row,
                     print_log=verbose)
-
   # ******************** read preprocessed data ******************** #
   ds = Dataset(preprocessed_path, read_only=True)
-  return ds
+  if return_arrays:
+    return ds
+  sco = SingleCellOMIC(X=ds['X'],
+                       cell_id=ds['X_row'],
+                       gene_id=ds['X_col'],
+                       omic='transcriptomic',
+                       name=f'8k{subset}')
+  sco.add_omic('proteomic', X=ds['y'], var_names=ds['y_col'])
+  progenitor = ds['cell_types']
+  sco.add_omic(
+      'progenitor',
+      X=np.array([(1, 0) if i == 'my' else (0, 1) for i in progenitor],
+                 dtype=np.float32),
+      var_names=np.array(['myeloid', 'lymphoid']),
+  )
+  return sco

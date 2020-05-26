@@ -24,8 +24,10 @@ np.random.seed(8)
 
 # Example:
 # model.name=sisua,dca,vae,scvi,scale,misa,scalar,fvae,sfvae
-# dataset.name=cortex,8kly,8klyall,8klyx,eccly,ecclyall,ecclyx,8k,8kall
-# -m -ncpu 5 --reset
+# dataset.name=call,mpal,cortex,8kly,8klyall,8klyx,eccly,ecclyall,ecclyx,8k,8kall
+# callx,mpalx,8kx,eccx,vdj1x,vdj4x
+# -m -ncpu 5
+# --reset
 
 
 # ===========================================================================
@@ -74,7 +76,7 @@ class SisuaExperimenter(Experimenter):
     encoder = _from_config(model.encoder, NetworkConfig)
     decoder = _from_config(model.decoder, NetworkConfig)
     # parse random variables
-    omics = {o.name: self.sco.get_omic_dim(o) for o in self.sco.omics}
+    omics = {o.name: self.sco.get_shape(o) for o in self.sco.omics}
     rv = {
         k:
         _from_config(v,
@@ -103,9 +105,7 @@ class SisuaExperimenter(Experimenter):
     self.model.dataset = cfg.dataset.name
     self.model.load_weights(os.path.join(model_dir, 'weights'),
                             verbose=cfg.verbose)
-    self.omics = [i.name for i in self.sco.omics] \
-      if self.model.is_semi_supervised else \
-      ['transcriptomic']
+    self.omics = [i.name for i in self.model.output_layers]
     if cfg.verbose:
       print(self.model)
       print("Training OMICs:", self.omics)

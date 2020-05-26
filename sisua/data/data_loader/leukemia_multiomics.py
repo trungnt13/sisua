@@ -1,5 +1,6 @@
 import os
 import pickle
+import shutil
 from functools import partial
 
 import numpy as np
@@ -8,7 +9,7 @@ import scanpy as sc
 from scipy import sparse
 from six import string_types
 
-from odin.utils import MPI
+from odin.utils import MPI, one_hot
 from sisua.data.path import DATA_DIR, DOWNLOAD_DIR
 from sisua.data.single_cell_dataset import OMIC, SingleCellOMIC
 from sisua.data.utils import download_file, read_r_matrix, validate_data_dir
@@ -139,14 +140,22 @@ def _read_data(name_path, verbose, preprocessed_path):
   return name, exp
 
 
+def _celltypes(y):
+  labels = sorted(np.unique(y))
+  index = {name: i for i, name in enumerate(labels)}
+  y = one_hot(np.array([index[i] for i in y], dtype=np.int32),
+              nb_classes=len(labels))
+  return y, [i.replace("_Like", '').lower() for i in labels]
+
+
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_MPAL(filtered_genes=True,
-              omic='rna',
-              ignore_na=True,
-              override=False,
-              verbose=True) -> SingleCellOMIC:
+def read_leukemia_MixedPhenotypes(filtered_genes=True,
+                                  omic='rna',
+                                  ignore_na=True,
+                                  override=False,
+                                  verbose=True) -> SingleCellOMIC:
   r""" Integrates highly multiplexed protein quantification, transcriptome
   profiling, and chromatin accessibility analysis. Using this approach,
   we establish a normal epigenetic baseline for healthy blood development,
@@ -168,6 +177,10 @@ def read_MPAL(filtered_genes=True,
   if not os.path.exists(download_dir):
     os.makedirs(download_dir)
   preprocessed_path = os.path.join(DATA_DIR, 'mpal_preprocessed')
+  if override:
+    shutil.rmtree(preprocessed_path)
+    if verbose:
+      print(f"Override preprocessed data at {preprocessed_path}")
   if not os.path.exists(preprocessed_path):
     os.makedirs(preprocessed_path)
   ### download
@@ -204,7 +217,7 @@ def read_MPAL(filtered_genes=True,
     barcode2ids = {j: i for i, j in enumerate(rna.celldata['Barcode'])}
     ids = [barcode2ids[i] for i in cell_id]
     X_rna = rna.X[ids].astype(np.float32)
-    classification = rna.celldata['ProjectClassification'][ids]
+    classification = rna.celldata['ProjectClassification'][ids].values
     #
     barcode2ids = {j: i for i, j in enumerate(adt.celldata['Barcode'])}
     X_adt = adt.X[[barcode2ids[i] for i in cell_id]].astype(np.float32)
@@ -250,8 +263,11 @@ def read_MPAL(filtered_genes=True,
       sco.add_omic(OMIC.proteomic, X_adt[:, ids], adt.genenames[ids])
     else:
       sco.add_omic(OMIC.proteomic, X_adt, adt.genenames)
-    sco.var['exonLength'] = rna.genedata['exonLength']
-    sco.var['Classification'] = classification
+    y, labels = _celltypes(classification)
+    sco.add_omic(OMIC.celltype, y, labels)
+    exon = {i: j for i, j in rna.genedata[['gene_name', 'exonLength']].values}
+    sco.var['exonlength'] = np.array([exon[i] for i in sco.var_names],
+                                     dtype=np.float32)
   ### load ATAC
   else:
     atac = all_data['atac']
@@ -260,7 +276,8 @@ def read_MPAL(filtered_genes=True,
                          gene_id=atac.genenames,
                          omic=OMIC.chromatin,
                          name='mpalATAC')
-    sco.obs['Clusters'] = atac.celldata['Clusters']
-    sco.obs['Classification'] = atac.celldata['ProjectClassification']
-    sco.var['score'] = atac.genedata['score']
+    y, labels = _celltypes(atac.celldata['ProjectClassification'].values)
+    sco.add_omic(OMIC.celltype, y, labels)
+    sco.obs['clusters'] = atac.celldata['Clusters'].values
+    sco.var['score'] = atac.genedata['score'].values
   return sco

@@ -130,13 +130,13 @@ class _OMICbase(sc.AnnData):
     # swap then reset back to transcriptomic
     else:
       x = self.numpy(omic)
-      var = self.omic_var(omic)
+      var = self.get_var(omic)
       self._X = x
       self._var = var
       self._n_vars = self._X.shape[1]
       yield self
       self._X = self.numpy(current_omic)
-      self._var = self.omic_var(current_omic)
+      self._var = self.get_var(current_omic)
       self._n_vars = self._X.shape[1]
 
   @property
@@ -287,7 +287,7 @@ class _OMICbase(sc.AnnData):
     ]
     return genes
 
-  def omic_var(self, omic):
+  def get_var(self, omic) -> pd.DataFrame:
     omic = OMIC.parse(omic)
     for om in list(omic):
       name = om.name + '_var'
@@ -296,13 +296,13 @@ class _OMICbase(sc.AnnData):
     raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                      (omic, self.omics))
 
-  def omic_varnames(self, omic):
-    return self.omic_var(omic).index.values
+  def get_var_names(self, omic):
+    return self.get_var(omic).index.values
 
-  def get_omic_dim(self, omic):
+  def get_shape(self, omic):
     return self.numpy(omic=omic).shape[1]
 
-  def get_omic_data(self, omic):
+  def get_omic(self, omic):
     r""" Return observation ndarray in `obsm` or `obs` """
     return self.numpy(omic=omic)
 
@@ -460,7 +460,7 @@ class _OMICbase(sc.AnnData):
     if isinstance(omics, OMIC):
       omics = list(omics)
     omics = [OMIC.parse(o) for o in tf.nest.flatten(omics)]
-    inputs = [self.get_omic_data(o) for o in omics]
+    inputs = [self.get_omic(o) for o in omics]
     # library size
     library = []
     for o in omics:

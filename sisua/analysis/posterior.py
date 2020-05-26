@@ -247,7 +247,7 @@ class Posterior(Visualizer):
       for o, om in zip(outputs[1:], list(self.omics)[1:]):
         sco.add_omic(omic=om,
                      X=o,
-                     var_names=[name for name in self.sco.omic_var(om).index])
+                     var_names=[name for name in self.sco.get_var(om).index])
       sco.add_omic(omic=OMIC.latent,
                    X=latents,
                    var_names=['Z#%d' % i for i in range(latents.shape[1])])
@@ -282,7 +282,7 @@ class Posterior(Visualizer):
         break
     if factor is None:  # no good candidate, just discretizing second OMIC
       factor = support_omics[1]
-    factor_name = sco.omic_varnames(factor)
+    factor_name = sco.get_var_names(factor)
     # predict or original factors
     if predicted:
       if not self.is_semi_supervised:
@@ -324,7 +324,7 @@ class Posterior(Visualizer):
 
   @property
   def labels(self):
-    name = self.sco.omic_var(OMIC.proteomic | OMIC.celltype).index
+    name = self.sco.get_var(OMIC.proteomic | OMIC.celltype).index
     return [standardize_protein_name(i) for i in name]
 
   @property

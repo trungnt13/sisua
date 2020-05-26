@@ -8,10 +8,12 @@ from io import BytesIO
 import numpy as np
 
 from odin.fuel import Dataset
-from odin.utils import batching, ctext, get_file, select_path
+from odin.utils import batching, select_path
 from odin.utils.crypto import decrypt_aes, md5_checksum
-from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
-from sisua.data.utils import remove_allzeros_columns, save_to_dataset
+from sisua.data.path import DATA_DIR, DOWNLOAD_DIR
+from sisua.data.single_cell_dataset import SingleCellOMIC
+from sisua.data.utils import (download_file, remove_allzeros_columns,
+                              save_to_dataset)
 
 # ===========================================================================
 # Const
@@ -41,18 +43,19 @@ _PASSWORD = 'uef-czi'
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_CITEseq_PBMC(override=False, verbose=False, version_5000genes=False):
+def read_CITEseq_PBMC(override=False,
+                      verbose=True,
+                      filtered_genes=False) -> SingleCellOMIC:
   download_path = os.path.join(
       DOWNLOAD_DIR,
-      "PBMC_%s_original" % ('5000' if version_5000genes else 'CITEseq'))
+      "PBMC_%s_original" % ('5000' if filtered_genes else 'CITEseq'))
   if not os.path.exists(download_path):
-    os.mkdir(download_path)
-
+    os.makedirs(download_path)
   preprocessed_path = (_5000_PBMC_PREPROCESSED
-                       if version_5000genes else _CITEseq_PBMC_PREPROCESSED)
+                       if filtered_genes else _CITEseq_PBMC_PREPROCESSED)
   if override:
     shutil.rmtree(preprocessed_path)
-    os.mkdir(preprocessed_path)
+    os.makedirs(preprocessed_path)
   # ******************** preprocessed data NOT found ******************** #
   if not os.path.exists(os.path.join(preprocessed_path, 'X')):
     X, X_row, X_col = [], None, None
@@ -60,23 +63,21 @@ def read_CITEseq_PBMC(override=False, verbose=False, version_5000genes=False):
     # ====== download the data ====== #
     download_files = {}
     for url, md5 in zip(
-        [_URL_5000 if version_5000genes else _URL_FULL, _URL_PROTEIN],
-        [_MD5_5000 if version_5000genes else _MD5_FULL, _MD5_PROTEIN]):
+        [_URL_5000 if filtered_genes else _URL_FULL, _URL_PROTEIN],
+        [_MD5_5000 if filtered_genes else _MD5_FULL, _MD5_PROTEIN]):
       url = str(base64.decodebytes(url), 'utf-8')
       base_name = os.path.basename(url)
-      get_file(fname=base_name,
-               origin=url,
-               outdir=download_path,
-               verbose=verbose)
-      download_files[base_name] = (os.path.join(download_path, base_name), md5)
+      path = os.path.join(download_path, base_name)
+      download_file(filename=path, url=url, override=False)
+      download_files[base_name] = (path, md5)
     # ====== extract the data ====== #
     n = set()
     for name, (path, md5) in sorted(download_files.items()):
       if verbose:
-        print("Extracting %s ..." % ctext(name, 'lightcyan'))
+        print(f"Extracting {name} ...")
       binary_data = decrypt_aes(path, password=_PASSWORD)
       md5_ = md5_checksum(binary_data)
-      assert md5_ == md5, "MD5 checksum mismatch for file: %s" % name
+      assert md5_ == md5, f"MD5 checksum mismatch for file: {name}"
       with zipfile.ZipFile(file=BytesIO(binary_data), mode='r') as f:
         for name in f.namelist():
           data = str(f.read(name), 'utf8')
@@ -93,35 +94,31 @@ def read_CITEseq_PBMC(override=False, verbose=False, version_5000genes=False):
     assert len(n) == 1, \
     "Number of samples inconsistent between raw count and protein count"
     if verbose:
-      print("Processing %s ..." % ctext("gene count", 'cyan'))
+      print("Processing gene count ...")
     X = np.array(X).T
     X_row, X_col = X[1:, 0], X[0, 1:]
     X = X[1:, 1:].astype('float32')
-
     # ====== filter mouse genes ====== #
     human_cols = [True if "HUMAN_" in i else False for i in X_col]
     if verbose:
-      print("Removing %s MOUSE genes ..." %
-            ctext(np.sum(np.logical_not(human_cols)), 'cyan'))
+      print(f"Removing {np.sum(np.logical_not(human_cols))} MOUSE genes ...")
     X = X[:, human_cols]
-    X_col = np.array([i for i in X_col if "HUMAN_" in i])
+    X_col = np.array([i.replace('HUMAN_', '') for i in X_col[human_cols]])
     X, X_col = remove_allzeros_columns(matrix=X,
                                        colname=X_col,
                                        print_log=verbose)
 
     # ====== protein ====== #
     if verbose:
-      print("Processing %s ..." % ctext("protein count", 'cyan'))
+      print("Processing protein count ...")
     y = np.array(y).T
     y_row, y_col = y[1:, 0], y[0, 1:]
     y = y[1:, 1:].astype('float32')
-
     assert np.all(X_row == y_row), \
     "Cell order mismatch between gene count and protein count"
-
     # save data
     if verbose:
-      print("Saving data to %s ..." % ctext(preprocessed_path, 'cyan'))
+      print(f"Saving data to {preprocessed_path} ...")
     save_to_dataset(preprocessed_path,
                     X,
                     X_col,
@@ -131,4 +128,10 @@ def read_CITEseq_PBMC(override=False, verbose=False, version_5000genes=False):
                     print_log=verbose)
   # ====== read preprocessed data ====== #
   ds = Dataset(preprocessed_path, read_only=True)
-  return ds
+  return SingleCellOMIC(
+      X=ds['X'],
+      cell_id=ds['X_row'],
+      gene_id=ds['X_col'],
+      omic='transcriptomic',
+      name=f"pbmcCITEseq{'_filtered' if filtered_genes else ''}",
+  ).add_omic('proteomic', ds['y'], ds['y_col'])

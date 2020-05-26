@@ -10,8 +10,7 @@ from typing import Tuple
 import numpy as np
 
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
-from odin.utils import cache_memory, ctext, one_hot
-from sisua.data import normalization_recipes
+from odin.utils import cache_memory, one_hot
 from sisua.data.const import (MARKER_ADT_GENE, MARKER_GENES, OMIC,
                               UNIVERSAL_RANDOM_SEED)
 from sisua.data.path import CONFIG_PATH, DATA_DIR, EXP_DIR
@@ -31,18 +30,15 @@ def get_dataset_meta():
   from sisua.data.data_loader.dataset10x import read_dataset10x
   from sisua.data.data_loader.pbmc_CITEseq import read_CITEseq_PBMC
   from sisua.data.data_loader.cbmc_CITEseq import read_CITEseq_CBMC
-  from sisua.data.data_loader.mnist import read_MNIST
-  from sisua.data.data_loader.fashion_mnist import read_fashion_MNIST
   from sisua.data.data_loader.facs_gene_protein import read_FACS, read_full_FACS
   from sisua.data.data_loader.scvi_datasets import (read_Cortex, read_Hemato,
                                                     read_PBMC, read_Retina)
   from sisua.data.data_loader.pbmc8k import read_PBMC8k
   from sisua.data.data_loader.pbmcecc import read_PBMCeec
-  from sisua.data.experimental_data.pbmc_8k_ecc_ly import (
-      read_PBMCcross_ecc_8k, read_PBMCcross_remove_protein)
   from sisua.data.data_loader.centenarian import read_centenarian
   from sisua.data.utils import standardize_protein_name
-  from sisua.data.data_loader.leukemia_multiomics import read_MPAL
+  from sisua.data.data_loader.leukemia_multiomics import read_leukemia_MixedPhenotypes
+  from sisua.data.experimental_data.pbmc_cross_datasets import read_PBMCcross
   data_meta = {
       # ====== pbmc 8k ====== #
       "call":
@@ -50,12 +46,14 @@ def get_dataset_meta():
       "callall":
           partial(read_leukemia_BMMC, filtered_genes=False),
       # ====== pbmc 8k ====== #
-      "mpalrna":
-          partial(read_MPAL, omic='rna'),
-      "mpalrnaall":
-          partial(read_MPAL, omic='rna', filtered_genes=False),
+      "mpal":
+          partial(read_leukemia_MixedPhenotypes, omic='rna'),
+      "mpalall":
+          partial(read_leukemia_MixedPhenotypes,
+                  omic='rna',
+                  filtered_genes=False),
       "mpalatac":
-          partial(read_MPAL, omic='atac'),
+          partial(read_leukemia_MixedPhenotypes, omic='atac'),
       # ====== pbmc 8k ====== #
       "100yo":
           read_centenarian,
@@ -85,82 +83,80 @@ def get_dataset_meta():
           partial(read_PBMCeec, subset='full', filtered_genes=True),
       'eccall':
           partial(read_PBMCeec, subset='full', filtered_genes=False),
-
       # ====== cross PBMC ====== #
-      '8klyallx':
-          partial(read_PBMCcross_ecc_8k,
-                  subset='ly',
-                  return_ecc=False,
-                  filtered_genes=False),
-      '8klyx':
-          partial(read_PBMCcross_ecc_8k,
-                  subset='ly',
-                  return_ecc=False,
-                  filtered_genes=True),
-      'ecclyallx':
-          partial(read_PBMCcross_ecc_8k,
-                  subset='ly',
-                  return_ecc=True,
-                  filtered_genes=False),
-      'ecclyx':
-          partial(read_PBMCcross_ecc_8k,
-                  subset='ly',
-                  return_ecc=True,
-                  filtered_genes=True),
-      '8knocd4x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=False,
-                  filtered_genes=True,
-                  remove_protein='CD4'),
-      'eccnocd4x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=True,
-                  filtered_genes=True,
-                  remove_protein='CD4'),
-      '8knocd8x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=False,
-                  filtered_genes=True,
-                  remove_protein='CD8'),
-      'eccnocd8x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=True,
-                  filtered_genes=True,
-                  remove_protein='CD8'),
-      '8knocd48x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=False,
-                  filtered_genes=True,
-                  remove_protein=['CD4', 'CD8']),
-      'eccnocd48x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=True,
-                  filtered_genes=True,
-                  remove_protein=['CD4', 'CD8']),
-      '8konlycd8x':
-          partial(read_PBMCcross_remove_protein,
-                  subset='ly',
-                  return_ecc=False,
-                  filtered_genes=True,
-                  remove_protein=['CD3', 'CD4', 'CD16', 'CD56', 'CD19']),
+      '8kx':
+          partial(read_PBMCcross, name='pbmc8k', filtered_genes=True),
+      '8kxall':
+          partial(read_PBMCcross, name='pbmc8k', filtered_genes=False),
+      'eccx':
+          partial(read_PBMCcross, name='pbmcecc', filtered_genes=True),
+      'eccxall':
+          partial(read_PBMCcross, name='pbmcecc', filtered_genes=False),
+      'vdj1x':
+          partial(read_PBMCcross, name='vdj1', filtered_genes=True),
+      'vdj1xall':
+          partial(read_PBMCcross, name='vdj1', filtered_genes=False),
+      'vdj4x':
+          partial(read_PBMCcross, name='vdj4', filtered_genes=True),
+      'vdj4xall':
+          partial(read_PBMCcross, name='vdj4', filtered_genes=False),
+      'mpalx':
+          partial(read_PBMCcross, name='mpal', filtered_genes=True),
+      'mpalxall':
+          partial(read_PBMCcross, name='mpal', filtered_genes=False),
+      'callx':
+          partial(read_PBMCcross, name='call', filtered_genes=True),
+      'callxall':
+          partial(read_PBMCcross, name='call', filtered_genes=False),
+      # '8knocd4x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=False,
+      #             filtered_genes=True,
+      #             remove_protein='CD4'),
+      # 'eccnocd4x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=True,
+      #             filtered_genes=True,
+      #             remove_protein='CD4'),
+      # '8knocd8x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=False,
+      #             filtered_genes=True,
+      #             remove_protein='CD8'),
+      # 'eccnocd8x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=True,
+      #             filtered_genes=True,
+      #             remove_protein='CD8'),
+      # '8knocd48x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=False,
+      #             filtered_genes=True,
+      #             remove_protein=['CD4', 'CD8']),
+      # 'eccnocd48x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=True,
+      #             filtered_genes=True,
+      #             remove_protein=['CD4', 'CD8']),
+      # '8konlycd8x':
+      #     partial(read_PBMCcross_remove_protein,
+      #             subset='ly',
+      #             return_ecc=False,
+      #             filtered_genes=True,
+      #             remove_protein=['CD3', 'CD4', 'CD16', 'CD56', 'CD19']),
       # ====== CITEseq ====== #
       'pbmcciteseq':
           read_CITEseq_PBMC,
       'cbmcciteseq':
           read_CITEseq_CBMC,
       'pbmc5000':
-          partial(read_CITEseq_PBMC, version_5000genes=True),
-      # ====== MNIST ====== #
-      'mnist':
-          read_MNIST,
-      'fmnist':
-          read_fashion_MNIST,
+          partial(read_CITEseq_PBMC, filtered_genes=True),
       # ====== FACS ====== #
       'facs7':
           read_full_FACS,

@@ -395,5 +395,7 @@ def read_dataset10x(name,
                        name=dataset_name)
   for o in omics:
     if o != main_omic:
-      sco.add_omic(omic=o, X=data[o], var_names=metadata[f'{o}_var'])
+      sco.add_omic(omic=o,
+                   X=data[o],
+                   var_names=np.asarray(metadata[f'{o}_var']))
   return sco

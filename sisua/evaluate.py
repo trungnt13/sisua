@@ -32,8 +32,8 @@ x = test.dimension_reduce(algo='tsne')
 # test.plot_correlation(log=False, top=2, bottom=2, marker=True)
 # test.plot_correlation_matrix(n_genes=None)
 om1, om2 = sco.omics
-varnames1 = sco.omic_varnames(om1)
-varnames2 = sco.omic_varnames(om2)
+varnames1 = sco.get_var_names(om1)
+varnames2 = sco.get_var_names(om2)
 # ====== test ====== #
 pos = Posterior(scm=model,
                 sco=test,

@@ -345,7 +345,7 @@ class _OMICanalyzer(_OMICbase):
     if prob_name not in self.obsm:
       self.obsm[prob_name] = X_prob
     if label_name not in self.obs and name + '_var' in self.uns:
-      omic_id = self.omic_var(name).index
+      omic_id = self.get_var(name).index
       labels = [omic_id[i] for i in np.argmax(self.obsm[prob_name], axis=1)]
       self.obs[label_name] = pd.Categorical(labels)
     if bin_name not in self.obsm:
@@ -670,7 +670,7 @@ class _OMICanalyzer(_OMICbase):
           corr[i, lab] = np.sum(x[mask])
       ids = diagonal_beam_search(corr) if n_clusters > 10 else \
         diagonal_bruteforce_search(corr)
-      varnames = self.omic_var(cluster_omic).index
+      varnames = self.get_var(cluster_omic).index
       labels_to_omic = {lab: name for lab, name, in zip(ids, varnames)}
       labels = np.array([labels_to_omic[i] for i in labels])
     ## saving data and model

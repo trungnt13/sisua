@@ -313,8 +313,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     corr_map = {(x[0], x[1]): (x[2], x[3]) for x in corr}
     ##
     all_genes = {j: i for i, j in enumerate(self.var_names)}
-    all_prots = {j: i for i, j in enumerate(self.omic_varnames(OMIC.proteomic))}
-    n_prots = len(self.omic_var(OMIC.proteomic))
+    all_prots = {j: i for i, j in enumerate(self.get_var_names(OMIC.proteomic))}
+    n_prots = len(self.get_var(OMIC.proteomic))
     ## finding the genes that most correlated to the other OMIC
     if n_genes is not None:
       n_genes = int(n_genes)
@@ -348,7 +348,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     spear = spear[sort_ids]
     # annotation
     gene_names = np.array([self.var_names[i] for i in ids])[sort_ids].tolist()
-    prot_names = self.omic_varnames(OMIC.proteomic).tolist()
+    prot_names = self.get_var_names(OMIC.proteomic).tolist()
     ## helper for marking the marker gene-protein
     marker_position = []
     for prot, gene in MARKER_ADT_GENE.items():
@@ -397,7 +397,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     corr = self.omic_correlation(OMIC.proteomic)
     corr_map = {(x[0], x[1]): (x[2], x[3]) for x in corr}
     gene_names = self.var_names
-    prot_names = self.omic_varnames(OMIC.proteomic)
+    prot_names = self.get_var_names(OMIC.proteomic)
     all_gene = {j: i for i, j in enumerate(gene_names)}
     all_prot = {j: i for i, j in enumerate(prot_names)}
     X1 = self.numpy(OMIC.transcriptomic)
@@ -480,7 +480,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     n_points = X.shape[0]
     ## prepare the value
     y = self.numpy(om2)
-    varnames = self.omic_varnames(om2)
+    varnames = self.get_var_names(om2)
     ## check correlation type
     corr_fn = lambda m, n: (spearmanr(m, n, nan_policy='omit').correlation +
                             pearsonr(m, n)[0]) / 2
