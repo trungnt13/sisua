@@ -53,9 +53,9 @@ class MISA(SISUA):
   train, test = sco.split()
   print(train)
   # train.corrupt()
-  rna = RandomVariable(sco.get_shape('transcriptomic'), 'zinb', True,
+  rna = RandomVariable(sco.get_dim('transcriptomic'), 'zinb', True,
                        'transcriptomic')
-  adt = RandomVariable(sco.get_shape('proteomic'), 'mixtril', True, 'proteomic')
+  adt = RandomVariable(sco.get_dim('proteomic'), 'mixtril', True, 'proteomic')
   ######## Test
   vae = MISA(rna, adt, n_components=2)
   print(vae)

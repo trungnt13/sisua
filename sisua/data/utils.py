@@ -250,8 +250,8 @@ def get_library_size(X, return_log_count=False):
   assert X.ndim == 2, "Only support 2-D matrix"
   total_counts = X.sum(axis=1)
   if not np.all(total_counts >= 0):
-    warnings.warn(
-        "Some cell contains negative-count, this results NaN log counts!")
+    warnings.warn(f"Some cell in matrix {X.shape } contains negative-count, "
+                  "this results NaN log counts!")
   log_counts = np.log(total_counts + 1e-8)
   local_mean = (np.mean(log_counts) * np.ones(
       (X.shape[0], 1))).astype(np.float32)

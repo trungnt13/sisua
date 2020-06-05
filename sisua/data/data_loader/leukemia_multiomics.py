@@ -10,6 +10,7 @@ from scipy import sparse
 from six import string_types
 
 from odin.utils import MPI, one_hot
+from sisua.data.const import MARKER_GENES
 from sisua.data.path import DATA_DIR, DOWNLOAD_DIR
 from sisua.data.single_cell_dataset import OMIC, SingleCellOMIC
 from sisua.data.utils import download_file, read_r_matrix, validate_data_dir
@@ -248,7 +249,14 @@ def read_leukemia_MixedPhenotypes(filtered_genes=True,
                                                min_disp=0.5,
                                                log=False,
                                                n_top_genes=2000)
-        sco._inplace_subset_var(result.gene_subset)
+        # make sure all marker genes are included
+        gene_subset = result.gene_subset
+        gene_indices = sco.get_var_indices()
+        for gene in MARKER_GENES:
+          idx = gene_indices.get(gene, None)
+          if idx is not None:
+            gene_subset[idx] = True
+        sco._inplace_subset_var(gene_subset)
         with open(top_genes_path, 'wb') as f:
           pickle.dump(sco.var_names.values, f)
     else:

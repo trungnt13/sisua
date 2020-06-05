@@ -17,7 +17,7 @@ from sisua.data.utils import save_to_dataset, standardize_protein_name
 # ===========================================================================
 # Remove set of protein
 # ===========================================================================
-def read_PBMCcross_remove_protein(subset,
+def read_PBMC_crossdataset_remove_protein(subset,
                                   return_ecc,
                                   filtered_genes=False,
                                   override=False,
@@ -37,7 +37,7 @@ def read_PBMCcross_remove_protein(subset,
 
   # ******************** preprocessed ******************** #
   if not os.path.exists(os.path.join(preprocessed_path, 'X')):
-    ds = read_PBMCcross_ecc_8k(subset,
+    ds = read_PBMC_crossdataset_ecc_8k(subset,
                                return_ecc,
                                filtered_genes,
                                override=override,

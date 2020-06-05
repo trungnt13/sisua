@@ -7,6 +7,7 @@ import numpy as np
 import scanpy as sc
 
 from odin.utils import md5_folder
+from sisua.data.const import MARKER_GENES
 from sisua.data.data_loader.cbmc_CITEseq import read_CITEseq_CBMC
 from sisua.data.data_loader.childhood_leukemia_cALL import read_leukemia_BMMC
 from sisua.data.data_loader.dataset10x import read_dataset10x
@@ -23,6 +24,7 @@ from sisua.data.utils import standardize_protein_name
 # Helpers
 # ===========================================================================
 _DATASETS = dict(
+    # PBMC8k is the "pbmc_10k_protein_v3"
     pbmc8k=partial(read_PBMC8k, subset='full', filtered_genes=False),
     pbmcecc=partial(read_PBMCeec, subset='ly', filtered_genes=False),
     pbmcciteseq=partial(read_CITEseq_PBMC, filtered_genes=False),
@@ -42,7 +44,7 @@ _DATASETS = dict(
                  filtered_genes=False),
 )
 
-_MD5 = r"0facb95bc9a6db6ce71c86aa019fa582"
+_MD5 = r"0e591a519519c1e8acd4c75fb1892218"
 
 
 def _match_genes(sco: SingleCellOMIC, gene_names: dict):
@@ -57,10 +59,10 @@ def _match_genes(sco: SingleCellOMIC, gene_names: dict):
 # ===========================================================================
 # Main
 # ===========================================================================
-def read_PBMCcross(name,
-                   filtered_genes=True,
-                   override=False,
-                   verbose=True) -> SingleCellOMIC:
+def read_PBMC_crossdataset(name,
+                           filtered_genes=True,
+                           override=False,
+                           verbose=True) -> SingleCellOMIC:
   r""" This create a dataset with shared genes among multiple datasets
 
     - 'pbmc8k' (6290, 17870)->(6290, 11299) genes
@@ -83,7 +85,7 @@ def read_PBMCcross(name,
   assert name in _DATASETS, \
     (f"Invalid dataset name='{name}', "
      f"available datasets are: {list(_DATASETS.keys())}")
-  preprocessed_path = os.path.join(DATA_DIR, 'PBMCcross_preprocessed')
+  preprocessed_path = os.path.join(DATA_DIR, 'PBMC_crossdataset_preprocessed')
   if override and os.path.exists(preprocessed_path):
     shutil.rmtree(preprocessed_path)
     if verbose:
@@ -138,7 +140,12 @@ def read_PBMCcross(name,
                                            min_disp=0.5,
                                            log=False,
                                            n_top_genes=2000)
-    sco._inplace_subset_var(result.gene_subset)
+    gene_subset = result.gene_subset
+    # maker sure all marker genes included
+    for i, gene in enumerate(gene_names):
+      if gene in MARKER_GENES:
+        gene_subset[i] = True
+    sco._inplace_subset_var(gene_subset)
     top_genes = set(sco.var_names.values)
     if verbose:
       print(f"Filtered highly variable genes: {len(top_genes)}")
@@ -155,4 +162,5 @@ def read_PBMCcross(name,
   if filtered_genes:
     top_indices = [i in top_genes for i in sco.var_names]
     sco._inplace_subset_var(top_indices)
+  sco._name += 'x'
   return sco

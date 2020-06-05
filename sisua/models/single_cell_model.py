@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 import inspect
 import multiprocessing as mpi
 import os
+import pickle
 import string
 from abc import ABCMeta, abstractmethod, abstractproperty
 from collections import OrderedDict, defaultdict
@@ -53,7 +54,9 @@ def _to_data(x, batch_size=64) -> Dataset:
       # we don't know what is the omic of data anyway, random assigning it
       for arr, om_random in zip(x[1:], omics[1:]):
         inputs.add_omic(omic=om_random, X=arr)
-    inputs = inputs.create_dataset(inputs.omics, batch_size=batch_size)
+    inputs = inputs.create_dataset(inputs.omics,
+                                   batch_size=batch_size,
+                                   drop_remainder=True)
   return inputs
 
 
@@ -81,22 +84,29 @@ class SingleCellModel(BetaVAE, Visualizer):
       name=None,
       **kwargs,
   ):
-    reduce_latent = kwargs.pop('reduce_latent', 'concat')
-    input_shape = kwargs.pop('input_shape', None)
-    step = kwargs.pop('step', 0.)
     super().__init__(outputs=outputs,
                      latents=latents,
                      encoder=encoder,
                      decoder=decoder,
                      beta=beta,
                      name=name,
-                     reduce_latent=reduce_latent,
-                     input_shape=input_shape,
-                     step=step)
+                     reduce_latent=kwargs.pop('reduce_latent', 'concat'),
+                     input_shape=kwargs.pop('input_shape', None),
+                     step=kwargs.pop('step', 0.),
+                     path=kwargs.pop('path', None))
     self._analytic = bool(analytic)
     self._log_norm = bool(log_norm)
     self.dataset = None
+    self.metadata = dict()
     self._n_inputs = max(len(l.inputs) for l in tf.nest.flatten(self.encoder))
+
+  def set_metadata(self, sco: SingleCellOMIC):
+    assert isinstance(sco, SingleCellOMIC), \
+      f"sco must be instance of SingleCellOMIC but given: {type(sco)}"
+    self.dataset = sco.name
+    for om in sco.omics:
+      self.metadata[om.name] = sco.get_var_names(om)
+    return self
 
   @property
   def log_norm(self):
@@ -140,8 +150,15 @@ class SingleCellModel(BetaVAE, Visualizer):
                           sample_shape=sample_shape,
                           **kwargs)
 
-  def predict(self, inputs, sample_shape=(), batch_size=64, verbose=True):
-    r"""
+  def predict(self,
+              inputs,
+              sample_shape=(),
+              batch_size=32,
+              verbose=True,
+              device="GPU"):
+    r""" Predict on minibatches then return a single distribution by
+    concatenation
+
     Return:
       X : `Distribution` or tuple of `Distribution`
         output distribution, multiple distribution is return in case of
@@ -150,48 +167,53 @@ class SingleCellModel(BetaVAE, Visualizer):
         latent distribution, multiple distribution is return in case of
         multiple latents
     """
+    assert device in ("CPU", "GPU"), \
+      f"Only support device CPU or GPU, but given: {device}"
     inputs = _to_data(inputs, batch_size=batch_size)
     ## making predictions
     X, Z = [], []
     prog = tqdm(inputs, desc="Predicting", disable=not bool(verbose))
-    for data in prog:
-      pX_Z, qZ_X = self(**data, training=False, sample_shape=sample_shape)
-      X.append(pX_Z)
-      Z.append(qZ_X)
-    prog.clear()
-    prog.close()
+    with tf.device(f"/{device}:0"):
+      for data in prog:
+        pX_Z, qZ_X = self(**data, training=False, sample_shape=sample_shape)
+        X.append(pX_Z)
+        Z.append(qZ_X)
+      prog.clear()
+      prog.close()
     # merging the batch distributions
     if isinstance(pX_Z, (tuple, list)):
       merging_axis = 0 if pX_Z[0].batch_shape.ndims == 1 else 1
     else:
       merging_axis = 0 if pX_Z.batch_shape.ndims == 1 else 1
-    # multiple outputs
-    if isinstance(X[0], (tuple, list)):
-      X = tuple([
-          concat_distribution([x[idx] for x in X], \
-                              axis=merging_axis,
-                              name=self.posteriors[idx].name)
-          for idx in range(len(X[0]))
-      ])
-    # single output
-    else:
-      X = concat_distribution(X,
-                              axis=merging_axis,
-                              name=self.posteriors[0].name)
-    # multiple latents
-    if isinstance(Z[0], (tuple, list)):
-      Z = tuple([
-          concat_distribution([z[idx]
-                               for z in Z], axis=0)
-          for idx in range(len(Z[0]))
-      ])
-    else:
-      Z = concat_distribution(Z, axis=0)
+    with tf.device("/CPU:0"):
+      # multiple outputs
+      if isinstance(X[0], (tuple, list)):
+        X = tuple([
+            concat_distribution([x[idx] for x in X], \
+                                axis=merging_axis,
+                                name=self.posteriors[idx].name)
+            for idx in range(len(X[0]))
+        ])
+      # single output
+      else:
+        X = concat_distribution(X,
+                                axis=merging_axis,
+                                name=self.posteriors[0].name)
+      # multiple latents
+      if isinstance(Z[0], (tuple, list)):
+        Z = tuple([
+            concat_distribution([z[idx]
+                                 for z in Z], axis=0)
+            for idx in range(len(Z[0]))
+        ])
+      else:
+        Z = concat_distribution(Z, axis=0)
     return X, Z
 
   def fit(self,
           train: Union[SingleCellOMIC, DatasetV2],
           valid: Union[SingleCellOMIC, DatasetV2] = None,
+          metadata: SingleCellOMIC = None,
           analytic=None,
           **kwargs):
     r""" This fit function is the combination of both
@@ -200,10 +222,20 @@ class SingleCellModel(BetaVAE, Visualizer):
       analytic = self._analytic
     ## preprocessing the data
     if isinstance(train, SingleCellOMIC):
-      self.dataset = train.name
-    train = _to_data(train)
+      self.set_metadata(train)
+    elif isinstance(valid, SingleCellOMIC):
+      self.set_metadata(valid)
+    elif isinstance(metadata, SingleCellOMIC):
+      self.set_metadata(metadata)
+    if self.dataset is None or len(self.metadata) == 0:
+      raise RuntimeError(
+          "First time call `fit`, set the 'metadata' argument to a "
+          "SingleCellOMIC dataset to keep the dataset name and OMICs' "
+          "variables description.")
+    batch_size = kwargs.pop('batch_size', 64)
+    train = _to_data(train, batch_size=batch_size)
     if valid is not None:
-      valid = _to_data(valid)
+      valid = _to_data(valid, batch_size=batch_size)
     return super().fit(train=train, valid=valid, analytic=analytic, **kwargs)
 
   @classproperty
@@ -214,3 +246,28 @@ class SingleCellModel(BetaVAE, Visualizer):
       if i.isupper():
         name += i
     return name.lower()
+
+  def load_weights(self, filepath, raise_notfound=False, verbose=False):
+    r""" Load all the saved weights in tensorflow format at given path """
+    super().load_weights(filepath, raise_notfound, verbose)
+    metamodel_path = f"{filepath}.metamodel"
+    if os.path.exists(metamodel_path):
+      with open(metamodel_path, 'rb') as f:
+        class_name, dataset, metadata, kwargs = pickle.load(f)
+      assert class_name == self.__class__.__name__
+      self.dataset = dataset
+      self.metadata = metadata
+    return self
+
+  def save_weights(self, filepath, overwrite=True):
+    r""" Just copy this function here to fix the `save_format` to 'tf'
+    Since saving 'h5' will drop certain variables.
+    """
+    super().save_weights(filepath, overwrite)
+    class_name = self.__class__.__name__
+    dataset = self.dataset
+    metadata = self.metadata
+    kwargs = dict(self.init_args)
+    with open(f'{filepath}.metamodel', 'wb') as f:
+      pickle.dump([class_name, dataset, metadata, kwargs], f)
+    return self

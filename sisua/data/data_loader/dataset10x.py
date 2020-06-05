@@ -29,7 +29,7 @@ from tqdm import tqdm
 from bigarray import MmapArray, MmapArrayWriter
 from odin.fuel import Dataset
 from odin.utils import MPI, batching, ctext, is_gzip_file, select_path
-from sisua.data.const import MARKER_GENES, MARKER_REGIONS, OMIC
+from sisua.data.const import MARKER_ATAC, MARKER_GENES, OMIC
 from sisua.data.path import DATA_DIR, DOWNLOAD_DIR
 from sisua.data.single_cell_dataset import SingleCellOMIC
 from sisua.data.utils import (download_file, remove_allzeros_columns,
@@ -360,9 +360,25 @@ def read_dataset10x(name,
       pickle.dump(save_metadata, f)
     if verbose:
       print(f"Saved metadata to path {outpath}")
-    ### filter genes, follow 10x and use Cell Ranger recipe
+    ### filter genes, follow 10x and use Cell Ranger recipe,
+    # this is copied from Scanpy
     n_genes = sco.shape[1]
-    sc.pp.recipe_zheng17(sco, n_top_genes=n_top_genes)
+    sc.pp.filter_genes(sco, min_counts=1)
+    # normalize with total UMI count per cell
+    sc.pp.normalize_total(sco, key_added='n_counts_all')
+    filter_result = sc.pp.filter_genes_dispersion(sco.X,
+                                                  flavor='cell_ranger',
+                                                  n_top_genes=n_top_genes,
+                                                  log=False)
+    gene_subset = filter_result.gene_subset
+    indices = sco.get_var_indices()
+    markers = (MARKER_GENES
+               if sco.current_omic == OMIC.transcriptomic else MARKER_ATAC)
+    for name in markers:
+      idx = indices.get(name, None)
+      if idx is not None:
+        gene_subset[idx] = True
+    sco._inplace_subset_var(gene_subset)  # filter genes
     if verbose:
       print(f"Filtering genes {n_genes} to {sco.shape[1]} variated genes.")
     with open(os.path.join(preprocessed_path, 'top_genes'), 'wb') as f:

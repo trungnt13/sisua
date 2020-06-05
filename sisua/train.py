@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 import inspect
 import os
 import sys
+from functools import partial
 
 import numpy as np
 import tensorflow as tf
@@ -10,10 +11,11 @@ from tqdm import tqdm
 
 from odin.backend import interpolation
 from odin.exp import Experimenter
+from sisua.analysis import Posterior
 from sisua.data import (CONFIG_PATH, DATA_DIR, EXP_DIR, OMIC, SingleCellOMIC,
                         get_dataset, get_dataset_meta)
 from sisua.models import (NetworkConfig, RandomVariable, get_all_models,
-                          get_model, load_model, save_model)
+                          get_model)
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -24,8 +26,7 @@ np.random.seed(8)
 
 # Example:
 # model.name=sisua,dca,vae,scvi,scale,misa,scalar,fvae,sfvae
-# dataset.name=call,mpal,cortex,8kly,8klyall,8klyx,eccly,ecclyall,ecclyx,8k,8kall
-# callx,mpalx,8kx,eccx,vdj1x,vdj4x
+# dataset.name=call,mpal,cortex,8kly,8klyall,eccly,ecclyall,vdj1,vdj1all,callx,mpalx,8kx,eccx,vdj1x,vdj4x
 # -m -ncpu 5
 # --reset
 
@@ -58,6 +59,10 @@ class SisuaExperimenter(Experimenter):
                      config_path=CONFIG_PATH,
                      exclude_keys=["train", "verbose"],
                      hash_length=5)
+    print("Initialize SisuaExperimenter:")
+    print(" - save   :", EXP_DIR)
+    print(" - data   :", DATA_DIR)
+    print(" - config :", CONFIG_PATH)
 
   def on_load_data(self, cfg):
     ds = cfg.dataset
@@ -76,7 +81,7 @@ class SisuaExperimenter(Experimenter):
     encoder = _from_config(model.encoder, NetworkConfig)
     decoder = _from_config(model.decoder, NetworkConfig)
     # parse random variables
-    omics = {o.name: self.sco.get_shape(o) for o in self.sco.omics}
+    omics = {o.name: self.sco.get_dim(o) for o in self.sco.omics}
     rv = {
         k:
         _from_config(v,
@@ -95,22 +100,29 @@ class SisuaExperimenter(Experimenter):
                      decoder=decoder)
     # check if semi-supervised
     if 'labels' in inspect.getfullargspec(cls.__init__).args:
+      # there might be case with no labels data available for semi-supervised
+      # learning
       overrides['labels'] = [
           rv[o.name] for o in list(self.sco.omics)[1:] if o.name in rv
       ]
     if cfg.verbose:
       for i, j in overrides.items():
         print(f"{i}:\n\t{j}")
+    # create the model
     self.model = _from_config(model, cls, overrides=overrides)
-    self.model.dataset = cfg.dataset.name
-    self.model.load_weights(os.path.join(model_dir, 'weights'),
+    self.model.load_weights(os.path.join(model_dir, 'model'),
                             verbose=cfg.verbose)
+    # extract all necessary OMICs for training
     self.omics = [i.name for i in self.model.output_layers]
+    if hasattr(self.model, 'labels'):
+      for i in self.model.labels:
+        self.omics.append(i.name)
     if cfg.verbose:
       print(self.model)
       print("Training OMICs:", self.omics)
 
   def on_train(self, cfg, output_dir, model_dir):
+    self.model.set_metadata(self.sco)
     train, valid = self.train.split(0.9)
     train.corrupt(dropout_rate=cfg.dataset.dropout_rate,
                   retain_rate=cfg.dataset.retain_rate,
@@ -130,61 +142,104 @@ class SisuaExperimenter(Experimenter):
     if cfg.verbose:
       print(train)
     sample_shape = tuple(cfg.train.sample_shape)
+    fn_save = partial(self.model.save_weights,
+                      filepath=os.path.join(model_dir, 'model'))
     _from_config(cfg.train,
                  self.model.fit,
-                 overrides=dict(
-                     train=train,
-                     valid=valid,
-                     sample_shape=sample_shape,
-                     checkpoint=lambda: save_model(model_dir, self.model)))
+                 overrides=dict(log_tag=f"{cfg.model.name}-{cfg.dataset.name}",
+                                train=train,
+                                valid=valid,
+                                sample_shape=sample_shape,
+                                checkpoint=fn_save))
 
   def on_eval(self, cfg, output_dir):
     model = self.model
-    name = f"{model.id}-{model.dataset}"
-    # very easy to OOM here, reduce batch size as much as possible
-    mllk, llk = [], []
-    prog = tqdm(self.test.create_dataset(self.omics,
-                                         labels_percent=1.0,
-                                         batch_size=2,
-                                         drop_remainder=True),
-                desc=f"[{name}] Marginal LLK")
-    for data in prog:
-      outputs = model.marginal_log_prob(**data, sample_shape=100)
-      mllk.append(outputs[0])
-      llk.append(outputs[1]['transcriptomic'])
-    mllk = tf.reduce_mean(tf.concat(mllk, axis=0)).numpy()
-    llk = tf.reduce_mean(tf.concat(llk, axis=0)).numpy()
-    prog.clear()
-    prog.close()
-    # save the score
-    self.write_scores('llk',
+    dsname = model.dataset
+    post = Posterior(scm=model, sco=self.test, batch_size=4)
+    self.write_scores(table=f"imputation_{dsname}",
                       replace=True,
                       model=model.id,
-                      dataset=model.dataset,
-                      mllk=mllk,
-                      llk=llk)
+                      **post.cal_imputation_scores())
+    self.write_scores(table=f"llk_{dsname}",
+                      replace=True,
+                      model=model.id,
+                      **post.cal_marginal_llk())
+    if OMIC.proteomic in self.test.omics:
+      self.write_scores(table=f"pearson_{dsname}",
+                        replace=True,
+                        model=model.id,
+                        **post.cal_pearson())
+      self.write_scores(table=f"spearman_{dsname}",
+                        replace=True,
+                        model=model.id,
+                        **post.cal_spearman())
+      self.write_scores(table=f"mi_{dsname}",
+                        replace=True,
+                        model=model.id,
+                        **post.cal_mutual_information())
+    # disentanglement scores
+    if len(post._criticizers) > 0:
+      crt = list(post._criticizers.values())[0]
+      self.write_scores(
+          table=f"disentanglement_{dsname}",
+          replace=True,
+          model=model.id,
+          **crt.cal_clustering_scores(),
+          **crt.cal_dci_scores(),
+          **crt.cal_mutual_info_gap(),
+          **crt.cal_total_correlation(),
+          **crt.cal_separated_attr_predictability(),
+          **crt.cal_relative_disentanglement_strength(),
+          **crt.cal_relative_mutual_strength(),
+          **crt.cal_betavae_score(),
+          **crt.cal_factorvae_score(),
+      )
 
-  def on_plot(self, cfg, output_dir):
+  def on_plot(self, cfg, figure_dir):
     model = self.model
-    name = f"{model.id}-{model.dataset}"
+    sco = self.test
+    omics = sco.omics
     # plot learning rate
     model.plot_learning_curves(
-        os.path.join(output_dir, 'learning_curves.png'),
+        os.path.join(figure_dir, f'{model.id}_learning_curves.png'),
         summary_steps=[100, 10],
-        title=f"{name}",
+        title=f"{model.dataset}_{model.id}",
     )
+    figure_dir = os.path.join(figure_dir, model.id)
+    if not os.path.exists(figure_dir):
+      os.mkdir(figure_dir)
+    # plot analysis
+    post = Posterior(scm=model,
+                     sco=self.test,
+                     batch_size=16,
+                     sample_shape=10,
+                     verbose=False)
+    # post.plot_scatter('latent', color_by=label_omic, dimension_reduction='umap')
+    # continuous labels
+    if OMIC.proteomic in sco.omics:
+      post.plot_scatter('latent',
+                        color_by='proteomic',
+                        dimension_reduction='tsne')
+      # post.plot_heatmap('transcriptomic', group_by=label_omic, rank_vars=3)
+      # post.plot_violins('transcriptomic', group_by=label_omic, rank_vars=3)
+      # post.plot_correlation_matrix('transcriptomic', label_omic)
+      # post.plot_correlation_scatter('transcriptomic',
+      #                               label_omic,
+      #                               top=3,
+      #                               bottom=3)
+    # categorical labels
+    elif OMIC.celltype in sco.omics:
+      post.plot_distance_heatmap('transcriptomic', group_by='celltype')
+    # post.plot_correlation_matrix()
+    post.save_figures(figure_dir, dpi=80, separate_files=True)
 
-  def on_compare(self, models, save_path):
-    print(models)
+  def on_compare(self, configs, models, save_path):
+    pass
 
 
 # ===========================================================================
 # Running the experiments
 # ===========================================================================
 if __name__ == "__main__":
-  print("Path:")
-  print(" - exp:", EXP_DIR)
-  print(" - dat:", DATA_DIR)
-  print(" - cfg:", CONFIG_PATH)
   exp = SisuaExperimenter()
   exp.run()

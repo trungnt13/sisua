@@ -20,10 +20,11 @@ from six import string_types
 
 from bigarray import MmapArrayWriter
 from odin import visual as vs
-from odin.search import diagonal_beam_search, diagonal_bruteforce_search
-from odin.stats import describe, sparsity_percentage, train_valid_test_split
-from odin.utils import (IndexedList, as_tuple, batching, cache_memory,
-                        catch_warnings_ignore, ctext, is_primitive)
+from odin.search import diagonal_linear_assignment
+from odin.stats import (describe, is_discrete, sparsity_percentage,
+                        train_valid_test_split)
+from odin.utils import (MPI, IndexedList, as_tuple, batching, cache_memory,
+                        catch_warnings_ignore, cpu_count, is_primitive)
 from odin.utils.crypto import md5_checksum
 from sisua.data._single_cell_base import BATCH_SIZE, _OMICbase
 from sisua.data.const import MARKER_GENES, OMIC
@@ -312,7 +313,7 @@ class _OMICanalyzer(_OMICbase):
     pbe_name = '%s_pbe' % name
     prob_name = '%s_prob' % name
     bin_name = '%s_bin' % name
-    label_name = self.labels_name(name)
+    label_name = self.get_labels_name(name)
 
     if is_binary_dtype(X):
       X_prob = X
@@ -584,15 +585,19 @@ class _OMICanalyzer(_OMICbase):
 
   def clustering(self,
                  omic=None,
-                 n_clusters=OMIC.proteomic | OMIC.celltype,
+                 n_clusters=OMIC.proteomic,
                  n_init='auto',
-                 matching_labels=True,
                  algo='kmeans',
+                 matching_labels=True,
                  return_key=False,
-                 random_state=1234):
-    r""" k-Means clustering for given OMIC type
+                 random_state=1):
+    r""" Perform clustering for given OMIC type, the cluster labels will be
+    assigned to `obs` with key "{omic}_{algo}{n_clusters}"
 
     Arguments:
+      algo : {'kmeans', 'knn', 'pca', 'tsne', 'umap'}.
+        Clustering algorithm, in case algo in ('pca', 'tsne', 'umap'),
+        perform dimension reduction before clustering.
       matching_labels : a Boolean. Matching OMIC var_names to appropriate
         clusters, only when `n_clusters` is string or OMIC type.
       return_key : a Boolean. If True, return the name of the labels
@@ -608,27 +613,26 @@ class _OMICanalyzer(_OMICbase):
     cluster_omic = None
     if isinstance(n_clusters, Number):
       n_clusters = int(n_clusters)
-    elif isinstance(n_clusters, string_types):
+    else:
       cluster_omic = OMIC.parse(n_clusters)
-      for comic in list(cluster_omic):
-        if comic in self.omics:
-          n_clusters = self.numpy(comic).shape[1]
-          if n_clusters > 20:
-            warnings.warn("Found omic type: '%s' with %d clusters" %
-                          (cluster_omic.name, n_clusters))
-          cluster_omic = comic
-          break
+      n_clusters = self.numpy(cluster_omic).shape[1]
+      if n_clusters > 20:
+        warnings.warn(
+            f"Found omic type:{cluster_omic} with {n_clusters} clusters")
     n_clusters = int(n_clusters)
     n_init = int(n_init) if isinstance(n_init, Number) else \
       int(n_clusters) * 3
     ## check if output already extracted
-    output_name = '%s_%s%d' % (omic.name, algo, n_clusters)
+    output_name = f"{omic.name}_{algo}{n_clusters}"
     if output_name in self.obs:
       return output_name if return_key else self.obs[output_name]
     ## fit KMeans
-    if algo == 'kmeans':  # KMeans
+    if algo in ('pca', 'tsne', 'umap', 'kmeans'):
       from sklearn.cluster import MiniBatchKMeans
-      X = self.numpy(omic)
+      if algo in ('pca', 'tsne', 'umap'):
+        X = self.dimension_reduce(omic=omic, n_components=100, algo=algo)
+      else:
+        X = self.numpy(omic)
       model = MiniBatchKMeans(n_clusters=int(n_clusters),
                               max_iter=1000,
                               n_init=int(n_init),
@@ -668,9 +672,8 @@ class _OMICanalyzer(_OMICbase):
         for lab in range(n_clusters):
           mask = labels == lab
           corr[i, lab] = np.sum(x[mask])
-      ids = diagonal_beam_search(corr) if n_clusters > 10 else \
-        diagonal_bruteforce_search(corr)
-      varnames = self.get_var(cluster_omic).index
+      ids = diagonal_linear_assignment(corr)
+      varnames = self.get_var_names(cluster_omic)
       labels_to_omic = {lab: name for lab, name, in zip(ids, varnames)}
       labels = np.array([labels_to_omic[i] for i in labels])
     ## saving data and model
@@ -783,53 +786,60 @@ class _OMICanalyzer(_OMICbase):
 
   def rank_vars_groups(self,
                        n_vars=100,
-                       groupby=OMIC.proteomic | OMIC.celltype,
+                       group_by=OMIC.proteomic,
                        clustering='kmeans',
                        method='logreg',
-                       corr_method='benjamini-hochberg'):
-    r"""
-    method :
-      't-test_overestim_var' overestimates variance of each group,
-      `'t-test'` uses t-test, `'wilcoxon'` uses Wilcoxon rank-sum,
-      `'logreg'` uses logistic regression.
-    corr_method :  p-value correction method.
-      Used only for `'t-test'`, `'t-test_overestim_var'`, and `'wilcoxon'`.
+                       corr_method='benjamini-hochberg',
+                       max_iter=1000,
+                       reference='rest'):
+    r""" Rank genes for characterizing groups.
+
+    Arguments:
+      method : {'t-test_overestim_var', 't-test', 'wilcoxon', 'logreg'}
+        - 't-test_overestim_var' overestimates variance of each group,
+        - 't-test' uses t-test,
+        - 'wilcoxon' uses Wilcoxon rank-sum,
+        - 'logreg' uses logistic regression.
+      corr_method :  p-value correction method.
+        Used only for `'t-test'`, `'t-test_overestim_var'`, and `'wilcoxon'`.
+      max_iter : an Integer.
+        Only used for `method='logred'`
 
     Return:
       the key to ranked groups in `.uns`
     """
     self._record('rank_vars_groups', locals())
-    if str(groupby) in self.obs:
-      groupby_name = groupby.split('_')[0]
+    # group by is categorical variables in `obs`
+    if str(group_by) in self.obs:
+      pass
     else:  # search in obsm, then clustering it
-      for omic in OMIC.parse(groupby):
-        if omic in self.omics:
-          groupby_name = omic.name
-          if clustering is not None:
-            groupby = self.clustering(omic,
-                                      n_clusters=omic,
-                                      algo=clustering,
-                                      return_key=True)
-          else:
-            self.probabilistic_embedding(omic)
-            groupby = self.labels_name(omic)
-          break
+      group_by = OMIC.parse(group_by)
+      if clustering is not None:
+        group_by = self.clustering(group_by,
+                                   n_clusters=group_by,
+                                   algo=clustering,
+                                   return_key=True)
+      else:
+        self.probabilistic_embedding(group_by)
+        group_by = self.get_labels_name(group_by)
     ## check already ranked
-    key = '%s_%s_rank' % (self._current_omic_name, groupby_name)
-    ## ranking variables
-    kw = {}
-    if method == 'logreg':
-      kw['max_iter'] = 500
-      kw['random_state'] = 1234
-    sc.tl.rank_genes_groups(\
-      self,
-      groupby=groupby,
-      n_genes=int(n_vars),
-      method=method,
-      corr_method=corr_method,
-      copy=False,
-      key_added=key,
-      **kw)
+    key = f'{self.get_current_omic().name}_{group_by}_rank'
+    if key not in self.uns:
+      kw = {}
+      if method == 'logreg':
+        kw['max_iter'] = int(max_iter)
+        kw['random_state'] = 1
+        kw['solver'] = 'saga'
+      sc.tl.rank_genes_groups(self,
+                              groupby=group_by,
+                              n_genes=int(n_vars),
+                              use_raw=True,
+                              method=method,
+                              corr_method=corr_method,
+                              reference=reference,
+                              copy=False,
+                              key_added=key,
+                              **kw)
     return key
 
   def calculate_quality_metrics(self,
@@ -917,49 +927,140 @@ class _OMICanalyzer(_OMICbase):
           np.expm1(x, out=x)
     return self
 
-  # ******************** logging and io ******************** #
-  @cache_memory
-  def omic_correlation(self, omic1=None, omic2=None):
+  # ******************** other metrics ******************** #
+  def get_importance_matrix(self,
+                            omic=OMIC.transcriptomic,
+                            target_omic=OMIC.proteomic,
+                            random_state=1):
+    r""" Using Tree Classifier to estimate the importance of each
+    `omic` for each `target_omic`.
+    """
+
+    from odin.bay.vi.metrics import representative_importance_matrix
+    from odin.bay.vi.utils import discretizing
+    random_state = int(1)
+    omic1 = self.current_omic if omic is None else OMIC.parse(omic)
+    omic2 = self.current_omic if target_omic is None else OMIC.parse(
+        target_omic)
+    assert omic1 != omic2, "Mutual information only for 2 different OMIC type"
+    uns_key = f"importance_{omic.name}_{target_omic.name}"
+    if uns_key in self.uns:
+      return self.uns[uns_key]
+    # prepare data
+    X = self.numpy(omic1)
+    y = self.numpy(omic2)
+    if not is_discrete(y):
+      y = discretizing(y, n_bins=10, strategy='quantile')
+    # split the data 50:50 for train and test
+    rand = np.random.RandomState(random_state)
+    ids = rand.permutation(X.shape[0])
+    train = ids[:int(0.75 * X.shape[0])]
+    test = ids[int(0.75 * X.shape[0]):]
+    X_train, X_test = X[train], X[test]
+    y_train, y_test = y[train], y[test]
+    # calculate the importance matrix
+    matrix, train_acc, test_acc = representative_importance_matrix(
+        repr_train=X_train,
+        factor_train=y_train,
+        repr_test=X_test,
+        factor_test=y_test,
+        random_state=rand.randint(1e8))
+    self.uns[uns_key] = matrix
+    return matrix
+
+  def get_mutual_information(self,
+                             omic=OMIC.transcriptomic,
+                             target_omic=OMIC.proteomic,
+                             n_neighbors=3,
+                             random_state=1):
+    r""" Estimate mutual information using k-NN
+
+    Return
+      a Matrix of shape `(n_features_omic, n_features_target_omic)`
+        estimation of mutual information between each feature in `omic` to
+        eacho feature in `target_omic`
+    """
+    n_neighbors = int(n_neighbors)
+    random_state = int(1)
+    omic1 = self.current_omic if omic is None else OMIC.parse(omic)
+    omic2 = self.current_omic if target_omic is None else OMIC.parse(
+        target_omic)
+    assert omic1 != omic2, "Mutual information only for 2 different OMIC type"
+    from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+    uns_key = f"mutualinfo_{omic.name}_{target_omic.name}"
+    if uns_key in self.uns:
+      return self.uns[uns_key]
+    ### prepare the data
+    x1 = self.numpy(omic1)
+    x2 = self.numpy(omic2)
+    n_om1 = x1.shape[1]
+    n_om2 = x2.shape[1]
+    discrete_features = np.array([is_discrete(i) for i in x1.T])
+
+    def _mi(i2):
+      y = x2[:, i2]
+      if is_discrete(y):
+        fn = mutual_info_classif
+      else:
+        fn = mutual_info_regression
+      return i2, fn(X=x1,
+                    y=y,
+                    discrete_features=discrete_features,
+                    n_neighbors=n_neighbors,
+                    random_state=random_state)
+
+    mi_mat = np.empty(shape=(n_om1, n_om2), dtype=np.float64)
+    for i2, mi in MPI(list(range(n_om2)),
+                      func=_mi,
+                      ncpu=max(1,
+                               cpu_count() - 1),
+                      batch=1):
+      mi_mat[:, i2] = mi
+    self.uns[uns_key] = mi_mat
+    return mi_mat
+
+  def get_correlation(self, omic1=OMIC.transcriptomic, omic2=OMIC.proteomic):
     r""" Calculate the correlation scores between two omic types
     (could be different or the same OMIC).
 
     Return:
       list of tuple contained 4 scalars:
-        (gene-idx, protein-idx, pearson, spearman)
+        (omic1-idx, omic2-idx, pearson, spearman)
         sorted in order from high to low average correlation
     """
     omic1 = self.current_omic if omic1 is None else OMIC.parse(omic1)
     omic2 = self.current_omic if omic2 is None else OMIC.parse(omic2)
+    uns_key = f"correlation_{omic1.name}_{omic2.name}"
+    if uns_key in self.uns:
+      return self.uns[uns_key]
     ### prepare the data
     x1 = self.numpy(omic1)
     x2 = self.numpy(omic2)
     n_om1 = x1.shape[1]
     n_om2 = x2.shape[1]
 
-    ### search for most correlated series
-    def _corr(idx):
+    def _corr(ids):
       results = []
-      for i1, i2 in idx:
+      for i1, i2 in ids:
         y1 = x1[:, i1]
         y2 = x2[:, i2]
         with catch_warnings_ignore(RuntimeWarning):
           p = pearsonr(y1, y2)[0]
           s = spearmanr(y1, y2, nan_policy='omit').correlation
           # remove all NaNs
-          if p == p and s == s:
-            results.append((i1, i2, p, s))
+          results.append((i1, i2, p, s))
       yield results
 
     ### multiprocessing
     jobs = list(itertools.product(range(n_om1), range(n_om2)))
-    from odin.utils import MPI, cpu_count
-    ncpu = max(1, cpu_count() - 2)
+    ncpu = max(1, cpu_count() - 1)
     results = []
     for res in MPI(jobs, func=_corr, ncpu=ncpu, batch=len(jobs) // ncpu):
       results += res
-
     ### sorted by decreasing order
-    all_correlations = sorted(\
-      results,
-      key=lambda scores: (scores[-2] + scores[-1]) / 2)[::-1]
+    all_correlations = sorted(
+        results,
+        key=lambda scores: (scores[-2] + scores[-1]) / 2,
+    )[::-1]
+    self.uns[uns_key] = all_correlations
     return all_correlations

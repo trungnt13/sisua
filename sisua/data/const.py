@@ -70,7 +70,7 @@ MARKER_GENES = list(set(list(MARKER_ADT_GENE.values()) + \
 #  'CTLA4' 'CD26;Adenosine' 'CD16' 'CD366;tim3' 'HLA-A' 'MHCII;HLA-DR'
 #  'IL7Ralpha;CD127' 'CD11b' 'CD11c' 'LAMP1' 'CD56' 'PD-1;CD279' 'PD1;CD279'
 #  'B220;CD45R' 'CD45RA' 'CD45RO' 'CD138' 'CD62L' 'Siglec-8' 'Ox40;CD134']
-MARKER_REGIONS = {
+MARKER_ATAC = {
     'GZMK classic promoter': 'chr13:113180223:113181928',
     'GZMK alternative promoter': 'chr13:113182148:113184892',
     'CD68 promoter': 'chr11:69665600:69667000',
@@ -79,7 +79,7 @@ MARKER_REGIONS = {
     'NCR1 promoter': 'chr7:4337400:4337800',
 }
 
-_MARKER_REGIONS_URL = [
+_MARKER_ATAC_URL = [
     r"https://www.encodeproject.org/files/ENCFF108APF/@@download/ENCFF108APF.bed.gz"
 ]
 
@@ -107,32 +107,33 @@ class OMIC(OrderedFlag):
   r""" Enum class to represent all possible OMIC type """
 
   genomic = 'genomic'
-  epigenomic = 'epigenomic'
   chromatin = 'chromatin'
   transcriptomic = 'transcriptomic'
   proteomic = 'proteomic'
+  celltype = 'celltype'
+  disease = 'disease'
+  progenitor = 'progenitor'
+  #
+  igenomic = 'igenomic'
+  ichromatin = 'ichromatin'
+  itranscriptomic = 'itranscriptomic'
+  iproteomic = 'iproteomic'
+  icelltype = 'icelltype'
+  idisease = 'idisease'
+  iprogenitor = 'iprogenitor'
+  #
+  epigenomic = 'epigenomic'
   metabolomic = 'metabolomic'
   microbiomic = 'microbiomic'
-  celltype = 'celltype'
-  progenitor = 'progenitor'
+  #
   latent = 'latent'
+
+  @classmethod
+  def is_omic_type(cls, o):
+    o = str(o).lower().strip()
+    all_omics = [i.name for i in list(cls)]
+    return o in all_omics
 
   @classmethod
   def _sep(cls):
     return '_'
-
-  @staticmethod
-  def parse(otype):
-    r"""
-    otype : String or OMIC (optional). If given, normalize given `otype` to
-      an instance of `OMIC` enum.
-    """
-    if not isinstance(otype, OMIC):
-      otype = str(otype)
-      for val in OMIC:
-        if otype in val.name:
-          return val
-    else:
-      return otype
-    raise ValueError("Invalid OMIC type, support: %s, given: %s" %
-                     (str(list(OMIC)), str(otype)))

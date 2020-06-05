@@ -22,12 +22,12 @@ from sklearn.preprocessing import StandardScaler
 
 from odin import visual as vs
 from odin.backend import log_norm
+from odin.bay import distributions as tfd
 from odin.bay import vi
-from odin.bay.vi.evaluation import Criticizer
+from odin.bay.vi import Criticizer
 from odin.fuel import Dataset
-from odin.utils import (as_tuple, cache_memory, catch_warnings_ignore,
-                        clean_folder, ctext, flatten_list, md5_checksum)
-from odin.utils.mpi import MPI
+from odin.utils import (MPI, as_tuple, cache_memory, catch_warnings_ignore,
+                        clean_folder, flatten_list, md5_checksum)
 from odin.visual import (Visualizer, plot_aspect, plot_confusion_matrix,
                          plot_figure, plot_frame, plot_save, plot_scatter,
                          to_axis2D)
@@ -40,13 +40,12 @@ from sisua.analysis.latent_benchmarks import (clustering_scores,
                                               plot_latents_binary,
                                               plot_latents_protein_pairs,
                                               streamline_classifier)
-from sisua.analysis.sc_metrics import _preprocess_output_distribution
-from sisua.data import (OMIC, SingleCellOMIC, apply_artificial_corruption,
+from sisua.data import (MARKER_ADT_GENE, MARKER_ADTS, MARKER_ATAC, MARKER_GENES,
+                        OMIC, SingleCellOMIC, apply_artificial_corruption,
                         get_dataset)
 from sisua.data.path import EXP_DIR
 from sisua.data.utils import standardize_protein_name
-from sisua.models.base import SingleCellModel
-from sisua.models.scvi import SCVI
+from sisua.models.single_cell_model import SingleCellModel
 from sisua.utils import dimension_reduction, filtering_experiment_path
 
 
@@ -54,6 +53,38 @@ from sisua.utils import dimension_reduction, filtering_experiment_path
 # 'T' for corrupted gene expression,
 # 'V' for imputed gene expression,
 # and 'W' for reconstructed gene expression
+# ===========================================================================
+# Helpers
+# ===========================================================================
+def _omics_footprint(omics, available_omics):
+  available_omics = [OMIC.parse(i).name for i in available_omics]
+  omics = {OMIC.parse(i).name: j for i, j in omics.items()}
+  omics = {
+      name: omics[name] if name in omics else 'original'
+      for name in available_omics
+  }
+  if OMIC.latent.name not in omics:
+    omics[OMIC.latent.name] = 'original'
+  assert all(k in Posterior.TYPES for k in omics.values()), \
+    f"Invalid output types: {omics} only support: {Posterior.TYPES}"
+  # create unique key
+  omics = dict(OrderedDict(sorted(omics.items())))
+  return omics
+
+
+def _sco_shortname(footprint: dict):
+  if isinstance(footprint, string_types):
+    footprint = eval(footprint)
+  assert isinstance(footprint, dict)
+  footprint = sorted([f"{k[:3]}_{v[:3]}" for k, v in footprint.items()])
+  return '_'.join(footprint)
+
+
+# crt.sample_batch(latents=post.get_data('latent', 'corrupted'),
+#                  factors=post.get_data('proteomic', 'original'),
+#                  n_samples=10000)
+
+
 # ===========================================================================
 # The Posterior
 # ===========================================================================
@@ -68,46 +99,61 @@ class Posterior(Visualizer):
     sample_shape : an Integer, number of MCMC samples for evaluation
     verbose : a Boolean, turn on verbose
 
-  Example
-  -------
-  >>> pos1 = Posterior(mae, x_test, y_test)
-  >>> print(pos1.scores_classifier(x_train, y_train))
-  >>> print(pos1.scores_llk())
-  >>> print(pos1.scores_imputation())
-  >>> print(pos1.scores_spearman())
-  >>> print(pos1.scores_pearson())
-  >>> print(pos1.scores_clustering())
-  >>> pos1.save_scores('/tmp/tmp1.txt')
-  ...
-  >>> pos1.plot_protein_scatter().plot_protein_predicted_series()
-  >>> pos1.plot_classifier_F1(x_train, y_train)
-  >>> pos1.plot_learning_curves('loss_x')
-  >>> pos1.plot_learning_curves()
-  >>> pos1.get_correlation_marker_pairs('X')
-  >>> pos1.get_correlation_marker_pairs('V')
-  >>> pos1.get_correlation_marker_pairs('W')
-  >>> pos1.get_correlation_marker_pairs('T')
-  >>> pos1.plot_correlation_top_pairs().plot_correlation_bottom_pairs()
-  >>> pos1.plot_latents_binary_scatter().plot_latents_distance_heatmap(
-  >>> ).plot_latents_protein_pairs()
-  >>> pos1.save_figures('/tmp/tmp1.pdf')
+  Example:
+  ```
+  pos1 = Posterior(mae, x_test, y_test)
+  print(pos1.scores_classifier(x_train, y_train))
+  print(pos1.scores_llk())
+  print(pos1.scores_imputation())
+  print(pos1.scores_spearman())
+  print(pos1.scores_pearson())
+  print(pos1.scores_clustering())
+  pos1.save_scores('/tmp/tmp1.txt')
+
+  pos1.plot_protein_scatter().plot_protein_predicted_series()
+  pos1.plot_classifier_F1(x_train, y_train)
+  pos1.plot_learning_curves('loss_x')
+  pos1.plot_learning_curves()
+  pos1.get_correlation_marker_pairs('X')
+  pos1.get_correlation_marker_pairs('V')
+  pos1.get_correlation_marker_pairs('W')
+  pos1.get_correlation_marker_pairs('T')
+  pos1.plot_correlation_top_pairs().plot_correlation_bottom_pairs()
+  pos1.plot_latents_binary_scatter().plot_latents_distance_heatmap(
+  ).plot_latents_protein_pairs()
+  pos1.save_figures('/tmp/tmp1.pdf')
+  ```
 
   """
+
+  TYPES = ('imputed', 'original', 'corrupted', 'reconstructed')
 
   def __init__(self,
                scm: SingleCellModel,
                sco: SingleCellOMIC,
-               batch_size=32,
+               dropout_rate=0.2,
+               retain_rate=0.2,
+               corrupt_distribution='binomial',
+               batch_size=8,
                sample_shape=10,
-               random_state=2,
+               random_state=1,
+               reduce_latents=lambda *Zs: tf.concat(Zs, axis=1),
+               name=None,
                verbose=True):
     super(Posterior, self).__init__()
+    if name is None:
+      name = scm.name + '_' + sco.name
+    self._name = str(name)
     self.verbose = bool(verbose)
     self.sample_shape = int(sample_shape)
     self.batch_size = int(batch_size)
     self.rand = random_state \
       if isinstance(random_state, np.random.RandomState) else \
         np.random.RandomState(seed=random_state)
+    assert callable(reduce_latents), \
+      ("reduce_latents must be callable to merge multiple latents "
+       "into single one for evaluation")
+    self.reduce_latents = reduce_latents
     # single cell model
     if isinstance(scm, string_types):
       with open(scm, 'rb') as f:
@@ -120,292 +166,158 @@ class Posterior(Visualizer):
     # multi-omics expression data
     assert isinstance(sco, SingleCellOMIC), \
       "sco must be instance of SingleCellOMIC, but given %s" % str(type(sco))
-    self.sco = sco
     assert sco.n_omics >= 2, \
       "SingleCellOMIC need at least 2 different OMIC types for evaluation."
-    # corrupted gene expression
-    self.sco_corrupt = self.sco.corrupt(\
-      dropout_rate=max(0.1, scm.corruption_rate),
-      distribution=scm.corruption_dist,
-      inplace=False,
-      seed=self.rand.randint(1e8))
-    # infer the OMICs tranined on
-    omics = OMIC.transcriptomic
-    for i, rv in enumerate(self.scm.omic_outputs):
-      dim = rv.dim
-      name = rv.name
-      if i == 0:  # main data, transcriptomic
-        assert dim == self.sco.n_vars
-      else:  # semi-supervised
-        found = []
-        for om in self.sco.omics:
-          if om != OMIC.transcriptomic and dim == self.sco.numpy(om).shape[1]:
-            found.append(om)
-        if len(found) > 1 and name is not None:
-          name = name.lower().strip()
-          found = [om for om in found if name in om.name or om.name in name]
-        omics = omics | found[0]
-    self.omics = omics
-    # initialize all the prediction
-    self._initialize()
-    self._datasets = dict()
+    self.sco_original = sco
+    self.sco = sco.corrupt(dropout_rate=dropout_rate,
+                           retain_rate=retain_rate,
+                           distribution=corrupt_distribution,
+                           inplace=False,
+                           seed=self.rand.randint(1e8))
+    self.omics = set(i.name for i in self.sco.omics)
+    self.omics_data = {
+        (om.name, 'original'): sco.get_omic(om) for om in sco.omics
+    }
+    # mapping from tuple of (omic.name, type) -> distribution/tensor
+    self._dataset = None
     self._criticizers = dict()
+    self._initialize()
+    # create the default sco and criticizer for analysis
+    sco = self._create_sco()
+    factor_omic = None
+    for om in ['proteomic', 'celltype', 'disease']:
+      if om in sco.omics:
+        factor_omic = om
+        break
+    if factor_omic is not None:
+      self.create_criticizer(factor_omic=factor_omic)
+
+  @property
+  def dataset(self) -> SingleCellOMIC:
+    return self._dataset
+
+  def get_data(self, omic, type):
+    omic = OMIC.parse(omic).name
+    type = str(type).lower().strip()
+    key = (omic, type)
+    if (omic, type) not in self.omics_data:
+      raise ValueError(
+          f"No data found for {key}, "
+          f"available data include: {list(self.omics_data.keys())}")
+    return self.omics_data[(omic, type)]
 
   def _initialize(self):
     scm = self.scm
     sco = self.sco
-    sco_corrupt = self.sco_corrupt
+    outputs, latents = scm.predict(
+        sco.create_dataset(self.scm.output_layers[0].name,
+                           batch_size=self.batch_size,
+                           shuffle=0,
+                           drop_remainder=False),
+        sample_shape=self.sample_shape,
+        verbose=self.verbose,
+    )
+    for om in self.omics:
+      self.omics_data[(om, 'corrupted')] = sco.get_omic(om)
+    # latent is the same for all
+    self.omics_data[(OMIC.latent.name, 'corrupted')] = tf.nest.flatten(latents)
+    self.omics_data[(OMIC.latent.name, 'original')] = tf.nest.flatten(latents)
+    # infer if the distribution is imputed
+    for l, o in zip(scm.output_layers, tf.nest.flatten(outputs)):
+      self.omics_data[(l.name, 'reconstructed')] = o
+      is_independent = 0
+      if isinstance(o, tfd.Independent):
+        is_independent = o.reinterpreted_batch_ndims
+        o = o.distribution
+      if isinstance(o, tfd.ZeroInflated):
+        o = o.count_distribution
+      if is_independent > 0:
+        o = tfd.Independent(o, reinterpreted_batch_ndims=is_independent)
+      self.omics_data[(l.name, 'imputed')] = o
 
-    if self.verbose:
-      print("Making prediction for clean data ...")
-    outputs_clean, latents_clean = scm.predict(sco,
-                                               apply_corruption=False,
-                                               sample_shape=self.sample_shape,
-                                               batch_size=self.batch_size,
-                                               verbose=self.verbose)
-    if not isinstance(outputs_clean, (tuple, list)):
-      outputs_clean = [outputs_clean]
-    if not isinstance(latents_clean, (tuple, list)):
-      latents_clean = [latents_clean]
-
-    if self.verbose:
-      print("Making prediction for corrupted data ...")
-    outputs_corrupt, latents_corrupt = scm.predict(sco_corrupt,
-                                                   apply_corruption=False,
-                                                   sample_shape=self.sample_shape,
-                                                   batch_size=self.batch_size,
-                                                   verbose=self.verbose)
-    if not isinstance(outputs_corrupt, (tuple, list)):
-      outputs_corrupt = [outputs_corrupt]
-    if not isinstance(latents_corrupt, (tuple, list)):
-      latents_corrupt = [latents_corrupt]
-
-    self.outputs_clean = outputs_clean
-    self.latents_clean = latents_clean
-    self.outputs_corrupt = outputs_corrupt
-    self.latents_corrupt = latents_corrupt
-
-  def _prepare(self, imputed, corrupted):
-    imputed &= self.scm.is_zero_inflated
-    if corrupted:
-      outputs, latents = self.outputs_corrupt, self.latents_corrupt
-      sco = self.sco_corrupt
-    else:
-      outputs, latents = self.outputs_clean, self.latents_clean
-      sco = self.sco
-    if imputed:
-      outputs = [_preprocess_output_distribution(o) for o in outputs]
-    # only get the mean
-    outputs = [tf.reduce_mean(o.mean(), axis=0).numpy() for o in outputs]
-    latents = [z.mean().numpy() for z in latents]
-    # special case for multi-latents
-    if len(latents) > 1:
-      if self.verbose:
-        warnings.warn(
-            "%d latents found, concatenate all the latent into single "
-            "2-D array" % len(latents))
-      latents = np.concatenate(latents, axis=1)
-    else:
-      latents = latents[0]
-    return sco, outputs, latents, imputed
-
-  def create_sco(self, imputed=True, corrupted=True,
-                 keep_omic=None) -> SingleCellOMIC:
+  def _create_sco(self) -> SingleCellOMIC:
     r""" Create a SingleCellOMIC dataset based on the output of
     SingleCellModel
 
     Arguments:
-      imputed : a Boolean. If True, use the 'i'mputed transcriptome, otherwise,
-        'r'econstructed
-      corrupted : a Boolean. If True, use artificial corrupted data for
-        generating the outputs.
-      keep_omic : OMIC (optional). This OMIC type will be kept as original
-        data (i.e. not the output from the network)
-
-    The output name of the dataset is concatenated with
-      - 'i' if imputed, otherwise, 'r' for reconstructed
-      - 'c' if corrupted, otherwise, 'o' for original
+      omics_config : a Dictionary
     """
-    sco, outputs, latents, imputed = self._prepare(imputed, corrupted)
-    key = (imputed, corrupted, str(keep_omic))
-    if key not in self._datasets:
-      ## check which omic should be kept as original
-      if keep_omic is not None:
-        keep_omic = OMIC.parse(keep_omic)
-        outputs = [
-            o if om is None or om not in keep_omic else sco.numpy(om)
-            for o, om in zip_longest(outputs, self.omics)
-        ]
-      ## create the experimental dataset
-      sco = SingleCellOMIC(
-          outputs[0],
-          cell_id=self.cell_names,
-          gene_id=self.gene_names,
-          dtype=self.sco.dtype,
-          name='%s%s%s' %
-          (self.sco.name, 'i' if imputed else 'r', 'c' if corrupted else 'o'))
-      for o, om in zip(outputs[1:], list(self.omics)[1:]):
-        sco.add_omic(omic=om,
-                     X=o,
-                     var_names=[name for name in self.sco.get_var(om).index])
-      sco.add_omic(omic=OMIC.latent,
-                   X=latents,
-                   var_names=['Z#%d' % i for i in range(latents.shape[1])])
-      self._datasets[key] = sco
-    return self._datasets[key]
+    if self._dataset is None:
+      sco = self.sco_original.copy()
+      for om in self.omics:
+        if (om, 'imputed') in self.omics_data:
+          data_type = 'imputed'
+        elif (om, 'reconstructed') in self.omics_data:
+          data_type = 'reconstructed'
+        else:
+          break
+        data = self.omics_data[(om, data_type)]
+        om_new = OMIC.parse(f'i{om}')
+        # set the new data
+        if isinstance(data, tfd.Distribution):
+          data = data.mean().numpy()
+          if data.ndim == 3:
+            data = np.mean(data, axis=0)
+        elif isinstance(data, (tuple, list)):
+          data = [i.mean() for i in data]
+          data = data[0] if len(data) == 1 else self.reduce_latents(data)
+          if hasattr(data, 'numpy'):
+            data = data.numpy()
+        # set the omic values
+        if om == OMIC.latent:
+          var_names = np.array([f'Z{i}' for i in range(data.shape[1])])
+        elif om in self.scm.metadata:
+          var_names = self.scm.metadata[om]
+        else:
+          var_names = np.array([f'{om}{i}' for i in range(data.shape[1])])
+        sco.add_omic(omic=om_new, X=data, var_names=var_names)
+      self._dataset = sco
+    return self._dataset
 
   def create_criticizer(self,
-                        corrupted=True,
-                        predicted=False,
+                        factor_omic='proteomic',
                         n_bins=5,
-                        strategy='quantile',
-                        n_samples=10000) -> Criticizer:
+                        strategy='quantile') -> Criticizer:
     r""" Create a probabilistic criticizer for evaluating the latent codes of
     variational models.
 
     Arguments:
-      corrupted : a Boolean. If True, an artificial corrupted dataset is used
-        as input.
-      predicted : a Boolean. If True, use predicted protein levels or celltype
-        as groundtruth factor.
+      factor_omic : instance of OMIC.
+        which OMIC type be used as factors (or labels).
+      n_bins : int (default=8)
+        The number of bins to produce discretized factors.
+      strategy : {'uniform', 'quantile', 'kmeans', 'gmm'}, (default='quantile')
+        Strategy used to define the widths of the bins.
+        uniform - All bins in each feature have identical widths.
+        quantile - All bins in each feature have the same number of points.
+        kmeans - Values in each bin have the same nearest center of a 1D
+          k-means cluster.
     """
-    sco = self.sco_corrupt if corrupted else self.sco
-    key = (corrupted, predicted, n_bins, strategy)
-    # OMIC for factor groundtruth
-    if len(self.omics) == 1:
-      raise ValueError("Need at least 2 OMICs in the dataset.")
-    support_omics = (OMIC.celltype, OMIC.proteomic)
-    factor = None
-    for om in support_omics:
-      if om in self.omics:
-        factor = om
-        break
-    if factor is None:  # no good candidate, just discretizing second OMIC
-      factor = support_omics[1]
-    factor_name = sco.get_var_names(factor)
-    # predict or original factors
-    if predicted:
-      if not self.is_semi_supervised:
-        raise RuntimeError(
-            "Cannot use predicted factor, NOT a semi-supervised models")
-      outputs = self.outputs_corrupt if corrupted else self.outputs_clean
-      factor = tf.reduce_mean(outputs[self.omics.index(factor)].mean(),
-                              axis=0).numpy()
-    else:
-      factor = sco.numpy(factor)
-    # prepare the inputs
-    inputs = sco.numpy(OMIC.transcriptomic)
+    sco = self.dataset
+    assert factor_omic in sco.omics, \
+      f"factor_omic='{factor_omic}' not found, available are: {sco.omics}"
+    factor_omic = OMIC.parse(factor_omic)
+    key = factor_omic.name
     # create the Criticizer
     if key not in self._criticizers:
-      # discretizing factors if necessary
-      kwargs = dict(discretizing=False, n_bins=n_bins, strategy=strategy)
-      if np.any(factor.astype(np.int64) != factor.astype(np.float64)):
-        kwargs['discretizing'] = True
       # create the criticizer
-      crt = Criticizer(self.scm, random_state=self.rand.randint(1e8))
-      crt.sample_batch(inputs=inputs,
-                       factors=factor,
-                       factors_name=factor_name,
-                       n_samples=int(n_samples),
-                       batch_size=self.batch_size,
-                       verbose=self.verbose,
-                       **kwargs)
+      crt = Criticizer(vae=self.scm, random_state=self.rand.randint(1e8))
+      crt.sample_batch(latents=self.omics_data[('latent', 'original')],
+                       factors=sco.get_omic(factor_omic),
+                       factors_name=sco.get_var_names(factor_omic),
+                       n_bins=int(n_bins),
+                       strategy=strategy)
       self._criticizers[key] = crt
     return self._criticizers[key]
 
   # ******************** Basic matrices ******************** #
   @property
-  def gene_names(self):
-    return self.sco.var_names
-
-  @property
-  def cell_names(self):
-    return self.sco.obs_names
-
-  @property
-  def labels(self):
-    name = self.sco.get_var(OMIC.proteomic | OMIC.celltype).index
-    return [standardize_protein_name(i) for i in name]
-
-  @property
-  def n_labels(self):
-    return self.sco.numpy(OMIC.proteomic | OMIC.celltype).shape[1]
-
-  @property
-  def gene_dim(self):
-    return self.sco.n_vars
-
-  @property
-  def X(self):
-    r""" Original gene expression data without artificial corruption """
-    return self.sco.X
-
-  @property
-  def T(self):
-    r""" Target variables: artificial corrupted gene expression similar
-    to the one used for fitting the model """
-    return self.sco_corrupt.X
-
-  @property
-  def W(self):
-    r""" The reconstruction of single-cell matrix (with un-imputed genes),
-    mean of the distribution. """
-    return tf.reduce_mean(self.outputs_corrupt[0].mean(), axis=0).numpy()
-
-  @property
-  def I(self):
-    r""" The imputation of single-cell matrix, mean of the distribution. """
-    dist = _preprocess_output_distribution(self.outputs_corrupt[0])
-    return tf.reduce_mean(dist.mean(), axis=0).numpy()
-
-  @property
-  def Z(self):
-    r""" Latent space of the autoencoder """
-    return self.latents_corrupt[0].mean().numpy()
-
-  @property
-  def y_true(self):
-    r""" True value of protein marker level or cell type labels """
-    return self.sco.numpy(OMIC.proteomic | OMIC.celltype)
-
-  @property
-  def y_pred(self):
-    r""" Labels prediction from semi-supervised learning """
-    if not self.is_semi_supervised:
-      return None
-    return tf.reduce_mean(self.outputs_corrupt[1].mean(), axis=0).numpy()
-
-  @property
-  def name(self):
-    i = self.scm.id
-    ds_name = self.sco.name
-    norm = 'log' if self.scm.log_norm else 'raw'
-    corruption_dist = self.scm.corruption_dist
-    corruption_rate = self.scm.corruption_rate
-    if 'bi' in corruption_dist:
-      corruption = 'bi' + str(int(corruption_rate * 100))
-    else:
-      corruption = 'un' + str(int(corruption_rate * 100))
-    if self.is_semi_supervised:
-      semi = 'semi'
-    else:
-      semi = 'unsp'
-    return '_'.join([ds_name, i, norm, corruption, semi])
-
-  @property
-  def name_lines(self):
-    r""" same as short_id but divided into 3 lines """
-    short_id = self.name.split('_')
-    return '\n'.join(
-        ['_'.join(short_id[:2]), '_'.join(short_id[2:-1]), short_id[-1]])
+  def name(self) -> str:
+    return self._name
 
   @property
   def is_semi_supervised(self):
     return self.scm.is_semi_supervised
-
-  @property
-  def is_binary_classes(self):
-    return np.all(np.sum(self.y_true, axis=-1) == 1.)
 
   # ******************** helpers ******************** #
   def _train_data(self, x_train, y_train):
@@ -437,7 +349,171 @@ class Posterior(Visualizer):
       latents = [latents]
     return outputs, latents, y_train
 
+  # ******************** helper ******************** #
+  def _iter_sco(self, title):
+    for cfg, sco in self._dataset.items():
+      cfg = eval(cfg)
+      key = '_'.join(
+          [f"{i[:3]}_{j[:3]}" for i, j in cfg.items() if j != 'original'])
+      fig = []
+      yield key, cfg, sco, fig
+      if len(fig) == 0:
+        raise RuntimeError
+      self.add_figure(f"{title}_{key}", fig[0])
+
   # ******************** Latent space analysis ******************** #
+  def plot_scatter(self,
+                   X='latent',
+                   color_by='proteomic',
+                   marker_by=None,
+                   clustering='kmeans',
+                   dimension_reduction='tsne',
+                   max_scatter_points=-1,
+                   **kwargs):
+    X = OMIC.parse(X)
+    color_by = OMIC.parse(color_by)
+    title = f"scatter_{X.name}_{color_by.name}"
+    for key, cfg, sco, fig in self._iter_sco(title):
+      plt.figure(figsize=(8, 8))
+      fig.append(
+          sco.plot_scatter(X=X,
+                           color_by=color_by,
+                           marker_by=marker_by,
+                           clustering=clustering,
+                           dimension_reduction=dimension_reduction,
+                           max_scatter_points=max_scatter_points,
+                           ax=None,
+                           return_figure=True,
+                           **kwargs))
+    return self
+
+  def plot_violins(self,
+                   X='transcriptomic',
+                   group_by='proteomic',
+                   groups=None,
+                   var_names=MARKER_GENES,
+                   clustering='kmeans',
+                   rank_vars=0,
+                   **kwargs):
+    X = OMIC.parse(X)
+    group_by = OMIC.parse(group_by)
+    for key, cfg, sco, fig in self._iter_sco(
+        f"violins_{X.name}_{group_by.name}{'_rank' if rank_vars > 0 else ''}"):
+      fig.append(
+          sco.plot_stacked_violins(X=X,
+                                   group_by=group_by,
+                                   groups=groups,
+                                   var_names=var_names,
+                                   clustering=clustering,
+                                   rank_vars=rank_vars,
+                                   return_figure=True,
+                                   **kwargs))
+    return self
+
+  def plot_heatmap(self,
+                   X='transcriptomic',
+                   group_by='proteomic',
+                   groups=None,
+                   var_names=MARKER_GENES,
+                   clustering='kmeans',
+                   rank_vars=0,
+                   **kwargs):
+    X = OMIC.parse(X)
+    group_by = OMIC.parse(group_by)
+    for key, cfg, sco, fig in self._iter_sco(
+        f"heatmap_{X.name}_{group_by.name}{'_rank' if rank_vars > 0 else ''}"):
+      fig.append(
+          sco.plot_heatmap(X=X,
+                           group_by=group_by,
+                           groups=groups,
+                           var_names=var_names,
+                           clustering=clustering,
+                           rank_vars=rank_vars,
+                           return_figure=True,
+                           **kwargs))
+    return self
+
+  def plot_distance_heatmap(self,
+                            X='transcriptomic',
+                            group_by='proteomic',
+                            clustering='kmeans',
+                            **kwargs):
+    r""" Distance Heatmap """
+    X = OMIC.parse(X)
+    group_by = OMIC.parse(group_by)
+    title = f"distance_heatmap_{X.name}_{group_by.name}"
+    for key, cfg, sco, fig in self._iter_sco(title):
+      plt.figure(figsize=(8, 8))
+      fig.append(
+          sco.plot_distance_heatmap(X=X,
+                                    group_by=group_by,
+                                    clustering=clustering,
+                                    title=key,
+                                    ax=None,
+                                    return_figure=True,
+                                    **kwargs))
+    return self
+
+  def plot_correlation_matrix(self,
+                              score_type,
+                              omic1=OMIC.transcriptomic,
+                              omic2=OMIC.proteomic,
+                              var_names1=MARKER_ADT_GENE.values(),
+                              var_names2=MARKER_ADT_GENE.keys(),
+                              is_marker_pairs=True):
+    r""" Heatmap correlation between omic1 (x-axis) and omic2 (y-axis) """
+    omic1 = OMIC.parse(omic1)
+    omic2 = OMIC.parse(omic2)
+    title = f"{score_type.lower()}_{omic1.name}_{omic2.name}"
+    for key, cfg, sco, fig in self._iter_sco(title):
+      if score_type == 'pearson':
+        fn = sco.plot_pearson_matrix
+      elif score_type == 'spearman':
+        fn = sco.plot_spearman_matrix
+      elif score_type == 'mutual_information':
+        fn = sco.plot_mutual_information
+      else:
+        raise NotImplementedError(
+            f"No implementation for score_type={score_type}")
+      fig.append(
+          fn(omic1=omic1,
+             omic2=omic2,
+             var_names1=var_names1,
+             var_names2=var_names2,
+             is_marker_pairs=is_marker_pairs,
+             return_figure=True))
+    return self
+
+  def plot_correlation_scatter(self,
+                               omic1='transcriptomic',
+                               omic2='proteomic',
+                               var_names1=MARKER_ADT_GENE.values(),
+                               var_names2=MARKER_ADT_GENE.keys(),
+                               is_marker_pairs=True,
+                               log_omic1=True,
+                               log_omic2=True,
+                               max_scatter_points=200,
+                               top=3,
+                               bottom=3):
+    r""" Scatter correlation plot """
+    omic1 = OMIC.parse(omic1)
+    omic2 = OMIC.parse(omic2)
+    title = f"corrscat_{omic1.name}_{omic2.name}"
+    for key, cfg, sco, fig in self._iter_sco(title):
+      fig.append(
+          sco.plot_correlation_scatter(omic1=omic1,
+                                       omic2=omic2,
+                                       var_names1=var_names1,
+                                       var_names2=var_names2,
+                                       is_marker_pairs=is_marker_pairs,
+                                       log_omic1=log_omic1,
+                                       log_omic2=log_omic2,
+                                       top=top,
+                                       bottom=bottom,
+                                       max_scatter_points=max_scatter_points,
+                                       return_figure=True))
+    return self
+
   def plot_latents_protein_pairs(self,
                                  legend=True,
                                  algo='tsne',
@@ -491,7 +567,7 @@ class Posterior(Visualizer):
     ax = vs.plot_heatmap(llk,
                          cmap="Blues",
                          ax=None,
-                         xticklabels=["Z#%d" % i for i in range(n_latent)],
+                         xticklabels=["Z%d" % i for i in range(n_latent)],
                          yticklabels=self.labels,
                          xlabel="Latent dimension",
                          ylabel="Protein",
@@ -578,155 +654,7 @@ class Posterior(Visualizer):
     self.add_figure('library_%s' % ('log' if log else 'raw'), ax.get_figure())
     return self
 
-  # ******************** Correlation analysis ******************** #
-  def plot_correlation_top_pairs(self,
-                                 data_type='V',
-                                 proteins=None,
-                                 n=8,
-                                 fontsize=10):
-    return self._plot_correlation_ranked_pairs(data_type=data_type,
-                                               n=n,
-                                               proteins=proteins,
-                                               top=True,
-                                               fontsize=fontsize)
-
-  def plot_correlation_bottom_pairs(self,
-                                    data_type='V',
-                                    proteins=None,
-                                    n=8,
-                                    fontsize=10):
-    return self._plot_correlation_ranked_pairs(data_type=data_type,
-                                               n=n,
-                                               proteins=proteins,
-                                               top=False,
-                                               fontsize=fontsize)
-
-  def _plot_correlation_ranked_pairs(self,
-                                     data_type='V',
-                                     n=8,
-                                     proteins=None,
-                                     top=True,
-                                     fontsize=14):
-    r"""
-    Arguments:
-      data_type : {'X', 'T', 'V', 'W'}
-        'X' for input gene expression,
-        'T' for corrupted gene expression,
-        'V' for imputed gene expression,
-        and 'W' for reconstructed gene expression
-      proteins : {None, 'marker', list of string}
-    """
-    correlations = self.get_correlation_all_pairs(data_type=data_type)
-    y = self.y_true
-    if data_type == 'V':
-      ydata = self.I
-      data_type_name = "Imputed"
-    elif data_type == 'X':
-      ydata = self.X
-      data_type_name = "Original"
-    elif data_type == 'T':
-      ydata = self.T
-      data_type_name = "Corrupted"
-    elif data_type == 'W':
-      ydata = self.W
-      data_type_name = "Reconstructed"
-
-    n = int(n)
-    if isinstance(proteins,
-                  string_types) and proteins.lower().strip() == 'marker':
-      from sisua.data.const import MARKER_ADT_GENE
-      proteins = [
-          i for i in self.labels
-          if standardize_protein_name(i) in MARKER_ADT_GENE
-      ]
-    elif proteins is None:
-      proteins = self.labels
-    proteins = as_tuple(proteins, t=string_types)
-
-    labels = {
-        standardize_protein_name(j).lower(): i
-        for i, j in enumerate(self.labels)
-    }
-    prot_ids = []
-    for i in proteins:
-      i = standardize_protein_name(i).lower()
-      if i in labels:
-        prot_ids.append(labels[i])
-    prot_ids = set(prot_ids)
-
-    # mapping protein_id -> (gene, pearson, spearman)
-    correlations_map = defaultdict(list)
-    for gene_id, prot_id, pearson, spearman in correlations:
-      if prot_id in prot_ids:
-        correlations_map[prot_id].append((gene_id, pearson, spearman))
-    correlations_map = {
-        i: j[:n] if top else j[-n:][::-1] for i, j in correlations_map.items()
-    }
-    # ====== create figure ====== #
-    nrow = len(correlations_map)
-    if nrow == 0:  # no matching protein found
-      return self
-    ncol = n
-    ax = to_axis2D(ax=None, fig=(ncol * 4, int(nrow * 3.6)))
-    fig = ax.get_figure()
-    # ====== plotting ====== #
-    for i, (prot_idx, data) in enumerate(correlations_map.items()):
-      prot = self.labels[prot_idx]
-      for j, (gene_idx, pearson, spearman) in enumerate(data):
-        ax = plt.subplot(nrow, ncol, i * ncol + j + 1)
-        gene = self.gene_names[gene_idx]
-        sns.scatterplot(x=y[:, prot_idx],
-                        y=ydata[:, gene_idx],
-                        ax=ax,
-                        alpha=0.8,
-                        linewidths=None)
-
-        title = 'Pearson:%.2f Spearman:%.2f' % (pearson, spearman)
-        ax.set_title(title, fontsize=fontsize)
-        if j == 0:
-          ax.set_ylabel('Protein:%s' % prot, fontsize=fontsize)
-        ax.set_xlabel('Gene:%s' % gene, fontsize=fontsize)
-    # ====== store the figure ====== #
-    plt.suptitle('[data_type: %s] %s %d pairs' %
-                 (data_type_name, 'Top' if top else 'Bottom', n),
-                 fontsize=fontsize + 6)
-    with catch_warnings_ignore(UserWarning):
-      plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-    self.add_figure(
-        'correlation_%s_%s%d' %
-        (data_type_name.lower(), 'top' if top else 'bottom', n), fig)
-    return self
-
   # ******************** Simple analysis ******************** #
-  def scores_llk(self):
-    """ Return the 'llk' (log-likelihood) of the output distribution
-    and the corrupted data used, also includes the 'llk_imputed' which
-    is the log-likelihood of the denoised distribution and the original
-    data without corruption.
-    """
-    llk = tf.reduce_mean(self.outputs_corrupt[0].log_prob(self.T)).numpy()
-    llk_imputed = tf.reduce_mean(
-        _preprocess_output_distribution(self.outputs_corrupt[0]).log_prob(
-            self.X)).numpy()
-    return {'llk': llk, 'llk_imputed': llk_imputed}
-
-  def scores_imputation(self):
-    """(train_score, train_score_mean, train_score_std),
-       (test_score, test_score_mean, test_score_std)"""
-    return {
-        'all': imputation_score(self.X, self.I),
-        'mean': imputation_mean_score(self.X, self.T, self.I),
-        'std': imputation_std_score(self.X, self.T, self.I),
-    }
-
-  def scores_spearman(self):
-    return self.get_correlation_marker_pairs(data_type='V',
-                                             score_type='spearman')
-
-  def scores_pearson(self):
-    return self.get_correlation_marker_pairs(data_type='V',
-                                             score_type='pearson')
-
   def scores_clustering(self):
     return clustering_scores(latent=self.Z,
                              labels=self.y_true,
@@ -750,135 +678,165 @@ class Posterior(Visualizer):
                                  return_figure=False,
                                  show_plot=False)
 
-  def save_scores(self, path=None):
-    r""" Saving all scores to a yaml file """
-    import yaml
-    all_scores = {"Model": self.name}
-    classifier_train, classifier_test = self.scores_classifier()
-    for name, scores in (
-        ('llk', self.scores_llk()),
-        ('pearson', self.scores_pearson()),
-        ('spearman', self.scores_spearman()),
-        ('classifier_train', classifier_train),
-        ('classifier_test', classifier_test),
-        ('cluster', self.scores_clustering()),
-        ('imputation', self.scores_imputation()),
-    ):
-      all_scores[name] = {key: float(val) for key, val in scores.items()}
-    if path is None:
-      return all_scores
-    with open(path, 'w') as f:
-      yaml.dump(all_scores, f)
-    return self
+  # ******************** metrics ******************** #
+  @cache_memory
+  def cal_marginal_llk(self, original=True):
+    r""" Calcualte the marginal log-likelihood and the reconstruction
+    (log-likelihood)
 
-  # ******************** learning curves and metrics ******************** #
-  @property
-  def learning_curves(self):
-    r""" Return train and valid loss """
-    if self.epochs == 0:
-      return dict(train=[], valid=[])
-    return dict(train=self.train_history['loss'],
-                valid=self.valid_history['val_loss'])
+    Arguments:
+      original : a Boolean
+        use original dataset or artificially corrupted dataset
 
-  @property
-  def train_history(self):
-    return self.scm.train_history
+    Return:
+      a Dictionary : mapping scores' name to scalar value (higher is better)
+    """
+    from tqdm import tqdm
+    sco = self.sco if original else self.sco_corrupt
+    prog = tqdm(sco.create_dataset(sco.omics,
+                                   labels_percent=1.0,
+                                   batch_size=2,
+                                   drop_remainder=True,
+                                   shuffle=0),
+                desc="Marginal LLK",
+                disable=not self.verbose)
+    mllk = []
+    llk = defaultdict(list)
+    for Xs in prog:
+      y = self.scm.marginal_log_prob(**Xs, sample_shape=100)
+      mllk.append(y[0])
+      for i, j in y[1].items():
+        llk[i].append(j)
+    prog.clear()
+    prog.close()
+    # aggregate the batches' results
+    llk = {
+        f"{i}_llk": np.mean(tf.concat(j, axis=0).numpy())
+        for i, j in llk.items()
+    }
+    llk["marginal_llk"] = np.mean(tf.concat(mllk, axis=0).numpy())
+    return {f"{'org' if original else 'crr'}_{i}": j for i, j in llk.items()}
 
-  @property
-  def valid_history(self):
-    return self.scm.valid_history
+  @cache_memory
+  def cal_imputation_scores(self):
+    r""" Imputation score, estimated by distance between original and
+    imputed values (smaller is better).
+    """
+    omic = self.sco.omics[0].name
+    X_org = self.omics_data[(omic, 'original')]
+    X_crr = self.omics_data[(omic, 'corrupted')]
+    imputed = self.omics_data[(omic, 'imputed')].mean().numpy()
+    if imputed.ndim > 2:
+      imputed = np.mean(imputed, axis=0)
+    return {
+        'imputation_med': imputation_score(X_org, imputed),
+        'imputation_mean': imputation_mean_score(X_org, X_crr, imputed),
+        'imputation_std': imputation_std_score(X_org, X_crr, imputed),
+    }
 
-  @property
-  def epochs(self):
-    r""" How many epochs the model trained on"""
-    return self.scm.epochs
+  @cache_memory
+  def _matrix_scores(self,
+                     score_type,
+                     omic1='transcriptomic',
+                     type1='imputed',
+                     var_names1=MARKER_ADT_GENE.values(),
+                     omic2='proteomic',
+                     type2='original',
+                     var_names2=MARKER_ADT_GENE.keys()):
+    omic1 = OMIC.parse(omic1)
+    omic2 = OMIC.parse(omic2)
+    sco = self._create_sco({omic1.name: type1, omic2.name: type2})
+    var1 = {name: i for i, name in enumerate(sco.get_var_names(omic1))}
+    var2 = {name: i for i, name in enumerate(sco.get_var_names(omic2))}
+    if score_type in {'spearman', 'pearson'}:
+      cor = sco.get_correlation(omic1, omic2)
+      matrix = np.empty(shape=(len(var1), len(var2)), dtype=np.float64)
+      for i1, i2, p, s in cor:
+        matrix[i1, i2] = p if score_type == 'pearson' else s
+    elif score_type == 'mutual_info':
+      matrix = sco.get_mutual_information(omic1, omic2)
+    elif score_type == 'importance':
+      matrix = sco.get_importance_matrix(omic1, omic2)
+    else:
+      raise NotImplementedError(f"No support for score_type='{score_type}'")
+    scores = {}
+    for name1, name2 in zip(var_names1, var_names2):
+      if name1 in var1 and name2 in var2:
+        i1 = var1[name1]
+        i2 = var2[name2]
+        scores[f"{name1}_{name2}"] = matrix[i1, i2]
+    return scores
 
-  def plot_learning_curves(self):
+  def cal_pearson(self,
+                  omic1='transcriptomic',
+                  type1='imputed',
+                  var_names1=MARKER_ADT_GENE.values(),
+                  omic2='proteomic',
+                  type2='original',
+                  var_names2=MARKER_ADT_GENE.keys()):
+    return self._matrix_scores(score_type='pearson',
+                               omic1=omic1,
+                               type1=type1,
+                               var_names1=var_names1,
+                               omic2=omic2,
+                               type2=type2,
+                               var_names2=var_names2)
+
+  def cal_spearman(self,
+                   omic1='transcriptomic',
+                   type1='imputed',
+                   var_names1=MARKER_ADT_GENE.values(),
+                   omic2='proteomic',
+                   type2='original',
+                   var_names2=MARKER_ADT_GENE.keys()):
+    return self._matrix_scores(score_type='spearman',
+                               omic1=omic1,
+                               type1=type1,
+                               var_names1=var_names1,
+                               omic2=omic2,
+                               type2=type2,
+                               var_names2=var_names2)
+
+  def cal_mutual_information(self,
+                             omic1='transcriptomic',
+                             type1='imputed',
+                             var_names1=MARKER_ADT_GENE.values(),
+                             omic2='proteomic',
+                             type2='original',
+                             var_names2=MARKER_ADT_GENE.keys()):
+    return self._matrix_scores(score_type='mutual_info',
+                               omic1=omic1,
+                               type1=type1,
+                               var_names1=var_names1,
+                               omic2=omic2,
+                               type2=type2,
+                               var_names2=var_names2)
+
+  def cal_importance(self,
+                     omic1='transcriptomic',
+                     type1='imputed',
+                     var_names1=MARKER_ADT_GENE.values(),
+                     omic2='proteomic',
+                     type2='original',
+                     var_names2=MARKER_ADT_GENE.keys()):
+    return self._matrix_scores(score_type='importance',
+                               omic1=omic1,
+                               type1=type1,
+                               var_names1=var_names1,
+                               omic2=omic2,
+                               type2=type2,
+                               var_names2=var_names2)
+
+  # ******************** Protein analysis ******************** #
+  def plot_learning_curves(self, summary_steps=[100, 10], dpi=100):
     r""" Plotting the loss or metrics returned during training progress """
-    fig = self.scm.plot_learning_curves(title=self.name, return_figure=True)
+    fig = self.scm.plot_learning_curves(path=None,
+                                        summary_steps=summary_steps,
+                                        dpi=dpi,
+                                        title=self.name)
     self.add_figure('learning_curves', fig)
     return self
 
-  # ******************** Correlation scores ******************** #
-  def get_correlation_marker_pairs(self, data_type='X', score_type='spearman'):
-    """
-    Parameters
-    ----------
-    data_type : {'X', 'V', 'W', 'T'}
-      'X' for input gene expression,
-      'T' for corrupted gene expression,
-      'V' for imputed gene expression,
-      and 'W' for reconstructed gene expression
-
-    score_type : {'spearman', 'pearson'}
-      spearman correlation for rank (monotonic) relationship, and pearson
-      for linear correlation
-
-    Return
-    ------
-    correlation : OrderedDict
-      mapping from marker protein/gene name (string) to
-      correlation score (scalar)
-    """
-    assert score_type in ('spearman', 'pearson')
-    assert data_type in ('X', 'V', 'W', 'T')
-    y = self.y_true
-    X = getattr(self, data_type)
-    corr = correlation_scores(X=X,
-                              y=y,
-                              gene_name=self.gene_names,
-                              protein_name=self.labels,
-                              return_series=False)
-    score_idx = 0 if score_type == 'spearman' else 1
-    return OrderedDict([(i, j[score_idx]) for i, j in corr.items()])
-
-  @cache_memory
-  def get_correlation_all_pairs(self, data_type='X'):
-    """
-    Parameters
-    ----------
-    data_type : {'X', 'T', 'V', 'W'}
-      'X' for input gene expression,
-      'T' for corrupted gene expression,
-      'V' for imputed gene expression,
-      and 'W' for reconstructed gene expression
-
-    Return
-    ------
-    correlation : tuple of four scalars
-      list of tuple contained 4 scalars
-      (gene-idx, protein-idx, pearson, spearman)
-      sorted in order from high to low correlation
-    """
-    assert data_type in ('X', 'V', 'W', 'T')
-
-    from scipy.stats import pearsonr, spearmanr
-    v, x, t, w, y = self.I, self.X, self.T, self.W, self.y_true
-
-    n_proteins = y.shape[1]
-    n_genes = x.shape[1]
-    data = getattr(self, data_type)
-
-    # ====== search for most correlated series ====== #
-    def _corr(idx):
-      for gene_idx, prot_idx in idx:
-        g = data[:, gene_idx]
-        p = y[:, prot_idx]
-        with catch_warnings_ignore(RuntimeWarning):
-          yield (gene_idx, prot_idx, pearsonr(g,
-                                              p)[0], spearmanr(g,
-                                                               p).correlation)
-
-    jobs = list(product(range(n_genes), range(n_proteins)))
-
-    # ====== multiprocessing ====== #
-    mpi = MPI(jobs, func=_corr, ncpu=3, batch=len(jobs) // 3)
-    all_correlations = sorted([i for i in mpi],
-                              key=lambda scores:
-                              (scores[-2] + scores[-1]) / 2)[::-1]
-    return all_correlations
-
-  # ******************** Protein analysis ******************** #
   def plot_protein_predicted_series(self,
                                     fontsize=10,
                                     proteins=None,
@@ -1072,3 +1030,24 @@ class Posterior(Visualizer):
                       clear_figures=True,
                       verbose=self.verbose)
     return self
+
+  def __str__(self):
+    text = f"Posterior: {self.name}\n"
+    text += "Data:\n"
+    for k, v in sorted(self.omics_data.items()):
+      desc = [
+          str(i).replace('tfp.distributions.', '') if isinstance(
+              i, tfd.Distribution) else str([i.shape, i.dtype])
+          for i in tf.nest.flatten(v)
+      ]
+      text += f" {'-'.join(k)}:{', '.join(desc)}\n"
+    # dataset SCO
+    for line in str(self._dataset).split('\n'):
+      text += f" {line}\n"
+    text += "Criticizers:\n"
+    for key, crt in self._criticizers.items():
+      text += f" factor:{key}\n"
+    text += "Figures:\n"
+    for i, _ in self.figures.items():
+      text += f" {i}\n"
+    return text[:-1]

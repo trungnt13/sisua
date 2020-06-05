@@ -32,10 +32,19 @@ variables:
   transcriptomic:
     posterior: 'zinbd'
     kwargs: {}
+  chromatin:
+    posterior: 'zinbd'
+    kwargs: {}
   proteomic:
-    posterior: 'nbd'
+    posterior: 'nb'
     kwargs: {}
   celltype:
+    posterior: 'onehot'
+    kwargs: {}
+  disease:
+    posterior: 'onehot'
+    kwargs: {}
+  progenitor:
     posterior: 'onehot'
     kwargs: {}
 
@@ -51,7 +60,7 @@ train:
   logging_interval: 2
   earlystop_threshold: 0.001
   earlystop_progress_length: 0
-  earlystop_patience: 10
+  earlystop_patience: 20
   earlystop_min_epoch: -1
   terminate_on_nan: True
   allow_rollback: False

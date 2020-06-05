@@ -20,11 +20,12 @@ from six import string_types
 
 from bigarray import MmapArrayWriter
 from odin import visual as vs
+from odin.bay import RandomVariable
 from odin.search import diagonal_beam_search, diagonal_bruteforce_search
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
-from odin.utils import (IndexedList, as_tuple, batching, cache_memory,
-                        catch_warnings_ignore, ctext, is_primitive)
-from odin.utils.crypto import md5_checksum
+from odin.utils import (IndexedList, MD5object, as_tuple, batching,
+                        cache_memory, catch_warnings_ignore, ctext,
+                        is_primitive)
 from sisua.data.const import MARKER_GENES, OMIC
 from sisua.data.utils import (apply_artificial_corruption, get_library_size,
                               is_binary_dtype, is_categorical_dtype,
@@ -54,7 +55,7 @@ def get_all_omics(sco: sc.AnnData):
   return o
 
 
-class _OMICbase(sc.AnnData):
+class _OMICbase(sc.AnnData, MD5object):
 
   def __init__(self,
                X,
@@ -123,9 +124,9 @@ class _OMICbase(sc.AnnData):
     r""" Temporary change the main OMIC type to other than the default
     transcriptomic """
     omic = OMIC.parse(omic)
-    current_omic = self._current_omic
+    last_omic = self._current_omic
     # do nothing if transcriptomic (the default)
-    if omic == current_omic:
+    if omic == last_omic:
       yield self
     # swap then reset back to transcriptomic
     else:
@@ -134,10 +135,12 @@ class _OMICbase(sc.AnnData):
       self._X = x
       self._var = var
       self._n_vars = self._X.shape[1]
+      self._current_omic = omic
       yield self
-      self._X = self.numpy(current_omic)
-      self._var = self.get_var(current_omic)
+      self._X = self.numpy(last_omic)
+      self._var = self.get_var(last_omic)
       self._n_vars = self._X.shape[1]
+      self._current_omic = last_omic
 
   @property
   def current_omic(self) -> OMIC:
@@ -170,7 +173,8 @@ class _OMICbase(sc.AnnData):
     if var_names is not None:
       var_names = np.array(var_names).ravel()
       assert len(var_names) == X.shape[1]
-      if omic in (OMIC.proteomic | OMIC.celltype):
+      if omic in (OMIC.proteomic | OMIC.celltype | OMIC.iproteomic |
+                  OMIC.icelltype):
         var_names = standardize_protein_name(var_names)
     else:
       var_names = ['%s%d' % (omic.name, i) for i in range(X.shape[1])]
@@ -225,6 +229,12 @@ class _OMICbase(sc.AnnData):
         "obsm of name:'%s' and shape:'%s', but the dataset has %d observations"\
           % (key, str(X.shape), om.n_vars)
     return om
+
+  def _inplace_subset_var(self, index):
+    var_uns = f"{self.current_omic.name}_var"
+    obj = super()._inplace_subset_var(index)
+    self.uns[var_uns] = self.var
+    return obj
 
   def apply_indices(self, indices, observation=True):
     r""" Inplace indexing, this indexing algorithm also update
@@ -287,6 +297,24 @@ class _OMICbase(sc.AnnData):
     ]
     return genes
 
+  def get_n_var(self, omic) -> int:
+    return self.get_var(omic).shape[0]
+
+  def get_var_indices(self, omic=None) -> dict:
+    r""" Mapping from variable name to its integer index (i.e. column index)
+    of the data matrix.
+    """
+    if omic is None:
+      omic = self._current_omic
+    else:
+      omic = OMIC.parse(omic)
+    name = f"{omic.name}_var_indices"
+    if name not in self.uns:
+      self.uns[name] = {
+          name: i for i, name in enumerate(self.get_var(omic).index)
+      }
+    return self.uns[name]
+
   def get_var(self, omic) -> pd.DataFrame:
     omic = OMIC.parse(omic)
     for om in list(omic):
@@ -299,45 +327,65 @@ class _OMICbase(sc.AnnData):
   def get_var_names(self, omic):
     return self.get_var(omic).index.values
 
-  def get_shape(self, omic):
+  def get_dim(self, omic):
     return self.numpy(omic=omic).shape[1]
 
   def get_omic(self, omic):
     r""" Return observation ndarray in `obsm` or `obs` """
     return self.numpy(omic=omic)
 
+  def get_current_omic(self) -> OMIC:
+    return self._current_omic
+
+  def set_omic(self, omic, X, recalculate_statistics=True):
+    r""" Update the value of given OMIC stored in this dataset """
+    self._record('set_omic', locals())
+    omic = OMIC.parse(omic)
+    assert omic in self.omics, \
+      (f"Cannot set value for omic='{omic}', "
+       f"all available omics are: {self.omics}")
+    assert X.shape == self.numpy(omic).shape, \
+      (f"Dimensions mismatch, {omic} has dim={self.numpy(omic).shape} "
+       f"but given: {X.shape}")
+    # skip if the same ArrayView
+    if id(X) == id(self.get_omic(omic)):
+      print("SKIP!")
+      return self
+    # set the new data
+    self.obsm[f'{omic.name}'] = X
+    if omic == self._current_omic:
+      self._X = X
+    # have to recalculate the statistic
+    if recalculate_statistics:
+      self._calculate_statistics(omic)
+    return self
+
   def numpy(self, omic=None):
     r""" Return observation ndarray in `obsm` or `obs` """
     if omic is None:
       omic = self._current_omic
-    arr = None
+    omic_name = omic.name if hasattr(omic, 'name') else str(omic)
     # obs
-    if isinstance(omic, string_types) and \
-      not isinstance(omic, OMIC) and \
-        omic in self.obs:
-      arr = self.obs[omic].values
+    if omic_name in self.obs:
+      return self.obs[omic_name].values
     # obsm
     omic = OMIC.parse(omic)
     for om in list(omic):
-      if om in self.omics:
-        arr = self.obsm[om.name]
-        break
+      if om.name in self.obsm:
+        return self.obsm[om.name]
     # not found
-    if arr is None:
-      raise ValueError("OMIC not found, give: '%s', support: '%s'" %
-                       (omic, self.omics))
-    return arr
+    raise ValueError(f"OMIC not found, give: {omic}, support: {self.omics}")
 
   def labels(self, omic=OMIC.proteomic):
     omic = OMIC.parse(omic)
     for om in list(omic):
-      name = self.labels_name(om)
+      name = self.get_labels_name(om)
       if name in self.obs:
         return self.obs[name]
     raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                      (omic, self.omics))
 
-  def labels_name(self, omic=OMIC.proteomic):
+  def get_labels_name(self, omic=OMIC.proteomic):
     omic = OMIC.parse(omic)
     return omic.name + '_labels'
 
@@ -384,6 +432,7 @@ class _OMICbase(sc.AnnData):
     """
     if omic is None:
       omic = self._current_omic
+    omic = OMIC.parse(omic)
     return self.obsm[omic.name + '_stats']
 
   def get_library_size(self, omic=None):
@@ -433,6 +482,23 @@ class _OMICbase(sc.AnnData):
     return counts
 
   # ******************** logging and io ******************** #
+  def get_rv(self, omic, distribution=None) -> RandomVariable:
+    r""" Shortcut for creating `RandomVariable` for given OMIC type """
+    omic = OMIC.parse(omic)
+    if distribution is None:
+      if omic in (OMIC.transcriptomic, OMIC.chromatin):
+        distribution = 'zinb'
+      elif omic == OMIC.proteomic:
+        distribution = 'nb'
+      elif omic in (OMIC.celltype, OMIC.disease, OMIC.progenitor):
+        distribution = 'onehot'
+      else:
+        raise ValueError(f"No default distribution for OMIC {omic.name}")
+    return RandomVariable(event_shape=self.get_dim(omic),
+                          posterior=distribution,
+                          projection=True,
+                          name=omic.name)
+
   def create_dataset(self,
                      omics: OMIC = None,
                      labels_percent=0,
@@ -492,7 +558,7 @@ class _OMICbase(sc.AnnData):
     if cache is not None:
       ds = ds.cache(str(cache))
     # shuffle must be called after cache
-    if shuffle is not None:
+    if shuffle is not None and shuffle > 0:
       ds = ds.shuffle(int(shuffle))
     ds = ds.batch(batch_size, drop_remainder)
     ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
@@ -507,7 +573,7 @@ class _OMICbase(sc.AnnData):
       text += pad[:-1] + \
         f" {'*' if omic == self.current_omic else ''}OMIC:{omic.name} " + \
         f"shape:{X.shape} dtype:{X.dtype} sparsity:{self.sparsity(omic):.2f}"
-    text += pad[:-1] + "History: %d methods" % len(self.history)
+    text += pad[:-1] + f"History: {len(self.history)} methods (most recent)"
     for idx, (method, args) in enumerate(self.history[::-1]):
       text += pad + '%d) %s : %s' % (idx, method, ', '.join(
           ['%s:%s' % (k, v) for k, v in args.items()]))
@@ -540,6 +606,10 @@ class _OMICbase(sc.AnnData):
       text += pad + 'LocalVar  : %s' % describe(
           self.local_var(omic), shorten=True, float_precision=2)
     return text
+
+  def _md5_objects(self):
+    arrays = [self.get_omic(om) for om in self.omics]
+    return arrays
 
   def __repr__(self):
     return self._get_str()

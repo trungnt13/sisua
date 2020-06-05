@@ -11,8 +11,8 @@ import numpy as np
 
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import cache_memory, one_hot
-from sisua.data.const import (MARKER_ADT_GENE, MARKER_GENES, OMIC,
-                              UNIVERSAL_RANDOM_SEED)
+from sisua.data.const import (MARKER_ADT_GENE, MARKER_ADTS, MARKER_ATAC,
+                              MARKER_GENES, OMIC, UNIVERSAL_RANDOM_SEED)
 from sisua.data.path import CONFIG_PATH, DATA_DIR, EXP_DIR
 from sisua.data.single_cell_dataset import SingleCellOMIC
 from sisua.data.utils import (apply_artificial_corruption, get_gene_id2name,
@@ -38,7 +38,7 @@ def get_dataset_meta():
   from sisua.data.data_loader.centenarian import read_centenarian
   from sisua.data.utils import standardize_protein_name
   from sisua.data.data_loader.leukemia_multiomics import read_leukemia_MixedPhenotypes
-  from sisua.data.experimental_data.pbmc_cross_datasets import read_PBMCcross
+  from sisua.data.experimental_data.pbmc_cross_datasets import read_PBMC_crossdataset
   data_meta = {
       # ====== pbmc 8k ====== #
       "call":
@@ -85,67 +85,67 @@ def get_dataset_meta():
           partial(read_PBMCeec, subset='full', filtered_genes=False),
       # ====== cross PBMC ====== #
       '8kx':
-          partial(read_PBMCcross, name='pbmc8k', filtered_genes=True),
+          partial(read_PBMC_crossdataset, name='pbmc8k', filtered_genes=True),
       '8kxall':
-          partial(read_PBMCcross, name='pbmc8k', filtered_genes=False),
+          partial(read_PBMC_crossdataset, name='pbmc8k', filtered_genes=False),
       'eccx':
-          partial(read_PBMCcross, name='pbmcecc', filtered_genes=True),
+          partial(read_PBMC_crossdataset, name='pbmcecc', filtered_genes=True),
       'eccxall':
-          partial(read_PBMCcross, name='pbmcecc', filtered_genes=False),
+          partial(read_PBMC_crossdataset, name='pbmcecc', filtered_genes=False),
       'vdj1x':
-          partial(read_PBMCcross, name='vdj1', filtered_genes=True),
+          partial(read_PBMC_crossdataset, name='vdj1', filtered_genes=True),
       'vdj1xall':
-          partial(read_PBMCcross, name='vdj1', filtered_genes=False),
+          partial(read_PBMC_crossdataset, name='vdj1', filtered_genes=False),
       'vdj4x':
-          partial(read_PBMCcross, name='vdj4', filtered_genes=True),
+          partial(read_PBMC_crossdataset, name='vdj4', filtered_genes=True),
       'vdj4xall':
-          partial(read_PBMCcross, name='vdj4', filtered_genes=False),
+          partial(read_PBMC_crossdataset, name='vdj4', filtered_genes=False),
       'mpalx':
-          partial(read_PBMCcross, name='mpal', filtered_genes=True),
+          partial(read_PBMC_crossdataset, name='mpal', filtered_genes=True),
       'mpalxall':
-          partial(read_PBMCcross, name='mpal', filtered_genes=False),
+          partial(read_PBMC_crossdataset, name='mpal', filtered_genes=False),
       'callx':
-          partial(read_PBMCcross, name='call', filtered_genes=True),
+          partial(read_PBMC_crossdataset, name='call', filtered_genes=True),
       'callxall':
-          partial(read_PBMCcross, name='call', filtered_genes=False),
+          partial(read_PBMC_crossdataset, name='call', filtered_genes=False),
       # '8knocd4x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=False,
       #             filtered_genes=True,
       #             remove_protein='CD4'),
       # 'eccnocd4x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=True,
       #             filtered_genes=True,
       #             remove_protein='CD4'),
       # '8knocd8x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=False,
       #             filtered_genes=True,
       #             remove_protein='CD8'),
       # 'eccnocd8x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=True,
       #             filtered_genes=True,
       #             remove_protein='CD8'),
       # '8knocd48x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=False,
       #             filtered_genes=True,
       #             remove_protein=['CD4', 'CD8']),
       # 'eccnocd48x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=True,
       #             filtered_genes=True,
       #             remove_protein=['CD4', 'CD8']),
       # '8konlycd8x':
-      #     partial(read_PBMCcross_remove_protein,
+      #     partial(read_PBMC_crossdataset_remove_protein,
       #             subset='ly',
       #             return_ecc=False,
       #             filtered_genes=True,
@@ -189,6 +189,7 @@ def get_dataset_meta():
       ('regulatoryt', 'regulatory_t'),
       ('cd4t', 'cd4_t_helper'),
       ("5k", "5k_pbmc_protein_v3"),
+      ("10k", "pbmc_10k_protein_v3"),
   ]:
     data_meta[alias] = partial(read_dataset10x,
                                name=name,

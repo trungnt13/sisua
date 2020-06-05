@@ -8,7 +8,8 @@ import scanpy as sc
 from scipy.io import mmread
 
 from bigarray import MmapArray, MmapArrayWriter
-from odin.utils.crypto import md5_checksum, md5_folder
+from odin.utils import md5_checksum, md5_folder, one_hot
+from sisua.data.const import MARKER_GENES
 from sisua.data.path import DATA_DIR
 from sisua.data.single_cell_dataset import SingleCellOMIC
 from sisua.data.utils import read_compressed, validate_data_dir
@@ -35,10 +36,17 @@ __all__ = ['read_leukemia_BMMC']
 
 def _create_sco(X, rowname, colname, labels):
   sco = SingleCellOMIC(X, cell_id=rowname, gene_id=colname, name="cALL")
-  sco.obs['labels'] = labels
   mito = [i for i, gene in enumerate(sco.var_names) if 'MT' == gene[:2]]
   percent_mito = np.sum(sco.X[:, mito], axis=1) / np.sum(sco.X, axis=1)
   sco.obs['percent_mito'] = percent_mito
+  # add another omic for labels
+  if labels is not None:
+    sco.obs['labels'] = labels
+    labels = [i[:-2] for i in labels]
+    var_names = np.asarray(sorted(np.unique(labels)))
+    ids = {j: i for i, j in enumerate(var_names)}
+    labels = one_hot(np.asarray([ids[i] for i in labels]), len(var_names))
+    sco.add_omic('disease', labels, var_names)
   return sco
 
 
@@ -62,13 +70,13 @@ def read_leukemia_BMMC(path='~/bio_data/downloads/GSE132509_RAW.tar',
         ribosomal protein expression as a source of intra-individual
         heterogeneity" (preprint). Cancer Biology. https://doi.org/10.1101/683854
   """
-  ## prepare path
+  ### prepare path
   path = os.path.abspath(os.path.expanduser(path))
   assert os.path.exists(path) and os.path.isfile(path), \
     f"{path} doesn't exists, please go to {_URL} and download GSE132509 package"
   preprocessed_path = os.path.join(DATA_DIR, f"{_NAME}_preprocessed")
   validate_data_dir(preprocessed_path, _MD5_PREPROCESSED)
-  ## extract file
+  ### extract file
   with read_compressed(in_file=path,
                        md5_download=_MD5_DOWNLOAD,
                        override=override,
@@ -136,7 +144,14 @@ def read_leukemia_BMMC(path='~/bio_data/downloads/GSE132509_RAW.tar',
                                              min_disp=0.5,
                                              log=False,
                                              n_top_genes=2000)
-      sco._inplace_subset_var(result.gene_subset)
+      # make sure all marker genes are included
+      gene_subset = result.gene_subset
+      gene_indices = sco.get_var_indices()
+      for gene in MARKER_GENES:
+        idx = gene_indices.get(gene, None)
+        if idx is not None:
+          gene_subset[idx] = True
+      sco._inplace_subset_var(gene_subset)
       if verbose:
         print(f"Filtered {len(sco.obs.index.values)} cells and "
               f"{len(sco.var_names.values)} genes.")
@@ -148,7 +163,7 @@ def read_leukemia_BMMC(path='~/bio_data/downloads/GSE132509_RAW.tar',
       # md5
       if verbose:
         print(f"Finish preprocessing: MD5='{md5_folder(preprocessed_path)}'")
-  ## create the data set
+  ### create the data set
   X = MmapArray(os.path.join(preprocessed_path, 'X')).astype(np.float32)
   colname = pickle.load(open(os.path.join(preprocessed_path, 'colname'), 'rb'))
   rowname = pickle.load(open(os.path.join(preprocessed_path, 'rowname'), 'rb'))
