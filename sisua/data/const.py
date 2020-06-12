@@ -114,6 +114,9 @@ class OMIC(OrderedFlag):
   disease = 'disease'
   progenitor = 'progenitor'
   #
+  ochromatin = 'ochromatin'
+  otranscriptomic = 'otranscriptomic'
+  #
   igenomic = 'igenomic'
   ichromatin = 'ichromatin'
   itranscriptomic = 'itranscriptomic'

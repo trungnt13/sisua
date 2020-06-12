@@ -499,6 +499,10 @@ class _OMICbase(sc.AnnData, MD5object):
                           projection=True,
                           name=omic.name)
 
+  def create_rv(self, omic, distribution=None) -> RandomVariable:
+    r""" Shortcut for creating `RandomVariable` for given OMIC type """
+    return self.get_rv(omic, distribution)
+
   def create_dataset(self,
                      omics: OMIC = None,
                      labels_percent=0,

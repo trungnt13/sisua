@@ -7,8 +7,8 @@ from setuptools import find_packages, setup
 
 _SISUA_VERSION = '0.4.5'
 
-if not (sys.version_info.major == 3 and sys.version_info.minor == 6):
-  raise RuntimeError("Sorry, we only support Python=3.6!")
+if not (sys.version_info.major == 3 and sys.version_info.minor == 7):
+  raise RuntimeError("Sorry, we only support Python=3.7!")
 
 if float(pip.__version__.split('.')[0]) < 19.0:
   raise RuntimeError(
@@ -24,11 +24,11 @@ with open('README.rst') as readme_file:
 author = 'University of Eastern Finland'
 
 requirements = [
-    "odin-ai==1.2.1",
+    "odin-ai==1.2.5",
     "seaborn>=0.9",
     "pandas",
-    "scanpy==1.5.1", # 1.4.6
-    "hyperopt==0.1.2",
+    "scanpy==1.5.1"
+    # "hyperopt==0.1.2",
 ]
 
 setup(

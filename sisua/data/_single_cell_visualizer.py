@@ -53,7 +53,17 @@ def _process_omics(sco, omic, clustering=None, allow_none=False):
         x = sco.louvain(omic)
         omic = omic + '_louvain'
       else:  # clustering
-        omic = sco.clustering(omic, algo=clustering, return_key=True)
+        n_clusters = None
+        if omic == 'transcriptomic':
+          for om in (OMIC.proteomic, OMIC.celltype, OMIC.iproteomic,
+                     OMIC.icelltype):
+            if om in sco:
+              n_clusters = om
+              break
+        omic = sco.clustering(omic,
+                              n_clusters=n_clusters,
+                              algo=clustering,
+                              return_key=True)
         x = sco.obs[omic].to_numpy()
     # probabilistic embedding
     else:
@@ -131,12 +141,13 @@ def _check_proteomic(self):
         str(self.omics))
 
 
-def _adjust(fig, title):
+def _adjust(fig, title, pad=0.02):
   w, h = fig.get_figwidth(), fig.get_figheight()
   fig.set_size_inches(w=w, h=h + 5)
-  fig.suptitle(title)
+  if title is not None:
+    fig.suptitle(title)
   with catch_warnings_ignore(UserWarning):
-    fig.tight_layout(rect=[0.0, 0.02, 1.0, 0.98])
+    fig.tight_layout(rect=[0.0, pad, 1.0, 1.0 - pad])
 
 
 # ===========================================================================
@@ -205,18 +216,15 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
       kw = dict(val=colors, color='bwr')
     name = ':'.join(str(i) for i in [omic_name, color_name, marker_name])
     title = f"[{dimension_reduction}-{self.name.split('_')[0]}-{name}]{title}"
-    vs.plot_scatter(
-        X,
-        marker='.' if markers is None else markers,
-        size=88 if n_points < 1000 else (120000 / n_points),
-        alpha=0.8,
-        legend_enable=bool(legend),
-        legend_loc='best',
-        grid=False,
-        ax=ax,
-        title=title,
-        **kw,
-    )
+    vs.plot_scatter(X,
+                    marker='.' if markers is None else markers,
+                    size=88 if n_points < 1000 else (120000 / n_points),
+                    alpha=0.8,
+                    legend_enable=bool(legend),
+                    grid=False,
+                    ax=ax,
+                    title=title,
+                    **kw)
     fig = ax.get_figure()
     if return_figure:
       return fig
@@ -278,7 +286,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                                     **kw)
     ## reconfigure the axes
     fig = plt.gcf()
-    _adjust(fig, title)
+    plt.title(title)
+    _adjust(fig, title=None, pad=0.01)
     if return_figure:
       return fig
     self.add_figure(f"violin_{title}", fig)
@@ -374,7 +383,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
         axes = sc.pl.heatmap(self, var_names=var_names, groupby=group_by, **kw)
     ## reconfigure the axes
     fig = plt.gcf()
-    _adjust(fig, title)
+    fig.get_axes()[0].set_title(title)
+    _adjust(fig, title=None)
     if return_figure:
       return fig
     self.add_figure(f'heatmap_{title}', fig)
@@ -619,8 +629,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                                var_names1=MARKER_ADT_GENE.values(),
                                var_names2=MARKER_ADT_GENE.keys(),
                                is_marker_pairs=True,
-                               log_omic1=True,
-                               log_omic2=True,
+                               log1=True,
+                               log2=True,
                                max_scatter_points=200,
                                top=3,
                                bottom=3,
@@ -651,11 +661,11 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     X1 = self.numpy(omic1)
     library = np.sum(X1, axis=1, keepdims=True)
     library = discretizing(library, n_bins=10, strategy='quantile').ravel()
-    if log_omic1:
+    if log1:
       s = np.sum(X1, axis=1, keepdims=True)
       X1 = np.log1p(X1 / s * np.median(s))
     X2 = self.numpy(omic2)
-    if log_omic2:
+    if log2:
       s = np.sum(X2, axis=1, keepdims=True)
       X2 = np.log1p(X2 / s * np.median(s))
     ### getting the marker pairs
@@ -739,8 +749,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     if return_figure:
       return fig
     self.add_figure(
-        f"corr_{omic1.name}{'log' if log_omic1 else 'raw'}_"
-        f"{omic2.name}{'log' if log_omic2 else 'raw'}", fig)
+        f"corr_{omic1.name}{'log' if log1 else 'raw'}_"
+        f"{omic2.name}{'log' if log2 else 'raw'}", fig)
     return self
 
   #### Latents
@@ -841,3 +851,76 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     plt.tight_layout()
     self.add_figure('percentile_%dhistogram' % n_hist, fig)
     return self
+
+  def plot_series(self,
+                  omic1=OMIC.transcriptomic,
+                  omic2=OMIC.proteomic,
+                  var_names1=MARKER_ADT_GENE.values(),
+                  var_names2=MARKER_ADT_GENE.keys(),
+                  log1=True,
+                  log2=True,
+                  fontsize=10,
+                  title='',
+                  return_figure=False):
+    import seaborn as sns
+    omic1 = OMIC.parse(omic1)
+    omic2 = OMIC.parse(omic2)
+    omic1_ids = self.get_var_indices(omic1)
+    omic2_ids = self.get_var_indices(omic2)
+    ids1 = []
+    ids2 = []
+    for v1, v2 in zip(var_names1, var_names2):
+      i1 = omic1_ids.get(v1, None)
+      i2 = omic2_ids.get(v2, None)
+      if i1 is not None and i2 is not None:
+        ids1.append(i1)
+        ids2.append(i2)
+    assert len(ids1) > 0, \
+      (f"No variables found for omic1={omic1} var1={var_names1} "
+       f"and omic2={omic2} var2={var_names2}")
+    x1 = self.get_omic(omic1)[:, ids1]
+    x2 = self.get_omic(omic2)[:, ids2]
+    if log1:
+      x1 = np.log1p(x1)
+    if log2:
+      x2 = np.log1p(x2)
+    names1 = self.get_var_names(omic1)[ids1]
+    names2 = self.get_var_names(omic2)[ids2]
+    n_series = len(names1)
+    ### prepare the plot
+    colors = sns.color_palette(n_colors=2)
+    fig = plt.figure(figsize=(12, n_series * 4))
+    for idx in range(n_series):
+      y1 = x1[:, idx]
+      y2 = x2[:, idx]
+      order = np.argsort(y1)
+      ax = plt.subplot(n_series, 1, idx + 1)
+      ## the second series
+      ax.plot(y1[order],
+              linewidth=1.8,
+              color=colors[0],
+              label=f"{omic1.name}-{names1[idx]}")
+      ax.set_ylabel(f"{'log' if log1 else 'raw'}-{omic1.name}-{names1[idx]}",
+                    color=colors[0])
+      ax.set_xlabel(f"Cell in ascending order of {omic1.name}")
+      ax.tick_params(axis='y', colors=colors[0], labelcolor=colors[0])
+      ax.grid(False)
+      ## the second series
+      ax = ax.twinx()
+      ax.plot(y2[order],
+              linestyle='--',
+              alpha=0.88,
+              linewidth=1.2,
+              color=colors[1])
+      ax.set_ylabel(f"{'log' if log1 else 'raw'}-{omic2.name}-{names2[idx]}",
+                    color=colors[1])
+      ax.tick_params(axis='y', colors=colors[1], labelcolor=colors[1])
+      ax.grid(False)
+    ### finalize the figure style
+    if len(title) > 0:
+      plt.suptitle(title, fontsize=fontsize + 2)
+    with catch_warnings_ignore(UserWarning):
+      plt.tight_layout(rect=[0., 0.02, 1., 0.98])
+    if return_figure:
+      return fig
+    return self.add_figure(f'series_{omic1.name}_{omic2.name}', fig)

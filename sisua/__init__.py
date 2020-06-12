@@ -1,9 +1,5 @@
-__version__ = '0.3.0'
-_VERBOSE = False
-
-def set_verbose(is_verbose_on):
-  global _VERBOSE
-  _VERBOSE = bool(is_verbose_on)
-
-def is_verbose():
-  return bool(_VERBOSE)
+from sisua.analysis import Posterior
+from sisua.data import get_dataset
+from sisua.data.single_cell_dataset import SingleCellOMIC
+from sisua.models import (SCALE, SCVI, SISUA, VAE, DeepCountAutoencoder,
+                          NetworkConfig, RandomVariable, SingleCellModel)

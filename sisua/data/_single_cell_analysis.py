@@ -585,7 +585,7 @@ class _OMICanalyzer(_OMICbase):
 
   def clustering(self,
                  omic=None,
-                 n_clusters=OMIC.proteomic,
+                 n_clusters=None,
                  n_init='auto',
                  algo='kmeans',
                  matching_labels=True,
@@ -611,14 +611,14 @@ class _OMICanalyzer(_OMICbase):
     ## input data
     omic = OMIC.parse(omic)
     cluster_omic = None
-    if isinstance(n_clusters, Number):
+    if n_clusters is None:
+      cluster_omic = omic
+      n_clusters = self.get_dim(omic)
+    elif isinstance(n_clusters, Number):
       n_clusters = int(n_clusters)
     else:
       cluster_omic = OMIC.parse(n_clusters)
-      n_clusters = self.numpy(cluster_omic).shape[1]
-      if n_clusters > 20:
-        warnings.warn(
-            f"Found omic type:{cluster_omic} with {n_clusters} clusters")
+      n_clusters = self.get_dim(cluster_omic)
     n_clusters = int(n_clusters)
     n_init = int(n_init) if isinstance(n_init, Number) else \
       int(n_clusters) * 3
@@ -626,6 +626,10 @@ class _OMICanalyzer(_OMICbase):
     output_name = f"{omic.name}_{algo}{n_clusters}"
     if output_name in self.obs:
       return output_name if return_key else self.obs[output_name]
+    ## warning
+    if n_clusters > 50:
+      warnings.warn(
+          f"Found omic type:{cluster_omic} with {n_clusters} clusters")
     ## fit KMeans
     if algo in ('pca', 'tsne', 'umap', 'kmeans'):
       from sklearn.cluster import MiniBatchKMeans
