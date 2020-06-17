@@ -4,6 +4,7 @@ import inspect
 import itertools
 import os
 import warnings
+from collections import defaultdict
 from contextlib import contextmanager
 from numbers import Number
 from typing import Optional, Tuple
@@ -14,11 +15,11 @@ import scanpy as sc
 import scipy as sp
 import tensorflow as tf
 from anndata._core.aligned_mapping import AxisArrays
+from bigarray import MmapArrayWriter
 from scipy.sparse import issparse
 from scipy.stats import pearsonr, spearmanr
 from six import string_types
 
-from bigarray import MmapArrayWriter
 from odin import visual as vs
 from odin.search import diagonal_linear_assignment
 from odin.stats import (describe, is_discrete, sparsity_percentage,
@@ -27,7 +28,7 @@ from odin.utils import (MPI, IndexedList, as_tuple, batching, cache_memory,
                         catch_warnings_ignore, cpu_count, is_primitive)
 from odin.utils.crypto import md5_checksum
 from sisua.data._single_cell_base import BATCH_SIZE, _OMICbase
-from sisua.data.const import MARKER_GENES, OMIC
+from sisua.data.const import MARKER_ADT_GENE, MARKER_ADTS, MARKER_GENES, OMIC
 from sisua.data.utils import (apply_artificial_corruption, get_library_size,
                               is_binary_dtype, is_categorical_dtype,
                               standardize_protein_name)
@@ -932,6 +933,107 @@ class _OMICanalyzer(_OMICbase):
     return self
 
   # ******************** other metrics ******************** #
+  @cache_memory
+  def get_marker_pairs(self,
+                       omic1=OMIC.proteomic,
+                       omic2=None,
+                       var_names1=MARKER_ADTS,
+                       var_names2=None,
+                       threshold=None,
+                       n=10,
+                       most_correlated=False,
+                       remove_duplicated=True):
+    r""" Return the most differentiated (or correlated) pairs within a
+    single OMIC (in case `omic2=None`) or between 2 different OMICs.
+
+    Arguments:
+      threshold : a Scalar.
+        The minimum correlation value to be selected (in case
+        `most_correlated=True`), otherwise, the maximum correlation value.
+        If None, set the value to infinity.
+      n : an Integer.
+        Number of pairs with smallest correlation to be selected.
+        If None, there is no limitation.
+      most_correlated : a Boolean (default: True)
+        if True, return most correlated pairs, otherwise, most un-correlated
+        pairs.
+      remove_duplicated : a Boolean (default: True)
+        if True, remove pairs with duplicated name for first OMIC (in case
+        `omic1 != omic2`), remove any pairs with duplicated name for both OMICs
+        (in case `omic1 == omic2`).
+
+    Return:
+      list of tuple (var1, var2) sorted in order of the most correlated or
+        un-correlated.
+    """
+    is_same_omic = False
+    if omic2 is None:
+      omic2 = omic1
+      is_same_omic = True
+    ids1 = self.get_var_indices(omic1)
+    ids2 = self.get_var_indices(omic2)
+    # check var_names
+    if var_names1 is None:
+      var_names1 = self.get_var_names(omic1)
+    var_ids1 = set(ids1[i] for i in var_names1 if i in ids1)
+    if len(var_ids1) == 0:
+      raise ValueError(
+          f"No matching variables found from given var_names={var_names1}")
+    # for the second OMIC
+    if var_names2 is None:
+      var_names2 = self.get_var_names(omic2)
+    var_ids2 = set(ids2[i] for i in var_names2 if i in ids2)
+    if len(var_ids2) == 0:
+      raise ValueError(
+          f"No matching variables found from given var_names={var_names2}")
+    # filtering
+    var_names1 = self.get_var_names(omic1)
+    var_names2 = self.get_var_names(omic2)
+    scores = defaultdict(float)
+    for i1, i2, p, s in self.get_correlation(omic1=omic1, omic2=omic2):
+      if i1 not in var_ids1 or i2 not in var_ids2:
+        continue
+      name1 = var_names1[i1]
+      name2 = var_names2[i2]
+      key = (name1, name2)
+      if is_same_omic:
+        if name1 == name2:
+          continue
+        key = tuple(sorted(key))
+      x = p + s
+      if np.isnan(x):
+        x = 1.0
+      scores[key] += x
+    scores = sorted(scores.items(), key=lambda x: x[-1])
+    # most correlated
+    if most_correlated:
+      scores = scores[::-1]
+    # prepare filtering
+    threshold = (-np.inf if most_correlated else np.inf) \
+      if threshold is None else float(threshold)
+    n = np.inf if n is None else int(n)
+    fn = lambda x: (x / 2 > threshold) if most_correlated else \
+        (x / 2 < threshold)
+    # filtering
+    pairs = []
+    seen = {}
+    while True:
+      if len(scores) == 0 or len(pairs) >= n:
+        break
+      key, val = scores.pop(0)
+      if remove_duplicated:
+        if is_same_omic:
+          if any(k in seen for k in key):
+            continue
+          seen[key[0]] = 1
+          seen[key[1]] = 1
+        else:
+          if key[0] in seen:
+            continue
+          seen[key[0]] = 1
+      pairs.append(key)
+    return pairs
+
   def get_importance_matrix(self,
                             omic=OMIC.transcriptomic,
                             target_omic=OMIC.proteomic,
@@ -939,7 +1041,6 @@ class _OMICanalyzer(_OMICbase):
     r""" Using Tree Classifier to estimate the importance of each
     `omic` for each `target_omic`.
     """
-
     from odin.bay.vi.metrics import representative_importance_matrix
     from odin.bay.vi.utils import discretizing
     random_state = int(1)

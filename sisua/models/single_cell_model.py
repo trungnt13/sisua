@@ -8,6 +8,7 @@ import string
 from abc import ABCMeta, abstractmethod, abstractproperty
 from collections import OrderedDict, defaultdict
 from functools import partial
+from numbers import Number
 from typing import Iterable, List, Text, Union
 
 import numpy as np
@@ -33,7 +34,8 @@ from odin.networks import NetworkConfig
 from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
                         is_primitive)
 from odin.visual import Visualizer
-from sisua.data import OMIC, SingleCellOMIC
+from sisua.analysis.posterior import Posterior
+from sisua.data import OMIC, SingleCellOMIC, get_dataset
 
 __all__ = [
     'SingleCellModel', 'NetworkConfig', 'RandomVariable', 'interpolation'
@@ -246,6 +248,42 @@ class SingleCellModel(BetaVAE, Visualizer):
       if i.isupper():
         name += i
     return name.lower()
+
+  def create_posterior(self,
+                       dropout_rate=0.2,
+                       retain_rate=0.2,
+                       corrupt_distribution='binomial',
+                       batch_size=8,
+                       sample_shape=10,
+                       reduce_latents=lambda *Zs: tf.concat(Zs, axis=1),
+                       verbose=True,
+                       train_percent=0.8,
+                       random_state=1) -> Posterior:
+    if not self.is_fitted:
+      raise RuntimeError("fit() must be called before creating Posterior.")
+    if isinstance(train_percent, Number):
+      if not self.dataset is None:
+        raise ValueError("set_metadata() to track the fitted dataset.")
+      ds = get_dataset(self.dataset)
+      _, test = ds.split(train_percent=train_percent, seed=random_state)
+    elif isinstance(train_percent, SingleCellOMIC):
+      test = train_percent
+    else:
+      raise ValueError(
+          "train_percent can be a number or SingleCellOMIC "
+          f"but given {type(train_percent)}"
+      )
+    return Posterior(scm=self,
+                     sco=test,
+                     dropout_rate=dropout_rate,
+                     retain_rate=retain_rate,
+                     corrupt_distribution=corrupt_distribution,
+                     batch_size=batch_size,
+                     sample_shape=sample_shape,
+                     reduce_latents=reduce_latents,
+                     verbose=verbose,
+                     name=f"{self.id}_{self.dataset}",
+                     random_state=random_state)
 
   def load_weights(self, filepath, raise_notfound=False, verbose=False):
     r""" Load all the saved weights in tensorflow format at given path """
