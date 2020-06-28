@@ -1,25 +1,27 @@
-from __future__ import print_function, division, absolute_import
-from matplotlib import pyplot as plt
-import matplotlib.mlab as mlab
+from __future__ import absolute_import, division, print_function
 
 import os
-os.environ['ODIN'] = 'gpu,float32,seed=5218'
 import pickle
 import warnings
 from collections import defaultdict
 
-from tqdm import tqdm
+import matplotlib.mlab as mlab
 import numpy as np
 import seaborn as sns
+from matplotlib import pyplot as plt
 from scipy import stats
+from tqdm import tqdm
 
-from odin.visual import (print_dist, merge_text_graph, plot_confusion_matrix,
-                         plot_figure, plot_histogram_layers, plot_save,
-                         generate_random_colors, plot_histogram, Visualizer)
-from odin.utils import (unique_labels, ctext, auto_logging, batching, UnitTimer,
-                        ArgController, get_script_path, mpi, Progbar,
-                        catch_warnings_ignore, is_number)
 from odin.stats import describe
+from odin.utils import (ArgController, Progbar, UnitTimer, auto_logging,
+                        batching, catch_warnings_ignore, ctext, get_script_path,
+                        is_number, mpi, unique_labels)
+from odin.visual import (Visualizer, generate_random_colors, merge_text_graph,
+                         plot_confusion_matrix, plot_figure, plot_histogram,
+                         plot_histogram_layers, plot_save, print_dist)
+from sisua.data.utils import standardize_protein_name
+
+os.environ['ODIN'] = 'gpu,float32,seed=5218'
 
 with warnings.catch_warnings():
   warnings.filterwarnings('ignore', category=ImportWarning)
@@ -27,7 +29,6 @@ with warnings.catch_warnings():
   from sklearn.neighbors import KernelDensity
   from sklearn.base import DensityMixin, BaseEstimator
 
-from sisua.data.utils import standardize_protein_name
 
 # ===========================================================================
 # Helpers
@@ -50,64 +51,86 @@ def _clipping_quartile(x, alpha=1.5, test_mode=False):
     x = x[np.logical_and(low <= x, x <= high)]
   return x
 
+
 def _log_norm(x, scale_factor=10000):
   x = x.astype('float32')
   x_sum = np.sum(x)
   return np.log1p(x / (x_sum + np.finfo(x.dtype).eps) * scale_factor)
 
+
 def _draw_hist(x, ax, title, n_bins, show_yticks=True):
-  count, bins = plot_histogram(
-      x=x, bins=n_bins, ax=ax,
-      normalize=False, kde=False, range_0_1=False,
-      covariance_factor=0.25, centerlize=False, fontsize=8,
-      title=title)
+  count, bins = plot_histogram(x=x,
+                               bins=n_bins,
+                               ax=ax,
+                               normalize=False,
+                               kde=False,
+                               range_0_1=False,
+                               covariance_factor=0.25,
+                               centerlize=False,
+                               fontsize=8,
+                               title=title)
   plt.xlim((np.min(x), np.max(x)))
-  plt.xticks(
-      np.linspace(start=np.min(x), stop=np.max(x),
-                  num=5, dtype='float32'),
-      fontsize=6)
+  plt.xticks(np.linspace(start=np.min(x),
+                         stop=np.max(x),
+                         num=5,
+                         dtype='float32'),
+             fontsize=6)
   if show_yticks:
-    plt.yticks(
-        np.linspace(start=np.min(count), stop=np.max(count),
-                    num=5, dtype='int32'),
-        fontsize=5)
+    plt.yticks(np.linspace(start=np.min(count),
+                           stop=np.max(count),
+                           num=5,
+                           dtype='int32'),
+               fontsize=5)
   else:
     plt.yticks([], [])
   return count, bins
+
+
+class _DummyGMM():
+  def __init__(self):
+    self.means_ = None
+    self.precisions_ = None
+
+  def fit(self, X, y=None):
+    self.means_ = np.array([np.mean(X)])
+    self.precisions_ = np.array([1. / np.var(X)])
+
+  def predict(self, X):
+    return (X >= self.means_[0]).astype(np.float32)
+
+  def predict_proba(self, X):
+    return self.predict(X)
 
 # ===========================================================================
 # LabelThresholding class
 # ===========================================================================
 class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
-
   r""" Probabilistic embedding of real values vectors using
   Gaussian-Mixture-Model
 
-  Parameters
-  ----------
-  n_components_per_class : int
-    number of GMM components for thresholding (default: 2)
-
-  positive_component : int
-    in case, 3 or more components are used, this is the index
-    of the component from where it is positive during thresholding
-    (the components are sorted by increasing mean order)
-
-  log_norm : bool
-
-  clip_quartile : float
-
-  ci_threshold : float
-
-  random_state: int
-
-  verbose: bool
+  Arguments:
+    n_components_per_class : int
+      number of GMM components for thresholding (default: 2)
+    positive_component : int
+      in case, 3 or more components are used, this is the index
+      of the component from where it is positive during thresholding
+      (the components are sorted by increasing mean order)
+    log_norm : bool
+    clip_quartile : float
+    ci_threshold : float
+    random_state: int
+    verbose: bool
 
   """
 
-  def __init__(self, n_components_per_class=2, positive_component=1,
-               log_norm=True, clip_quartile=0., remove_zeros=True,
-               ci_threshold=-0.68, random_state=8,
+  def __init__(self,
+               n_components_per_class=2,
+               positive_component=1,
+               log_norm=True,
+               clip_quartile=0.,
+               remove_zeros=True,
+               ci_threshold=-0.68,
+               random_state=8,
                verbose=False):
     super(ProbabilisticEmbedding, self).__init__()
     self.n_components_per_class = int(n_components_per_class)
@@ -140,9 +163,9 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
     array
         means array (n_components, n_classes)
     """
-    return np.hstack(
-        [gmm.means_.ravel()[order][:, np.newaxis]
-         for order, gmm in self._models])
+    return np.hstack([
+        gmm.means_.ravel()[order][:, np.newaxis] for order, gmm in self._models
+    ])
 
   @property
   def precisions(self):
@@ -153,17 +176,21 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
     array
         precisions array (n_components, n_classes)
     """
-    return np.hstack(
-        [gmm.precisions_.ravel()[order][:, np.newaxis]
-         for order, gmm in self._models])
+    return np.hstack([
+        gmm.precisions_.ravel()[order][:, np.newaxis]
+        for order, gmm in self._models
+    ])
 
   # ******************** main ******************** #
   def normalize(self, x, test_mode=False):
     if x.ndim > 1:
       x = x.ravel()
+    n_samples = len(x)
     assert np.all(x >= 0), "Only support non-negative values"
     if self.remove_zeros and not test_mode:
       x = x[x > 0]
+      if len(x) != n_samples:
+        x = np.concatenate([[0], x], axis=0)
     if self.clip_quartile > 0:
       x = _clipping_quartile(x, alpha=self.clip_quartile, test_mode=test_mode)
     if self.log_norm:
@@ -172,19 +199,28 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
   def fit(self, X):
     assert X.ndim == 2, "Only support input matrix but given: %s" % str(X.shape)
-
     n_classes = X.shape[1]
     it = tqdm(list(range(n_classes))) if self.verbose else range(n_classes)
     for i in it:
       # ====== normalizing ====== #
       x_train = self.normalize(X[:, i], test_mode=False)
       # ====== GMM ====== #
-      gmm = GaussianMixture(n_components=self.n_components_per_class,
-                            covariance_type='diag',
-                            init_params='kmeans',
-                            n_init=8, max_iter=120,
-                            random_state=self.random_state)
-      gmm.fit(x_train[:, np.newaxis])
+      try:
+        gmm = GaussianMixture(n_components=self.n_components_per_class,
+                              covariance_type='diag',
+                              init_params='kmeans',
+                              n_init=8,
+                              max_iter=120,
+                              random_state=self.random_state)
+        gmm.fit(x_train[:, np.newaxis])
+      except ValueError as e:
+        if "ill-defined empirical covariance" in str(e):
+          gmm = _DummyGMM()
+          gmm.fit(x_train[:, np.newaxis])
+        else:
+          import traceback
+          traceback.print_exc()
+          raise e
       # ====== save GMM ====== #
       means_ = gmm.means_.ravel()
       order = np.argsort(means_)
@@ -199,20 +235,22 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
     y = []
     for i, (order, gmm) in enumerate(self._models):
       x_test = self.normalize(X[:, i], test_mode=True)
-
       # binary thresholding
-      if threshold is not None:
-        ci = stats.norm.interval(np.abs(threshold),
+      if isinstance(gmm, _DummyGMM):
+        x_out = gmm.predict(x_test)
+      elif threshold is not None:
+        ci = stats.norm.interval(
+            np.abs(threshold),
             loc=gmm.means_[order[self.positive_component]],
             scale=np.sqrt(1 / gmm.precisions_[order[self.positive_component]]))
-        x_out = (x_test >= (ci[0] if threshold < 0 else ci[1])).astype('float32')
-        x_out = x_out[:, np.newaxis]
+        x_out = (x_test >=
+                 (ci[0] if threshold < 0 else ci[1])).astype('float32')
       # probabilizing
       else:
         probas = gmm.predict_proba(
             x_test[:, np.newaxis]).T[order][self.positive_component:]
-        probas = np.mean(probas, axis=0)
-        x_out = probas[:, np.newaxis]
+        x_out = np.mean(probas, axis=0)
+      x_out = x_out[:, np.newaxis]
       y.append(x_out)
     return np.concatenate(y, axis=1)
 
@@ -299,26 +337,30 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
       # ====== the histogram ====== #
       ax = plt.subplot(nrow, ncol, start + 1)
-      count, bins = _draw_hist(
-          x, ax=ax,
-          title="[%s] LLK:%.2f BIC:%.2f AIC:%.2f" %
-                (name, score_llk, score_bic, score_aic),
-          n_bins=n_bins, show_yticks=True)
+      count, bins = _draw_hist(x,
+                               ax=ax,
+                               title="[%s] LLK:%.2f BIC:%.2f AIC:%.2f" %
+                               (name, score_llk, score_bic, score_aic),
+                               n_bins=n_bins,
+                               show_yticks=True)
 
       # ====== draw GMM PDF ====== #
       y_ = np.exp(gmm.score_samples(bins[:, np.newaxis]))
       y_ = (y_ - np.min(y_)) / (np.max(y_) - np.min(y_)) * np.max(count)
-      ax.plot(bins, y_, color='red',
-              linestyle='-', linewidth=1.5, alpha=0.6)
+      ax.plot(bins, y_, color='red', linestyle='-', linewidth=1.5, alpha=0.6)
 
       # ====== draw the threshold ====== #
-      ci = stats.norm.interval(np.abs(self.ci_threshold),
+      ci = stats.norm.interval(
+          np.abs(self.ci_threshold),
           loc=gmm.means_[order[self.positive_component]],
           scale=np.sqrt(1 / gmm.precisions_[order[self.positive_component]]))
       threshold = ci[0] if self.ci_threshold < 0 else ci[1]
       ids = np.where(bins >= threshold, True, False)
-      ax.fill_between(bins[ids], y1=0, y2=np.max(count),
-                      facecolor=colors[-2], alpha=0.3)
+      ax.fill_between(bins[ids],
+                      y1=0,
+                      y2=np.max(count),
+                      facecolor=colors[-2],
+                      alpha=0.3)
       ax.text(np.min(bins[ids]), np.min(count), "%.2f" % threshold)
 
       # ====== plot GMM probability ====== #
@@ -329,14 +371,17 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
       # ====== draw the each Gaussian bell ====== #
       ax = ax.twinx()
-      _x = np.linspace(start=np.min(x), stop=np.max(x),
-                       num=800)
+      _x = np.linspace(start=np.min(x), stop=np.max(x), num=800)
       for c, m, p in zip(colors, means_, precision_):
         with catch_warnings_ignore(Warning):
           j = mlab.normpdf(_x, m, np.sqrt(1 / p))
         ax.plot(_x, j, color=c, linestyle='-', linewidth=1)
-        ax.scatter(_x[np.argmax(j)], np.max(j),
-                   s=66, alpha=0.8, linewidth=0, color=c)
+        ax.scatter(_x[np.argmax(j)],
+                   np.max(j),
+                   s=66,
+                   alpha=0.8,
+                   linewidth=0,
+                   color=c)
       ax.yaxis.set_ticklabels([])
 
     fig.tight_layout()
@@ -365,8 +410,7 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
     ax.set_xticks(x + 0.2)
     ax.set_xticklabels(labels, rotation=-10)
-    ax.legend([bar1, bar2, bar3],
-              ['Original', 'Binarized', 'Probabilized'])
+    ax.legend([bar1, bar2, bar3], ['Original', 'Binarized', 'Probabilized'])
 
     ax.grid(True, axis='y')
     ax.set_axisbelow(True)
@@ -385,40 +429,61 @@ class ProbabilisticEmbedding(BaseEstimator, DensityMixin, Visualizer):
 
       ax = plt.subplot(nrow, ncol, start + 1)
       ax.boxplot(x,
-                 whis=1.5, labels=['Original'],
-                 flierprops={'marker': '.', 'markersize': 8},
-                 showmeans=True, meanline=True)
+                 whis=1.5,
+                 labels=['Original'],
+                 flierprops={
+                     'marker': '.',
+                     'markersize': 8
+                 },
+                 showmeans=True,
+                 meanline=True)
       ax.set_ylabel(name)
 
       ax = plt.subplot(nrow, ncol, start + 2)
       ax.boxplot(x[x > 0],
-                 whis=1.5, labels=['NonZeros'],
-                 flierprops={'marker': '.', 'markersize': 8},
-                 showmeans=True, meanline=True)
+                 whis=1.5,
+                 labels=['NonZeros'],
+                 flierprops={
+                     'marker': '.',
+                     'markersize': 8
+                 },
+                 showmeans=True,
+                 meanline=True)
 
       ax = plt.subplot(nrow, ncol, start + 3)
       ax.boxplot(self.normalize(x, test_mode=False),
-                 whis=1.5, labels=['Normalized'],
-                 flierprops={'marker': '.', 'markersize': 8},
-                 showmeans=True, meanline=True)
+                 whis=1.5,
+                 labels=['Normalized'],
+                 flierprops={
+                     'marker': '.',
+                     'markersize': 8
+                 },
+                 showmeans=True,
+                 meanline=True)
 
     plt.tight_layout()
     self.add_figure('boxplot', fig)
     return self
 
+
 # ===========================================================================
 # Main
 # ===========================================================================
 def get_arguments():
-  args = ArgController(
-  ).add("input", "Name of the dataset or path to csv file"
-  ).add("-n", "number of GMM components", 2
-  ).add("-idx", "index of the positive component", 1
-  ).add("-norm", "method for normalizing: raw, log", 'log', ('log', 'raw')
-  ).add("-outpath", "y_bin and y_prob will be saved to this path", ''
-  ).add("-figpath", "path for saving analysis figure", '/tmp/tmp.pdf'
-  ).add("--verbose", "Enable verbose and saving diagnosis", False
-  ).parse()
+  args = ArgController().add(
+      "input", "Name of the dataset or path to csv file").add(
+          "-n", "number of GMM components",
+          2).add("-idx", "index of the positive component",
+                 1).add("-norm", "method for normalizing: raw, log", 'log',
+                        ('log', 'raw')).add(
+                            "-outpath",
+                            "y_bin and y_prob will be saved to this path",
+                            '').add("-figpath",
+                                    "path for saving analysis figure",
+                                    '/tmp/tmp.pdf').add(
+                                        "--verbose",
+                                        "Enable verbose and saving diagnosis",
+                                        False).parse()
   inp = str(args.input)
   if os.path.exists(inp):
     assert os.path.isfile(inp), "%s must be path to a file" % inp
@@ -440,18 +505,28 @@ def get_arguments():
     y_prot = ds['y']
     y_prot_names = np.array(ds['y_col'])
     outpath = ds.path if args.outpath == '' else args.outpath
-  return {'y_prot': y_prot, 'y_prot_names': y_prot_names,
-          'n_components': int(args.n), 'index': int(args.idx),
-          'log_norm': True if args.norm == 'log' else False,
-          'outpath': outpath if len(outpath) > 0 else None,
-          'figpath': args.figpath if len(args.figpath) > 0 else None,
-          'verbose': bool(args.verbose)}
+  return {
+      'y_prot': y_prot,
+      'y_prot_names': y_prot_names,
+      'n_components': int(args.n),
+      'index': int(args.idx),
+      'log_norm': True if args.norm == 'log' else False,
+      'outpath': outpath if len(outpath) > 0 else None,
+      'figpath': args.figpath if len(args.figpath) > 0 else None,
+      'verbose': bool(args.verbose)
+  }
 
-def main(y_prot, y_prot_names,
-         n_components=2, index=1,
-         log_norm=True, clip_quartile=0., remove_zeros=True,
+
+def main(y_prot,
+         y_prot_names,
+         n_components=2,
+         index=1,
+         log_norm=True,
+         clip_quartile=0.,
+         remove_zeros=True,
          ci_threshold=-0.68,
-         outpath=None, figpath=None,
+         outpath=None,
+         figpath=None,
          verbose=False):
   if outpath is not None:
     bin_path = os.path.join(outpath, 'y_bin')
@@ -469,18 +544,24 @@ def main(y_prot, y_prot_names,
     warnings.warn("y is already binarized!")
     exit()
   # ====== PB ====== #
-  pb = ProbabilisticEmbedding(
-      n_components_per_class=n_components, positive_component=index,
-      log_norm=log_norm, clip_quartile=clip_quartile, remove_zeros=remove_zeros,
-      ci_threshold=ci_threshold, verbose=verbose)
+  pb = ProbabilisticEmbedding(n_components_per_class=n_components,
+                              positive_component=index,
+                              log_norm=log_norm,
+                              clip_quartile=clip_quartile,
+                              remove_zeros=remove_zeros,
+                              ci_threshold=ci_threshold,
+                              verbose=verbose)
   pb.fit(y_prot)
   y_bin = pb.predict(y_prot)
   y_prob = pb.predict_proba(y_prot)
   if verbose:
     print("  Thresholded values:")
-    print("   Original     :", ctext(describe(y_prot, shorten=True), 'lightcyan'))
-    print("   Binarized    :", ctext(describe(y_bin, shorten=True), 'lightcyan'))
-    print("   Probabilities:", ctext(describe(y_prob, shorten=True), 'lightcyan'))
+    print("   Original     :", ctext(describe(y_prot, shorten=True),
+                                     'lightcyan'))
+    print("   Binarized    :", ctext(describe(y_bin, shorten=True),
+                                     'lightcyan'))
+    print("   Probabilities:", ctext(describe(y_prob, shorten=True),
+                                     'lightcyan'))
   # ====== save the results ====== #
   if outpath is not None:
     with open(bin_path, 'wb') as f:
@@ -493,10 +574,10 @@ def main(y_prot, y_prot_names,
         print("  Save probabilized data to:", ctext(prob_path, 'yellow'))
   # ====== save figure ====== #
   if figpath is not None:
-    pb.boxplot(y_prot, y_prot_names
-    ).plot_diagnosis(y_prot, y_prot_names
-    ).plot_distribution(y_prot, y_prot_names
-    ).save_figures(path=figpath, verbose=verbose)
+    pb.boxplot(y_prot, y_prot_names).plot_diagnosis(
+        y_prot, y_prot_names).plot_distribution(
+            y_prot, y_prot_names).save_figures(path=figpath, verbose=verbose)
+
 
 if __name__ == '__main__':
   main(**get_arguments())

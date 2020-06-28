@@ -19,6 +19,12 @@ from bigarray import MmapArrayWriter
 from scipy.sparse import issparse
 from scipy.stats import pearsonr, spearmanr
 from six import string_types
+from sklearn.cluster import MiniBatchKMeans, SpectralClustering
+from sklearn.decomposition import IncrementalPCA
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.feature_selection import (mutual_info_classif,
+                                       mutual_info_regression)
+from sklearn.mixture import GaussianMixture
 
 from odin import visual as vs
 from odin.search import diagonal_linear_assignment
@@ -35,13 +41,36 @@ from sisua.data.utils import (apply_artificial_corruption, get_library_size,
 from sisua.label_threshold import ProbabilisticEmbedding
 
 
+# ===========================================================================
+# Helper
+# ===========================================================================
+def _threshold(x, nmin=2, nmax=5):
+  if x.ndim == 1:
+    x = x[:, np.newaxis]
+  models = []
+  aic = []
+  for n_components in range(int(nmin), int(nmax)):
+    gmm = GaussianMixture(n_components=n_components, random_state=1)
+    gmm.fit(x)
+    models.append(gmm)
+    aic.append(gmm.aic(x))
+  # select the best model
+  gmm = models[np.argmax(aic)]
+  y = gmm.predict(x)
+  idx = np.argmax(gmm.means_.ravel())
+  return (y == idx).astype(np.bool)
+
+
+# ===========================================================================
+# Main
+# ===========================================================================
 class _OMICanalyzer(_OMICbase):
 
-  def probability(self, omic=None):
+  def get_x_probs(self, omic=None):
     r""" Return the probability embedding of an OMIC """
     return self.probabilistic_embedding(omic=omic)[1]
 
-  def binary(self, omic=None):
+  def get_x_bins(self, omic=None):
     r""" Return the binary embedding of an OMIC """
     return self.probabilistic_embedding(omic=omic)[2]
 
@@ -283,11 +312,11 @@ class _OMICanalyzer(_OMICbase):
                               omic=None,
                               n_components_per_class=2,
                               positive_component=1,
-                              log_norm=False,
+                              log_norm=True,
                               clip_quartile=0.,
                               remove_zeros=True,
                               ci_threshold=-0.68,
-                              seed=8,
+                              seed=1,
                               pbe: Optional[ProbabilisticEmbedding] = None):
     r""" Fit a GMM on each feature column to get the probability or binary
     representation of the features
@@ -331,7 +360,6 @@ class _OMICanalyzer(_OMICbase):
               remove_zeros=remove_zeros,
               ci_threshold=ci_threshold,
               random_state=seed)
-          from sklearn.exceptions import ConvergenceWarning
           with catch_warnings_ignore(ConvergenceWarning):
             pbe.fit(X)
           self.uns[pbe_name] = pbe
@@ -363,18 +391,18 @@ class _OMICanalyzer(_OMICbase):
     if omic is None:
       omic = self.current_omic
     self._record('dimension_reduce', locals())
-    from sklearn.decomposition import IncrementalPCA
     algo = str(algo).lower().strip()
-    assert algo in ('pca', 'tsne', 'umap')
+    assert algo in ('pca', 'tsne', 'umap'), \
+      "Only support algorithm: 'pca', 'tsne', 'umap'; but given: '{algo}'"
     omic = OMIC.parse(omic)
-    name = '%s_%s' % (omic.name, algo)
+    name = f"{omic.name}_{algo}"
     ## already transformed
     if name in self.obsm:
       return self.obsm[name] if n_components is None else \
         self.obsm[name][:, :int(n_components)]
     X = self.numpy(omic)
     n_components = min(n_components, X.shape[1])
-    ## train new PCA model
+    ### train new PCA model
     if algo == 'pca':
       X_ = np.empty(shape=(X.shape[0], n_components), dtype=X.dtype)
       model = IncrementalPCA(n_components=n_components)
@@ -388,7 +416,7 @@ class _OMICanalyzer(_OMICbase):
         chunk = X[start:end]
         chunk = chunk.toarray() if issparse(chunk) else chunk
         X_[start:end] = model.transform(chunk)
-    ## TSNE
+    ### TSNE
     elif algo == 'tsne':
       from odin.ml import fast_tsne
       X_ = fast_tsne(X, n_components=n_components, return_model=False)
@@ -400,8 +428,12 @@ class _OMICanalyzer(_OMICbase):
         method = 'rapids'
       except ImportError:
         method = 'umap'
-      nb = self.neighbors(omic, method='umap', random_state=random_state)
-      self.uns['neighbors'] = nb
+      connectivities, distances, nn = self.neighbors(omic,
+                                                     method='umap',
+                                                     random_state=random_state)
+      self.uns['neighbors'] = nn
+      self.obsp['connectivities'] = connectivities
+      self.obsp['distances'] = distances
       with catch_warnings_ignore(UserWarning):
         sc.tl.umap(self, method=method, random_state=random_state, copy=False)
       X_ = self.obsm['X_umap']
@@ -409,6 +441,8 @@ class _OMICanalyzer(_OMICbase):
       del self.obsm['X_umap']
       del self.uns['umap']
       del self.uns['neighbors']
+      del self.obsp['connectivities']
+      del self.obsp['distances']
     ## store and return the result
     self.obsm[name] = X_
     # the model could be None, in case of t-SNE
@@ -556,33 +590,37 @@ class _OMICanalyzer(_OMICbase):
     Returns:
       returns neighbors object with the following:
 
-      **connectivities** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
+      **[OMIC]_connectivities** : sparse matrix (dtype `float32`)
           Weighted adjacency matrix of the neighborhood graph of data
           points. Weights should be interpreted as connectivities.
-      **distances** : sparse matrix (`.uns['neighbors']`, dtype `float32`)
+      **[OMIC]_distances** : sparse matrix (dtype `float32`)
           Instead of decaying weights, this stores distances for each pair of
           neighbors.
+      **[OMIC]_neighbors** : dictionary
+          configuration and params of fitted k-NN.
     """
     if omic is None:
       omic = self.current_omic
     self._record('neighbors', locals())
     omic = OMIC.parse(omic)
-    name = omic + '_neighbors'
+    name = f"{omic.name}_neighbors"
     if name not in self.uns:
       self.dimension_reduce(omic, algo='pca', random_state=random_state)
-      sc.pp.neighbors(self,
-                      n_neighbors=n_neighbors,
-                      knn=knn,
-                      method=method,
-                      metric=metric,
-                      n_pcs=int(n_pcs),
-                      use_rep=omic.name + '_pca',
-                      random_state=random_state,
-                      copy=False)
-      neighbors = self.uns['neighbors']
-      del self.uns['neighbors']
-      self.uns[name] = neighbors
-    return self.uns[name]
+      obj = sc.pp.neighbors(self,
+                            n_neighbors=n_neighbors,
+                            knn=knn,
+                            method=method,
+                            metric=metric,
+                            n_pcs=int(n_pcs),
+                            use_rep=omic.name + '_pca',
+                            random_state=random_state,
+                            copy=True)
+      self.uns[name] = obj.uns['neighbors']
+      self.obsp[f"{omic.name}_connectivities"] = obj.obsp['connectivities']
+      self.obsp[f"{omic.name}_distances"] = obj.obsp['distances']
+      del obj
+    return (self.obsp[f"{omic.name}_connectivities"],
+            self.obsp[f"{omic.name}_distances"], self.uns[name])
 
   def clustering(self,
                  omic=None,
@@ -633,7 +671,6 @@ class _OMICanalyzer(_OMICbase):
           f"Found omic type:{cluster_omic} with {n_clusters} clusters")
     ## fit KMeans
     if algo in ('pca', 'tsne', 'umap', 'kmeans'):
-      from sklearn.cluster import MiniBatchKMeans
       if algo in ('pca', 'tsne', 'umap'):
         X = self.dimension_reduce(omic=omic, n_components=100, algo=algo)
       else:
@@ -656,16 +693,14 @@ class _OMICanalyzer(_OMICbase):
       labels = np.concatenate(labels, axis=0)
     ## fit KNN
     elif algo == 'knn':
-      from sklearn.cluster import SpectralClustering
-      neighbors = self.neighbors(omic)
-      model = None
-      labels = SpectralClustering(
-          n_clusters=n_clusters,
-          random_state=random_state,
-          n_init=n_init,
-          affinity='precomputed_nearest_neighbors',
-          n_neighbors=neighbors['params']['n_neighbors'] - 1).fit_predict(
-              neighbors['connectivities'])
+      connectivities, distances, nn = self.neighbors(omic)
+      n_neighbors = nn['params']['n_neighbors']
+      model = SpectralClustering(n_clusters=n_clusters,
+                                 random_state=random_state,
+                                 n_init=n_init,
+                                 affinity='precomputed_nearest_neighbors',
+                                 n_neighbors=n_neighbors - 1)
+      labels = model.fit_predict(connectivities)
     else:
       raise NotImplementedError(algo)
     ## correlation matrix
@@ -703,7 +738,8 @@ class _OMICanalyzer(_OMICbase):
     of [Traag17]_. The Louvain algorithm has been proposed for single-cell
     analysis by [Levine15]_.
 
-    This requires having ran :func:`~scanpy.pp.neighbors` or :func:`~scanpy.external.pp.bbknn` first,
+    This requires having ran :func:`~scanpy.pp.neighbors` or
+    `~scanpy.external.pp.bbknn` first,
     or explicitly passing a ``adjacency`` matrix.
 
     Arguments:
@@ -733,6 +769,10 @@ class _OMICanalyzer(_OMICbase):
           Key word arguments to pass to partitioning,
           if ``vtraag`` method is being used.
       random_state : Change the initialization of the optimization.
+
+    Return:
+      array `[n_samples]` : louvain community indices
+      array `[n_samples]` : decoded louvain community labels
     """
     if omic is None:
       omic = self.current_omic
@@ -744,25 +784,47 @@ class _OMICanalyzer(_OMICbase):
     omic = OMIC.parse(omic)
     output_name = omic.name + '_louvain'
     if output_name not in self.obs:
-      nb = self.neighbors(omic)
-      self.uns['neighbors'] = nb
-      sc.tl.louvain(self,
-                    resolution=resolution,
-                    random_state=random_state,
-                    restrict_to=restrict_to,
-                    key_added=output_name,
-                    adjacency=adjacency,
-                    flavor=flavor,
-                    directed=directed,
-                    use_weights=use_weights,
-                    partition_type=partition_type,
-                    partition_kwargs=partition_kwargs,
-                    copy=False)
+      with catch_warnings_ignore(Warning):
+        connectivities, distances, nn = self.neighbors(omic)
+        self.uns["neighbors"] = nn
+        self.obsp["connectivities"] = connectivities
+        self.obsp["distances"] = distances
+        sc.tl.louvain(self,
+                      resolution=resolution,
+                      random_state=random_state,
+                      restrict_to=restrict_to,
+                      key_added=output_name,
+                      adjacency=adjacency,
+                      flavor=flavor,
+                      directed=directed,
+                      use_weights=use_weights,
+                      partition_type=partition_type,
+                      partition_kwargs=partition_kwargs,
+                      copy=False)
       del self.uns['neighbors']
+      del self.obsp["connectivities"]
+      del self.obsp["distances"]
       model = self.uns['louvain']
       del self.uns['louvain']
       self.uns[output_name] = model
-    return self.obs[output_name].to_numpy().astype(np.float32)
+    y = self.obs[output_name].to_numpy().astype(np.float32)
+    ### decode louvain community into labels
+    output_labels = f"{output_name}_labels"
+    if output_labels not in self.obs:
+      var_names = self.get_var_names(omic)
+      # mapping community_index -> confident value for each variables
+      confidence = defaultdict(float)
+      for i, x in zip(y, self.get_x_probs(omic=omic)):
+        confidence[int(i)] += x
+      # thresholding the variables
+      labels = {}
+      for community, x in confidence.items():
+        labels[community] = '_'.join(var_names[_threshold(x, 2, 5)])
+      # store in obs
+      self.obs[output_labels] = np.array([labels[i] for i in y])
+    ### return
+    y_labels = self.obs[output_labels].to_numpy()
+    return y, y_labels
 
   # ******************** Genes metrics and ranking ******************** #
   def top_vars(self, n_vars=100, return_indices=False):
@@ -1034,6 +1096,7 @@ class _OMICanalyzer(_OMICbase):
       pairs.append(key)
     return pairs
 
+  @cache_memory
   def get_importance_matrix(self,
                             omic=OMIC.transcriptomic,
                             target_omic=OMIC.proteomic,
@@ -1073,6 +1136,7 @@ class _OMICanalyzer(_OMICbase):
     self.uns[uns_key] = matrix
     return matrix
 
+  @cache_memory
   def get_mutual_information(self,
                              omic=OMIC.transcriptomic,
                              target_omic=OMIC.proteomic,
@@ -1091,7 +1155,6 @@ class _OMICanalyzer(_OMICbase):
     omic2 = self.current_omic if target_omic is None else OMIC.parse(
         target_omic)
     assert omic1 != omic2, "Mutual information only for 2 different OMIC type"
-    from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
     uns_key = f"mutualinfo_{omic.name}_{target_omic.name}"
     if uns_key in self.uns:
       return self.uns[uns_key]
@@ -1124,6 +1187,7 @@ class _OMICanalyzer(_OMICbase):
     self.uns[uns_key] = mi_mat
     return mi_mat
 
+  @cache_memory
   def get_correlation(self, omic1=OMIC.transcriptomic, omic2=OMIC.proteomic):
     r""" Calculate the correlation scores between two omic types
     (could be different or the same OMIC).

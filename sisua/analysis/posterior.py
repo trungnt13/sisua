@@ -27,7 +27,7 @@ from odin import visual as vs
 from odin.backend import log_norm
 from odin.bay import distributions as tfd
 from odin.bay import vi
-from odin.bay.vi import Criticizer
+from odin.bay.vi import Criticizer, discretizing
 from odin.fuel import Dataset
 from odin.stats import is_binary, is_discrete
 from odin.utils import (MPI, as_tuple, cache_memory, catch_warnings_ignore,
@@ -151,7 +151,8 @@ class Posterior(Visualizer):
                                      distribution=corrupt_distribution,
                                      inplace=False,
                                      seed=self.rand.randint(1e8))
-    self.omics = set(i.name for i in self.sco_corrupted.omics)
+    self.input_omics = list(set(i.name for i in self.sco_corrupted.omics))
+    self.output_omics = list()
     self.omics_data = {
         (om.name, 'original'): sco.get_omic(om) for om in sco.omics
     }
@@ -177,11 +178,29 @@ class Posterior(Visualizer):
         sample_shape=self.sample_shape,
         verbose=self.verbose,
     )
+    # infer output OMICs
+    dim2omic = defaultdict(list)
+    for om in self.input_omics:
+      dim2omic[self.sco_original.get_dim(om)].append(om)
+    for o in tf.nest.flatten(outputs):
+      assert isinstance(o, tfd.Distribution), \
+        f"SingleCellModel must output Distribution but return {o}"
+      name = o.name
+      try:
+        om = OMIC.parse(name)
+      except Exception:
+        om = None
+      if om is None:
+        oms = dim2omic[o.event_shape[0]]
+        if len(oms) > 1:
+          raise RuntimeError(f"Cannot infer OMIC type for output {o}")
+        om = oms[0]
+      self.output_omics.append(om.name)
     # variables' description
     self._n_latents = len(tf.nest.flatten(latents))
     self._n_outputs = len(tf.nest.flatten(outputs))
     ## default inputs
-    for om in self.omics:
+    for om in self.input_omics:
       self.omics_data[(om, 'corrupted')] = sco.get_omic(om)
     # latent is the same for all
     self.omics_data[(OMIC.latent.name, 'corrupted')] = tf.nest.flatten(latents)
@@ -199,7 +218,7 @@ class Posterior(Visualizer):
       self.omics_data[(l.name, 'imputed')] = o
     ### create the SingleCellOMIC dataset for analysis
     sco = self.sco_original.copy()
-    for om in self.omics:
+    for om in self.input_omics:
       if (om, 'imputed') in self.omics_data:
         data_type = 'imputed'
       elif (om, 'reconstructed') in self.omics_data:
@@ -303,19 +322,35 @@ class Posterior(Visualizer):
     assert factor_omic in sco.omics, \
       f"factor_omic='{factor_omic}' not found, available are: {sco.omics}"
     factor_omic = OMIC.parse(factor_omic)
-    key = f"{latent_indices}_{factor_omic.name}"
+    if latent_indices is None:
+      key = f"{factor_omic.name}"
+    else:
+      name = '_'.join(f'{i:d}' for i in latent_indices)
+      key = f"{factor_omic.name}{name}"
     # create the Criticizer
     if key not in self._criticizers:
+      # check the factors is valid
+      factors = sco.get_omic(factor_omic)
+      factor_names = sco.get_var_names(factor_omic)
+      if not is_discrete(factors):
+        if self.verbose:
+          print(f"Discretizing '{factor_omic.name}': {n_bins} - {strategy}")
+        factors = discretizing(factors, n_bins=int(n_bins), strategy=strategy)
+      ids = [len(np.unique(i)) > 1 for i in factors.T]
+      if not any(ids):  # no valid factor found
+        print(f"Ignore factor: {factor_omic.name}")
+        return
+      factors = factors[:, ids]
+      factor_names = factor_names[ids]
       # create the criticizer
       crt = Criticizer(vae=self.scm,
                        latent_indices=latent_indices,
                        random_state=self.rand.randint(1e8))
       with catch_warnings_ignore(UserWarning):
-        crt.sample_batch(latents=self.omics_data[('latent', 'corrupted')],
-                         factors=sco.get_omic(factor_omic),
-                         factor_names=sco.get_var_names(factor_omic),
-                         n_bins=int(n_bins),
-                         strategy=strategy)
+        latents = self.omics_data[('latent', 'corrupted')]
+        crt.sample_batch(latents=latents,
+                         factors=factors,
+                         factor_names=factor_names)
       self._criticizers[key] = crt
     return self._criticizers[key]
 
@@ -577,11 +612,12 @@ class Posterior(Visualizer):
                   log1=True,
                   log2=True):
     r"""
-    omic1 : OMIC type for y-axis
-    omic2 : OMIC type for twinx-axis
-    var_names1 : name of variables in `omic1` will be shown
-    var_names2 : name of variables in `omic2` will be shown
-    is_marker_pairs : coor-pairs in `var_names1` and `var_names2` are markers
+    Arguments:
+      omic1 : OMIC type for y-axis
+      omic2 : OMIC type for twinx-axis
+      var_names1 : name of variables in `omic1` will be shown
+      var_names2 : name of variables in `omic2` will be shown
+      is_marker_pairs : coor-pairs in `var_names1` and `var_names2` are markers
     """
     omic1 = OMIC.parse(omic1)
     omic2 = OMIC.parse(omic2)
@@ -650,13 +686,8 @@ class Posterior(Visualizer):
                                    show_all_codes=show_all_latents,
                                    title=f"{factor_omic.name}",
                                    return_figure=True)
-    if factor_names is None:
-      factor_names = 'all'
-    else:
-      factor_names = '_'.join([str(i) for i in tf.nest.flatten(factor_names)])
     name = factor_omic.name + str(latent_indices)
-    return self.add_figure(f"disentanglement_{name}_{factor_names}_{corr_type}",
-                           fig)
+    return self.add_figure(f"disentanglement_{name}_{corr_type}", fig)
 
   def plot_disentanglement_scatter(self,
                                    factor_omic='proteomic',
@@ -679,6 +710,20 @@ class Posterior(Visualizer):
         a constant for magnifying the color divergence of
         the `factor_omic`, the higher, small differences lead to stronger
         color divergence.
+
+    Example:
+    ```
+    pairs = post.get_marker_pairs()
+    corr = post.get_correlation_matrix('proteomic', 'latent')
+    post.plot_disentanglement_scatter('proteomic',
+                                      pairs=pairs,
+                                      corr_matrix=corr,
+                                      magnify=2)
+    post.plot_disentanglement_scatter('iproteomic',
+                                      pairs=pairs,
+                                      corr_matrix=corr,
+                                      magnify=2)
+    ```
     """
     factor_omic = OMIC.parse(factor_omic)
     var_ids = self.dataset.get_var_indices(factor_omic)
@@ -834,6 +879,7 @@ class Posterior(Visualizer):
 
   @cache_memory
   def cal_llk(self, omic='transcriptomic'):
+    r""" Log-likelihood of a given OMIC type """
     omic = OMIC.parse(omic)
     name = omic.name
     x_org = self.sco_original.get_omic(omic)
@@ -896,7 +942,7 @@ class Posterior(Visualizer):
     r""" Imputation score, estimated by distance between original and
     imputed values (smaller is better).
     """
-    omic = self.sco.omics[0].name
+    omic = self.sco_original.omics[0].name
     X_org = self.omics_data[(omic, 'original')]
     X_crr = self.omics_data[(omic, 'corrupted')]
     imputed = self.omics_data[(omic, 'imputed')].mean().numpy()
@@ -911,15 +957,13 @@ class Posterior(Visualizer):
   @cache_memory
   def _matrix_scores(self,
                      score_type,
-                     omic1='transcriptomic',
-                     type1='imputed',
-                     var_names1=MARKER_ADT_GENE.values(),
+                     omic1='itranscriptomic',
                      omic2='proteomic',
-                     type2='original',
+                     var_names1=MARKER_ADT_GENE.values(),
                      var_names2=MARKER_ADT_GENE.keys()):
     omic1 = OMIC.parse(omic1)
     omic2 = OMIC.parse(omic2)
-    sco = self._create_sco({omic1.name: type1, omic2.name: type2})
+    sco = self.dataset
     var1 = {name: i for i, name in enumerate(sco.get_var_names(omic1))}
     var2 = {name: i for i, name in enumerate(sco.get_var_names(omic2))}
     if score_type in {'spearman', 'pearson'}:
@@ -942,67 +986,104 @@ class Posterior(Visualizer):
     return scores
 
   def cal_pearson(self,
-                  omic1='transcriptomic',
-                  type1='imputed',
-                  var_names1=MARKER_ADT_GENE.values(),
+                  omic1='itranscriptomic',
                   omic2='proteomic',
-                  type2='original',
+                  var_names1=MARKER_ADT_GENE.values(),
                   var_names2=MARKER_ADT_GENE.keys()):
+    r""" Return a dictionary of Pearson correlation between variables' pair in
+    `var_names1` and `var_names2` """
     return self._matrix_scores(score_type='pearson',
                                omic1=omic1,
-                               type1=type1,
-                               var_names1=var_names1,
                                omic2=omic2,
-                               type2=type2,
+                               var_names1=var_names1,
                                var_names2=var_names2)
 
   def cal_spearman(self,
-                   omic1='transcriptomic',
-                   type1='imputed',
-                   var_names1=MARKER_ADT_GENE.values(),
+                   omic1='itranscriptomic',
                    omic2='proteomic',
-                   type2='original',
+                   var_names1=MARKER_ADT_GENE.values(),
                    var_names2=MARKER_ADT_GENE.keys()):
+    r""" Return a dictionary of Spearman correlation between variables' pair in
+    `var_names1` and `var_names2` """
     return self._matrix_scores(score_type='spearman',
                                omic1=omic1,
-                               type1=type1,
-                               var_names1=var_names1,
                                omic2=omic2,
-                               type2=type2,
+                               var_names1=var_names1,
                                var_names2=var_names2)
 
   def cal_mutual_information(self,
-                             omic1='transcriptomic',
-                             type1='imputed',
-                             var_names1=MARKER_ADT_GENE.values(),
+                             omic1='itranscriptomic',
                              omic2='proteomic',
-                             type2='original',
+                             var_names1=MARKER_ADT_GENE.values(),
                              var_names2=MARKER_ADT_GENE.keys()):
+    r""" Return a dictionary of Mutual Information between variables' pair in
+    `var_names1` and `var_names2` """
     return self._matrix_scores(score_type='mutual_info',
                                omic1=omic1,
-                               type1=type1,
-                               var_names1=var_names1,
                                omic2=omic2,
-                               type2=type2,
+                               var_names1=var_names1,
                                var_names2=var_names2)
 
   def cal_importance(self,
-                     omic1='transcriptomic',
-                     type1='imputed',
-                     var_names1=MARKER_ADT_GENE.values(),
+                     omic1='itranscriptomic',
                      omic2='proteomic',
-                     type2='original',
+                     var_names1=MARKER_ADT_GENE.values(),
                      var_names2=MARKER_ADT_GENE.keys()):
+    r""" Return a dictionary of Importance Score between variables' pair in
+    `var_names1` and `var_names2`
+
+    Note:
+      This function take a lot of computation time.
+    """
     return self._matrix_scores(score_type='importance',
                                omic1=omic1,
-                               type1=type1,
-                               var_names1=var_names1,
                                omic2=omic2,
-                               type2=type2,
+                               var_names1=var_names1,
                                var_names2=var_names2)
+
+  ######## Disentanglement metrics
+  def cal_betavae(self):
+    r""" BetaVAE score """
+    scores = {}
+    for key, crt in self._criticizers.items():
+      crt: Criticizer
+      for name, s in crt.cal_betavae_score(n_samples=10000,
+                                           verbose=self.verbose).items():
+        scores[f"{key}_{name}"] = s
+    return scores
+
+  def cal_factorvae(self):
+    r""" FactorVAE score """
+    scores = {}
+    for key, crt in self._criticizers.items():
+      crt: Criticizer
+      for name, s in crt.cal_factorvae_score(n_samples=10000,
+                                             verbose=self.verbose).items():
+        scores[f"{key}_{name}"] = s
+    return scores
+
+  def cal_mig(self):
+    r""" Mutual Information Gap """
+    scores = {}
+    for key, crt in self._criticizers.items():
+      crt: Criticizer
+      for name, s in crt.cal_mutual_info_gap(mean=True).items():
+        scores[f"{key}_{name}"] = s
+    return scores
+
+  def cal_dci(self):
+    r""" Disentanglement, Completeness, Informativeness score"""
+    scores = {}
+    for key, crt in self._criticizers.items():
+      crt: Criticizer
+      for name, s in crt.cal_dci_scores(mean=True).items():
+        scores[f"{key}_{name}"] = s
+    return scores
 
   def __str__(self):
     text = f"Posterior: {self.name}\n"
+    text += f"Input  OMICs: {self.input_omics}\n"
+    text += f"Output OMICs: {self.output_omics}\n"
     text += "Data:\n"
     for k, v in sorted(self.omics_data.items()):
       desc = [
@@ -1021,3 +1102,6 @@ class Posterior(Visualizer):
     for i, _ in self.figures.items():
       text += f" {i}\n"
     return text[:-1]
+
+  def __hash__(self):
+    return id(self)

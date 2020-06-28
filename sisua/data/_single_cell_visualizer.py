@@ -13,6 +13,7 @@ from six import string_types
 from odin import search
 from odin import visual as vs
 from odin.bay.vi.utils import discretizing
+from odin.stats import sparsity_percentage
 from odin.utils import as_tuple, catch_warnings_ignore
 from odin.visual import Visualizer, to_axis
 from sisua.data._single_cell_analysis import _OMICanalyzer
@@ -50,7 +51,7 @@ def _process_omics(sco, omic, clustering=None, allow_none=False):
     elif isinstance(clustering, string_types):
       clustering = clustering.lower().strip()
       if 'louvain' in clustering:  # community detection
-        x = sco.louvain(omic)
+        _, x = sco.louvain(omic)
         omic = omic + '_louvain'
       else:  # clustering
         n_clusters = None
@@ -83,6 +84,8 @@ def _process_omics(sco, omic, clustering=None, allow_none=False):
 
 def _process_varnames(sco, input_omic, var_names):
   input_omic = OMIC.parse(input_omic)
+  if isinstance(var_names, string_types) and var_names == 'auto':
+    var_names = input_omic.markers
   original_varnames = var_names
   with sco._swap_omic(input_omic) as sco:
     # select top variables
@@ -109,14 +112,18 @@ def _process_varnames(sco, input_omic, var_names):
   assert len(var_names) > 0, \
     (f"Cannot find appropriate variables name for OMIC type {input_omic.name}"
      f" given var_names={original_varnames}")
-  return input_omic, var_names
+  return input_omic, sorted(var_names)
 
 
 def _validate_arguments(kw):
   r""" Validate the argument and return a descriptive enough title for the
   figure """
   X = OMIC.parse(kw.get('X'))
-  group_by = OMIC.parse(kw.get('group_by'))
+  group_by = kw.get('group_by')
+  if group_by is not None:
+    group_by = OMIC.parse(group_by).name
+  else:
+    group_by = 'none'
   rank_genes = kw.get('rank_genes')
   clustering = kw.get('clustering')
   log = kw.get('log')
@@ -124,12 +131,8 @@ def _validate_arguments(kw):
     assert X == OMIC.transcriptomic, \
       f"Only visualize transcriptomic in case of rank_genes>0, but given: {X.name}"
   title = '_'.join(i for i in [
-      kw['self'].name,\
-      X.name,
-      group_by.name,
-      str(clustering),
-      ('rank' if rank_genes else ''),
-      ('log' if log else 'raw')
+      X.name, group_by,
+      str(clustering), ('rank' if rank_genes else ''), ('log' if log else 'raw')
   ] if len(i) > 0)
   return title
 
@@ -161,11 +164,12 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                    X=OMIC.transcriptomic,
                    color_by=OMIC.proteomic,
                    marker_by=None,
-                   clustering='kmeans',
+                   clustering='louvain',
                    legend=True,
                    dimension_reduction='tsne',
                    max_scatter_points=-1,
                    ax=None,
+                   fig=None,
                    title='',
                    return_figure=False):
     r""" Scatter plot of dimension using binarized protein labels
@@ -178,15 +182,15 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
       marker_by : instance of OMIC.
         which OMIC data will be used for selecting the marker type
         (e.g. dot, square, triangle ...)
-      clustering : {'kmeans', 'knn', 'pca', 'tsne', 'umap'}.
-        Clustering algorithm, in case algo in ('pca', 'tsne', 'umap'),
+      clustering : {'kmeans', 'knn', 'pca', 'tsne', 'umap', 'louvain'}.
+        Clustering algorithm, in case algorithm in ('pca', 'tsne', 'umap'),
         perform dimension reduction before clustering.
         Note: clustering is only applied in case of continuous data.
       dimension_reduction : {'tsne', 'umap', 'pca', None}.
         Dimension reduction algorithm. If None, just take the first 2
         dimension
     """
-    ax = vs.to_axis2D(ax, fig=(8, 9))
+    ax = vs.to_axis2D(ax, fig=fig)
     omic = OMIC.parse(X)
     omic_name = omic.name
     max_scatter_points = int(max_scatter_points)
@@ -210,12 +214,15 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
       if markers is not None:
         markers = markers[ids]
     ## ploting
-    if is_categorical_dtype(colors):  # categorical values
-      kw = dict(color='b' if colors is None else colors)
-    else:  # integral values
-      kw = dict(val=colors, color='bwr')
-    name = ':'.join(str(i) for i in [omic_name, color_name, marker_name])
-    title = f"[{dimension_reduction}-{self.name.split('_')[0]}-{name}]{title}"
+    kw = dict(color='b')
+    if colors is not None:
+      if is_categorical_dtype(colors):  # categorical values
+        kw['color'] = colors
+      else:  # integral values
+        kw['val'] = colors
+        kw['color'] = 'bwr'
+    name = '_'.join(str(i) for i in [omic_name, color_name, marker_name])
+    title = f"[{dimension_reduction}-{name}]{title}"
     vs.plot_scatter(X,
                     marker='.' if markers is None else markers,
                     size=88 if n_points < 1000 else (120000 / n_points),
@@ -236,8 +243,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                            X=OMIC.transcriptomic,
                            group_by=OMIC.proteomic,
                            groups=None,
-                           var_names=MARKER_GENES,
-                           clustering='kmeans',
+                           var_names='auto',
+                           clustering='louvain',
                            rank_vars=0,
                            dendrogram=False,
                            standard_scale='var',
@@ -263,15 +270,20 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
         If greater than 0, rank variables in `X` by characterizing groups
         in `group_by`.
     """
-    title = f"[{_validate_arguments(locals())}]{title}"
+    desc = f"{_validate_arguments(locals())}"
     X, var_names = _process_varnames(self, X, var_names)
-    group_by, _ = _process_omics(self, group_by, clustering=clustering)
+    group_by, _ = _process_omics(self,
+                                 group_by,
+                                 clustering=clustering,
+                                 allow_none=True)
     kw = dict(dendrogram=dendrogram,
               swap_axes=bool(swap_axes),
               log=log,
               standard_scale=standard_scale)
     with self._swap_omic(X):
       if rank_vars > 0:
+        if group_by is None:
+          raise ValueError("group_by must be provided in case rank_vars > 0.")
         rank_vars = int(rank_vars)
         key = self.rank_vars_groups(group_by=group_by, n_vars=rank_vars)
         axes = sc.pl.rank_genes_groups_stacked_violin(self,
@@ -286,43 +298,49 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                                     **kw)
     ## reconfigure the axes
     fig = plt.gcf()
-    plt.title(title)
+    plt.title(f"[{title}]{desc}")
     _adjust(fig, title=None, pad=0.01)
     if return_figure:
       return fig
-    self.add_figure(f"violin_{title}", fig)
+    self.add_figure(f"violin_{desc}", fig)
     return self
 
   def plot_dotplot(self,
                    X=OMIC.transcriptomic,
                    group_by=OMIC.transcriptomic,
-                   var_names=None,
-                   clustering='kmeans',
+                   var_names='auto',
+                   clustering='louvain',
                    rank_genes=0,
                    dendrogram=False,
                    standard_scale='var',
                    cmap='Reds',
                    log=True):
-    title = _validate_arguments(locals())
+    desc = _validate_arguments(locals())
     X, var_names = _process_varnames(self, X, var_names)
-    group_by, _ = _process_omics(self, group_by, clustering=clustering)
+    group_by, _ = _process_omics(self,
+                                 group_by,
+                                 clustering=clustering,
+                                 allow_none=True)
     kw = dict(dendrogram=dendrogram,
               log=log,
               standard_scale=standard_scale,
               color_map=cmap)
-    if rank_genes > 0:
-      key = self.rank_vars_groups(groupby=group_by, n_vars=int(rank_genes))
-      axes = sc.pl.rank_genes_groups_dotplot(self,
-                                             n_genes=int(rank_genes),
-                                             key=key,
-                                             **kw)
-    else:
-      with self._swap_omic(X):
+    ## ploting
+    with self._swap_omic(X):
+      if rank_genes > 0:
+        if group_by is None:
+          raise ValueError("group_by must be provided in case rank_vars > 0.")
+        key = self.rank_vars_groups(groupby=group_by, n_vars=int(rank_genes))
+        axes = sc.pl.rank_genes_groups_dotplot(self,
+                                               n_genes=int(rank_genes),
+                                               key=key,
+                                               **kw)
+      else:
         axes = sc.pl.dotplot(self, var_names=var_names, groupby=group_by, **kw)
     ## reconfigure the axes
     fig = plt.gcf()
-    _adjust(fig, title)
-    self.add_figure('dotplot_%s' % title, fig)
+    _adjust(fig, desc)
+    self.add_figure(f"dotplot_{desc}", fig)
     return self
 
   #### Heatmap plot
@@ -330,8 +348,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                    X=OMIC.transcriptomic,
                    group_by=OMIC.proteomic,
                    groups=None,
-                   var_names=MARKER_GENES,
-                   clustering='kmeans',
+                   var_names='auto',
+                   clustering='louvain',
                    rank_vars=0,
                    dendrogram=False,
                    swap_axes=False,
@@ -361,9 +379,12 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
         If greater than 0, rank variables in `X` by characterizing groups
         in `group_by`.
     """
-    title = f"[{_validate_arguments(locals())}]{title}"
+    desc = f"{_validate_arguments(locals())}"
     X, var_names = _process_varnames(self, X, var_names)
-    group_by, _ = _process_omics(self, group_by, clustering=clustering)
+    group_by, _ = _process_omics(self,
+                                 group_by,
+                                 clustering=clustering,
+                                 allow_none=True)
     ## select the right marker genes and omic
     kw = dict(dendrogram=dendrogram,
               swap_axes=bool(swap_axes),
@@ -374,27 +395,30 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     ## plotting
     with self._swap_omic(X):
       if rank_vars > 0:
+        if group_by is None:
+          raise ValueError("group_by must be provided in case rank_vars > 0.")
         key = self.rank_vars_groups(group_by=group_by, n_vars=rank_vars)
         axes = sc.pl.rank_genes_groups_heatmap(self,
                                                n_genes=rank_vars,
+                                               groups=groups,
                                                key=key,
                                                **kw)
       else:
         axes = sc.pl.heatmap(self, var_names=var_names, groupby=group_by, **kw)
     ## reconfigure the axes
     fig = plt.gcf()
-    fig.get_axes()[0].set_title(title)
+    fig.get_axes()[0].set_title(f"[{title}]{desc}")
     _adjust(fig, title=None)
     if return_figure:
       return fig
-    self.add_figure(f'heatmap_{title}', fig)
+    self.add_figure(f'heatmap_{desc}', fig)
     return self
 
   def plot_distance_heatmap(self,
                             X=OMIC.transcriptomic,
                             group_by=OMIC.transcriptomic,
-                            var_names=None,
-                            clustering='kmeans',
+                            var_names='auto',
+                            clustering='louvain',
                             cmap='bwr',
                             legend=True,
                             log=True,
@@ -448,10 +472,14 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                            is_marker_pairs=True,
                            title='',
                            return_figure=False):
-    if var_names1 is None or var_names2 is None:
-      is_marker_pairs = False
     omic1 = OMIC.parse(omic1)
     omic2 = OMIC.parse(omic2)
+    if isinstance(var_names1, string_types) and var_names1 == 'auto':
+      var_names1 = omic1.markers
+    if isinstance(var_names2, string_types) and var_names2 == 'auto':
+      var_names2 = omic2.markers
+    if var_names1 is None or var_names2 is None:
+      is_marker_pairs = False
     names1 = self.get_var_names(omic1)
     names2 = self.get_var_names(omic2)
     om1_idx = {j: i for i, j in enumerate(names1)}
@@ -529,6 +557,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                              is_marker_pairs=True,
                              title='',
                              return_figure=False):
+    r""" Showing importance heatmap matrix """
     return self._plot_heatmap_matrix(
         matrix=self.get_importance_matrix(omic1, omic2),
         figname="Importance",
@@ -549,6 +578,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                               is_marker_pairs=True,
                               title='',
                               return_figure=False):
+    r""" Plot estimated mutual information between each variable pair in
+    omic1 and omic2. """
     return self._plot_heatmap_matrix(
         matrix=self.get_mutual_information(omic1, omic2),
         figname="MutualInfo",
@@ -626,8 +657,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
   def plot_correlation_scatter(self,
                                omic1=OMIC.transcriptomic,
                                omic2=OMIC.proteomic,
-                               var_names1=MARKER_ADT_GENE.values(),
-                               var_names2=MARKER_ADT_GENE.keys(),
+                               var_names1='auto',
+                               var_names2='auto',
                                is_marker_pairs=True,
                                log1=True,
                                log2=True,
@@ -643,10 +674,14 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
         With `omic1` represent the x-axis, and `omic2` represent the y-axis.
       var_names1 : list of all variable name for `omic1`
     """
-    if var_names1 is None or var_names2 is None:
-      is_marker_pairs = False
     omic1 = OMIC.parse(omic1)
     omic2 = OMIC.parse(omic2)
+    if isinstance(var_names1, string_types) and var_names1 == 'auto':
+      var_names1 = omic1.markers
+    if isinstance(var_names2, string_types) and var_names2 == 'auto':
+      var_names2 = omic2.markers
+    if var_names1 is None or var_names2 is None:
+      is_marker_pairs = False
     max_scatter_points = int(max_scatter_points)
     # get all correlations
     corr = self.get_correlation(omic1, omic2)
@@ -754,7 +789,6 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     return self
 
   #### Latents
-
   def plot_divergence(self,
                       X=OMIC.transcriptomic,
                       omic=OMIC.proteomic,
@@ -812,15 +846,67 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     return self
 
   #### Basic statistic
+  def plot_histogram(self,
+                     omic=OMIC.proteomic,
+                     bins=80,
+                     log_norm=True,
+                     var_names=None,
+                     max_plots=100,
+                     fig=None,
+                     return_figure=False):
+    r""" Plot histogram for each variable of given OMIC type """
+    omic = OMIC.parse(omic)
+    x = self.numpy(omic)
+    bins = min(int(bins), x.shape[0] // 2)
+    max_plots = int(max_plots)
+    ### prepare the data
+    var_ids = self.get_var_indices(omic)
+    if var_names is None:
+      var_names = var_ids.keys()
+    var_names = np.array([i for i in var_names if i in var_ids])
+    assert len(var_names) > 0, \
+      f"No matching variables found for {omic.name}"
+    # randomly select variables
+    if len(var_names) > max_plots:
+      rand = np.random.RandomState(seed=1)
+      ids = rand.permutation(len(var_names))[:max_plots]
+      var_names = var_names[ids]
+    ids = [var_ids[i] for i in var_names]
+    x = x[:, ids]
+    ### the figures
+    ncol = 8
+    nrow = int(np.ceil(x.shape[1] / ncol))
+    if fig is None:
+      fig = vs.plot_figure(nrow=nrow * 2, ncol=ncol * 3, dpi=80)
+    # plot
+    for idx, (y, name) in enumerate(zip(x.T, var_names)):
+      sparsity = sparsity_percentage(y, batch_size=2048)
+      y = y[y != 0.]
+      if log_norm:
+        y = np.log1p(y)
+      vs.plot_histogram(x=y,
+                        bins=bins,
+                        alpha=0.8,
+                        ax=(nrow, ncol, idx + 1),
+                        title=f"{name}\n({sparsity*100:.1f}% zeros)")
+      fig.gca().tick_params(axis='y', labelleft=False)
+    ### adjust and return
+    fig.suptitle(f"{omic.name}")
+    fig.tight_layout(rect=[0.0, 0.03, 1.0, 0.97])
+    if return_figure:
+      return fig
+    return self.add_figure(f"histogram_{omic.name}", fig)
+
   def plot_percentile_histogram(self,
                                 omic=OMIC.transcriptomic,
-                                n_hist=8,
-                                title=None,
+                                n_hist=10,
+                                title="",
                                 outlier=0.001,
                                 non_zeros=False,
                                 fig=None):
     r""" Data is chopped into multiple percentile (`n_hist`) and the
     histogram is plotted for each percentile. """
+    omic = OMIC.parse(omic)
     arr = self.numpy(omic)
     if non_zeros:
       arr = arr[arr != 0]
@@ -845,28 +931,36 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
           ax=(n_row, n_col, i + 1),
           fontsize=8,
           color='red' if len(a) / n_samples < outlier else 'blue',
-          title=("[%s]" % title if i == 0 else "") +
-          "%d(samples)  Range:[%g, %g]" % (len(a), p_min, p_max))
+          title=f"{len(a)}(samples)  Range:[{p_min:.2g},{p_max:.2g}]")
       plt.gca().set_xticks(np.linspace(np.min(bins), np.max(bins), num=8))
-    plt.tight_layout()
-    self.add_figure('percentile_%dhistogram' % n_hist, fig)
+    if len(title) > 0:
+      plt.suptitle(title)
+    plt.tight_layout(rect=[0.0, 0.02, 1.0, 0.98])
+    self.add_figure(f'histogram{n_hist}_{omic.name}', fig)
     return self
 
   def plot_series(self,
                   omic1=OMIC.transcriptomic,
                   omic2=OMIC.proteomic,
-                  var_names1=MARKER_ADT_GENE.values(),
-                  var_names2=MARKER_ADT_GENE.keys(),
+                  var_names1='auto',
+                  var_names2='auto',
                   log1=True,
                   log2=True,
                   fontsize=10,
                   title='',
                   return_figure=False):
+    r""" Plot lines of 2 OMICs sorted in ascending order of `omic1` """
     import seaborn as sns
+    ## prepare
     omic1 = OMIC.parse(omic1)
     omic2 = OMIC.parse(omic2)
     omic1_ids = self.get_var_indices(omic1)
     omic2_ids = self.get_var_indices(omic2)
+    if isinstance(var_names1, string_types) and var_names1 == 'auto':
+      var_names1 = omic1.markers
+    if isinstance(var_names2, string_types) and var_names2 == 'auto':
+      var_names2 = omic2.markers
+    ## filtering variables
     ids1 = []
     ids2 = []
     for v1, v2 in zip(var_names1, var_names2):

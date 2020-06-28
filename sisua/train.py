@@ -24,12 +24,6 @@ os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 tf.random.set_seed(8)
 np.random.seed(8)
 
-# Example:
-# model.name=sisua,dca,vae,scvi,scale,misa,scalar,fvae,sfvae
-# dataset.name=call,mpal,cortex,8kly,8klyall,eccly,ecclyall,vdj1,vdj1all,callx,mpalx,8kx,eccx,vdj1x,vdj4x
-# -m -ncpu 5
-# --reset
-
 
 # ===========================================================================
 # Helpers
@@ -243,3 +237,14 @@ class SisuaExperimenter(Experimenter):
 if __name__ == "__main__":
   exp = SisuaExperimenter()
   exp.run()
+
+# Example:
+# model.name=sisua,dca,vae,scvi,scale,misa,scalar,fvae,sfvae
+# dataset.name=call,mpal,cortex,8kly,8klyall,eccly,ecclyall,vdj1,vdj1all,callx,mpalx,8kx,eccx,vdj1x,vdj4x
+# -m -ncpu 4
+# --reset
+
+# model.name=sisua,dca,vae,scvi,scale
+# dataset.name=8kly,8klyall,callx,mpalx,8kx,eccx,vdj1x,vdj4x
+# -m -ncpu 4
+# --reset

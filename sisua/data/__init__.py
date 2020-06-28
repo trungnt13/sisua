@@ -55,8 +55,8 @@ def get_dataset_meta():
       "mpalatac":
           partial(read_leukemia_MixedPhenotypes, omic='atac'),
       # ====== pbmc 8k ====== #
-      "100yo":
-          read_centenarian,
+      # "100yo":
+      #     read_centenarian,
       # ====== pbmc 8k ====== #
       '8klyall':
           partial(read_PBMC8k, subset='ly', filtered_genes=False),
@@ -75,14 +75,14 @@ def get_dataset_meta():
           partial(read_PBMCeec, subset='ly', filtered_genes=False),
       'eccly':
           partial(read_PBMCeec, subset='ly', filtered_genes=True),
-      'eccmyall':
-          partial(read_PBMCeec, subset='my', filtered_genes=False),
-      'eccmy':
-          partial(read_PBMCeec, subset='my', filtered_genes=True),
-      'ecc':
-          partial(read_PBMCeec, subset='full', filtered_genes=True),
-      'eccall':
-          partial(read_PBMCeec, subset='full', filtered_genes=False),
+      # 'eccmyall':
+      #     partial(read_PBMCeec, subset='my', filtered_genes=False),
+      # 'eccmy':
+      #     partial(read_PBMCeec, subset='my', filtered_genes=True),
+      # 'ecc':
+      #     partial(read_PBMCeec, subset='full', filtered_genes=True),
+      # 'eccall':
+      #     partial(read_PBMCeec, subset='full', filtered_genes=False),
       # ====== cross PBMC ====== #
       '8kx':
           partial(read_PBMC_crossdataset, name='pbmc8k', filtered_genes=True),
@@ -180,16 +180,16 @@ def get_dataset_meta():
       ('vdj2', 'vdj_v1_hs_aggregated_donor2'),
       ('vdj3', 'vdj_v1_hs_aggregated_donor3'),
       ('vdj4', 'vdj_v1_hs_aggregated_donor4'),
-      ('vdjhs3', 'vdj_v1_hs_pbmc3'),
-      ('vdjhs4', 'vdj_v1_hs_pbmc4'),
       ("neuron10k", "neuron_10k_v3"),
       ("heart10k", "heart_10k_v3"),
       ('memoryt', 'memory_t'),
       ('naivet', 'naive_t'),
       ('regulatoryt', 'regulatory_t'),
       ('cd4t', 'cd4_t_helper'),
+      ("4k", "pbmc4k"),
       ("5k", "5k_pbmc_protein_v3"),
       ("10k", "pbmc_10k_protein_v3"),
+      ("18k", "pbmc8k"),
   ]:
     data_meta[alias] = partial(read_dataset10x,
                                name=name,
@@ -231,6 +231,19 @@ def get_dataset_summary(return_html=False):
 def get_dataset(dataset_name, override=False, verbose=True) -> SingleCellOMIC:
   r""" Check `get_dataset_meta` for more information
 
+  List of all dataset available: ['call', 'callall', 'mpal', 'mpalall',
+    'mpalatac', '100yo', '8klyall', '8kmyall', '8kly', '8kmy', '8k',
+    '8kall', 'ecclyall', 'eccly', 'eccmyall', 'eccmy', 'ecc', 'eccall',
+    '8kx', '8kxall', 'eccx', 'eccxall', 'vdj1x', 'vdj1xall', 'vdj4x',
+    'vdj4xall', 'mpalx', 'mpalxall', 'callx', 'callxall', 'pbmcciteseq',
+    'cbmcciteseq', 'pbmc5000', 'facs7', 'facs5', 'facs2', 'pbmcscvi',
+    'cortex', 'retina', 'hemato', 'vdj1', 'vdj1all', 'vdj2', 'vdj2all',
+    'vdj3', 'vdj3all', 'vdj4', 'vdj4all', 'vdjhs3', 'vdjhs3all', 'vdjhs4',
+    'vdjhs4all', 'neuron10k', 'neuron10kall', 'heart10k', 'heart10kall',
+    'memoryt', 'memorytall', 'naivet', 'naivetall', 'regulatoryt',
+    'regulatorytall', 'cd4t', 'cd4tall', '5k', '5kall', '18k', '18kall',
+    '14k', '14kall', '10k', '10kall']
+
   Return:
     mRNA data : `SingleCellOMIC`
     label data: `SingleCellOMIC`. If label data is not availabel, then None
@@ -268,28 +281,3 @@ def get_dataset(dataset_name, override=False, verbose=True) -> SingleCellOMIC:
     else:
       sc.add_omic(OMIC.proteomic, y, ds['y_col'])
   return sc
-
-
-def get_scvi_dataset(dataset_name):
-  """ Convert any SISUA dataset to relevant format for scVI models """
-  from scvi.dataset import GeneExpressionDataset
-  ds, gene, prot = get_dataset(dataset_name, override=False)
-  X = np.concatenate((gene.X_train, gene.X_test), axis=0)
-  labels = np.concatenate((prot.X_train, prot.X_test), axis=0)
-  means, vars = get_library_size(X)
-  is_multi_classes_labels = np.all(np.sum(labels, axis=1) != 1.)
-  scvi = GeneExpressionDataset(X=X,
-                               local_means=means,
-                               local_vars=vars,
-                               batch_indices=np.zeros(shape=(X.shape[0], 1)),
-                               labels=None,
-                               gene_names=gene.X_col,
-                               cell_types=None)
-  if not is_multi_classes_labels:
-    scvi.labels = labels
-    scvi.cell_types = prot.X_col
-  else:
-    scvi.labels = labels
-    scvi.adt_expression = labels
-    scvi.protein_markers = prot.X_col
-  return scvi

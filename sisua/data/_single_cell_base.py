@@ -14,11 +14,11 @@ import scanpy as sc
 import scipy as sp
 import tensorflow as tf
 from anndata._core.aligned_mapping import AxisArrays
+from bigarray import MmapArrayWriter
 from scipy.sparse import issparse
 from scipy.stats import pearsonr, spearmanr
 from six import string_types
 
-from bigarray import MmapArrayWriter
 from odin import visual as vs
 from odin.bay import RandomVariable
 from odin.search import diagonal_beam_search, diagonal_bruteforce_search
@@ -64,6 +64,7 @@ class _OMICbase(sc.AnnData, MD5object):
                dtype=None,
                omic=OMIC.transcriptomic,
                name=None,
+               duplicated_var=False,
                **kwargs):
     omic = OMIC.parse(omic)
     # directly first time init from file
@@ -91,6 +92,15 @@ class _OMICbase(sc.AnnData, MD5object):
         dtype = X.dtype
       if name is None:
         name = "scOMICS"
+      if not duplicated_var:
+        # check duplicated var_names
+        gene_id = np.asarray(gene_id)
+        u, c = np.unique(gene_id, return_counts=True)
+        ids = np.ones(shape=(len(gene_id),), dtype=np.bool)
+        for v in u[c > 1]:
+          ids[gene_id == v] = False
+        gene_id = gene_id[ids]
+        X = X[:, ids]
       kwargs['dtype'] = dtype
       kwargs['obs'] = pd.DataFrame(index=cell_id)
       kwargs['var'] = pd.DataFrame(index=gene_id)
@@ -324,7 +334,9 @@ class _OMICbase(sc.AnnData, MD5object):
     raise ValueError("OMIC not found, give: '%s', support: '%s'" %
                      (omic, self.omics))
 
-  def get_var_names(self, omic):
+  def get_var_names(self, omic=None):
+    if omic is None:
+      omic = self.current_omic
     return self.get_var(omic).index.values
 
   def get_dim(self, omic):
@@ -367,7 +379,10 @@ class _OMICbase(sc.AnnData, MD5object):
     omic_name = omic.name if hasattr(omic, 'name') else str(omic)
     # obs
     if omic_name in self.obs:
-      return self.obs[omic_name].values
+      x = self.obs[omic_name].values
+      if hasattr(x, 'to_numpy'):
+        x = x.to_numpy()
+      return x
     # obsm
     omic = OMIC.parse(omic)
     for om in list(omic):
@@ -620,3 +635,12 @@ class _OMICbase(sc.AnnData, MD5object):
 
   def __str__(self):
     return self._get_str()
+
+  def __eq__(self, obj):
+    assert isinstance(obj, _OMICbase), \
+      f"Only compare to instance of SingleCellOMIC but given {type(obj)}"
+    return self.md5_checksum == obj.md5_checksum
+
+  def __hash__(self):
+    return id(self)
+

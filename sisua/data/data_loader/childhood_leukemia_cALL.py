@@ -16,7 +16,7 @@ from sisua.data.utils import read_compressed, validate_data_dir
 
 _URL = r"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132509"
 _MD5_DOWNLOAD = r"1f22e169d590def62e0992d19fe45ba7"
-_MD5_PREPROCESSED = r"86a4c831f6e49e40932a150d920de4c2"
+_MD5_PREPROCESSED = r"00a636e37204da4244415140ebe146e8"
 _NAME = 'leukemia_bmmc'
 
 __all__ = ['read_leukemia_BMMC']

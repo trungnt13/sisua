@@ -7,12 +7,13 @@ import os
 import pickle
 import shutil
 from io import BytesIO, StringIO
+from urllib.request import urlretrieve
 
 import numpy as np
 import scipy as sp
 
 from odin.fuel import Dataset
-from odin.utils import crypto, ctext, get_file
+from odin.utils import crypto
 from sisua.data.path import DOWNLOAD_DIR, DATA_DIR
 from sisua.data.utils import remove_allzeros_columns, save_to_dataset
 
@@ -43,8 +44,8 @@ def read_FACS(n_protein, override=False, verbose=False):
     # ====== download the data ====== #
     url = str(base64.decodebytes(_URL), 'utf-8') % n_protein
     base_name = os.path.basename(url)
-    get_file(fname=base_name, origin=url, outdir=download_path, verbose=verbose)
     zip_path = os.path.join(download_path, base_name)
+    urlretrieve(url=url, filename=zip_path)
     # ====== extract the data ====== #
     data_dict = {}
     for name, data in crypto.unzip_aes(zip_path,
@@ -118,8 +119,11 @@ def read_full_FACS(override=False, verbose=False):
       ),
   ]
   for name, url in file_url:
-    if not os.path.exists(os.path.join(download_path, name)):
-      get_file(fname=name, origin=url, outdir=download_path, verbose=verbose)
+    filename = os.path.join(download_path, name)
+    if not os.path.exists(filename):
+      if verbose:
+        print("Downloading file '{filename}' ...")
+      urlretrieve(url=url, filename=filename)
   # ====== extract the data ====== #
   preprocessed_path = _FACS_PREPROCESSED % 7
   if not os.path.exists(preprocessed_path):

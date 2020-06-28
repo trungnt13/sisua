@@ -22,11 +22,11 @@ from urllib.request import urlretrieve
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from bigarray import MmapArray, MmapArrayWriter
 from scipy.io import mmread
 from scipy.sparse import csr_matrix, issparse
 from tqdm import tqdm
 
-from bigarray import MmapArray, MmapArrayWriter
 from odin.fuel import Dataset
 from odin.utils import MPI, batching, ctext, is_gzip_file, select_path
 from sisua.data.const import MARKER_ATAC, MARKER_GENES, OMIC
@@ -139,14 +139,14 @@ group_to_url_skeleton = {
 }
 
 _MD5 = {
-    "cell-vdj*3.0.2*vdj_v1_hs_aggregated_donor1*filtered":
-        r"2989b9f660f6acfb2f3a22066afae83d",
-    "cell-vdj*3.0.2*vdj_v1_hs_aggregated_donor2*filtered":
-        r"8a34c2b8b41016ac066ebd3e7623fe40",
-    "cell-atac*1.2.0*atac_pbmc_10k_v1*filtered":
-        r"e189271db6fba135dd0672423d7957bf",
-    "cell-atac*1.2.0*atac_pbmc_500_v1*filtered":
-        r"7b925598349958b1a3ea3ee5c637a760"
+    # "cell-vdj*3.0.2*vdj_v1_hs_aggregated_donor1*filtered":
+    #     r"2989b9f660f6acfb2f3a22066afae83d",
+    # "cell-vdj*3.0.2*vdj_v1_hs_aggregated_donor2*filtered":
+    #     r"8a34c2b8b41016ac066ebd3e7623fe40",
+    # "cell-atac*1.2.0*atac_pbmc_10k_v1*filtered":
+    #     r"e189271db6fba135dd0672423d7957bf",
+    # "cell-atac*1.2.0*atac_pbmc_500_v1*filtered":
+    #     r"7b925598349958b1a3ea3ee5c637a760"
 }
 available_specification = ["filtered", "raw"]
 
@@ -272,8 +272,8 @@ def read_dataset10x(name,
       peaks = contents['peaks']
       X_peaks = peaks[:, 2].astype(np.float32) - peaks[:, 1].astype(np.float32)
       X_col_name = np.array([':'.join(i) for i in peaks])
-      save_data = [('chromatin', X)]
-      save_metadata = dict(main_omic='chromatin',
+      save_data = [(OMIC.chromatin.name, X)]
+      save_metadata = dict(main_omic=OMIC.chromatin.name,
                            barcodes=barcodes,
                            chromatin_var=X_col_name)
       sco = SingleCellOMIC(X,
@@ -295,15 +295,20 @@ def read_dataset10x(name,
       assert X.shape[0] == barcodes.shape[0] and X.shape[1] == X_col.shape[0]
       # antibody and gene are provided
       prot_ids = []
+      pmhc_ids = []
       gene_ids = []
       if X_col.shape[1] == 3:
-        for idx, row in enumerate(X_col):
-          if row[-1] == 'Antibody Capture':
-            prot_ids.append(idx)
-          elif row[-1] == 'Gene Expression':
+        for idx, (feat_id, feat_name, feat_type) in enumerate(X_col):
+          if feat_type == 'Antibody Capture':
+            if exp == "cell-vdj" and "_TotalSeqC" not in feat_name:
+              pmhc_ids.append(idx)
+            else:
+              prot_ids.append(idx)
+          elif feat_type == 'Gene Expression':
             gene_ids.append(idx)
           else:
-            raise ValueError(f"Unknown feature type:{row}")
+            raise ValueError(
+                f"Unknown feature type:{feat_id}-{feat_name}-{feat_type}")
       elif X_col.shape[1] == 2:
         gene_ids = slice(None, None)
       else:
@@ -312,6 +317,11 @@ def read_dataset10x(name,
       y = X[:, prot_ids]
       y_col = X_col[prot_ids][:, 0]  # the id
       y_col_name = X_col[prot_ids][:, 1]  # the name
+      # pMHC peptide
+      if len(pmhc_ids) > 0:
+        z = X[:, pmhc_ids]
+        z_col = X_col[pmhc_ids][:, 0]  # the id
+        z_col_name = X_col[pmhc_ids][:, 1]  # the name
       # Gene ID, Gene Name
       X = X[:, gene_ids].todense()
       X_col_name = X_col[gene_ids][:, 1]  # the name
@@ -324,11 +334,16 @@ def read_dataset10x(name,
                            gene_id=X_col_name,
                            omic=OMIC.transcriptomic,
                            name=name)
-      save_data = [('transcriptomic', X), ('proteomic', y)]
-      save_metadata = dict(main_omic='transcriptomic',
-                           barcodes=barcodes,
-                           transcriptomic_var=X_col_name,
-                           proteomic_var=y_col_name)
+      save_data = [(OMIC.transcriptomic.name, X), (OMIC.proteomic.name, y)]
+      save_metadata = {
+          'main_omic': OMIC.transcriptomic.name,
+          'barcodes': barcodes,
+          f"{OMIC.transcriptomic.name}_var": X_col_name,
+          f"{OMIC.proteomic.name}_var": y_col_name
+      }
+      if len(pmhc_ids) > 0:
+        save_data.append((OMIC.pmhc.name, z))
+        save_metadata[f"{OMIC.pmhc.name}_var"] = z_col_name
     ### others
     else:
       raise NotImplementedError(f"No support for experiment: {exp}")

@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from typing import List, Text, Tuple
 
 from six import string_types
 
@@ -60,10 +61,10 @@ MARKER_ADT_GENE = {
 
 MARKER_ADTS = list(MARKER_ADT_GENE.keys())
 MARKER_GENES = list(set(list(MARKER_ADT_GENE.values()) + \
-  ['CD8B', 'CD79A', 'LYZ', 'LGALS3', 'S100A8', 'GNLY', 'NKG7',
-   'KLRB1', 'FCER1A', 'CST3'] + \
-     ["MS4A1", "CD19", "MME", "VPREB1", "VPREB3", "DNTT", "CD79A", "MZB1", "NKG7",
-      "CD3D", "CD8A", "CD34", "CST3", "LYZ", "HBA1", "FCGR3A", "GATA1", "GATA2"]))
+  ['CD8B', 'CD79A', 'LYZ', 'LGALS3', 'S100A8', 'GNLY',
+   'KLRB1', 'FCER1A', 'CST3', "MS4A1", "CD19", "MME", "VPREB1", "VPREB3",
+   "DNTT", "CD79A", "MZB1", "NKG7", "CD3D", "CD34", "CST3", "LYZ",
+   "HBA1", "FCGR3A", "GATA1", "GATA2"]))
 
 # ['CD77' 'CCR7' 'CD19' 'CD1a' 'CD2' 'CD27' 'PD-L1;CD274' 'CD28'
 #  'PECAM;CD31' 'CD34' 'CD3' 'CD4' 'CD44' 'CD5' 'CD69' 'CD7' 'CD8' 'CD66b'
@@ -113,10 +114,11 @@ class OMIC(OrderedFlag):
   celltype = 'celltype'
   disease = 'disease'
   progenitor = 'progenitor'
-  #
+  pmhc = 'pmhc' # peptide - major histocompatibility complex
+  # reconstructed
   ochromatin = 'ochromatin'
   otranscriptomic = 'otranscriptomic'
-  #
+  # imputed
   igenomic = 'igenomic'
   ichromatin = 'ichromatin'
   itranscriptomic = 'itranscriptomic'
@@ -124,12 +126,35 @@ class OMIC(OrderedFlag):
   icelltype = 'icelltype'
   idisease = 'idisease'
   iprogenitor = 'iprogenitor'
+  ipmhc = 'ipmhc'
   #
   epigenomic = 'epigenomic'
   metabolomic = 'metabolomic'
   microbiomic = 'microbiomic'
   #
   latent = 'latent'
+
+  @property
+  def markers(self) -> List[Text]:
+    name = self.name
+    if name in (OMIC.proteomic.name, OMIC.iproteomic.name):
+      return list(MARKER_ADTS)
+    if name in (OMIC.transcriptomic.name, OMIC.itranscriptomic.name):
+      return list(MARKER_GENES)
+    if name in (OMIC.chromatin.name, OMIC.ichromatin.name):
+      return list(MARKER_ATAC)
+    return []
+
+  def marker_pairs(self, omic) -> List[Tuple[Text]]:
+    name1 = self.name
+    name2 = OMIC.parse(omic).name
+    if name1 in (OMIC.transcriptomic.name, OMIC.itranscriptomic.name) and \
+      name2 in (OMIC.proteomic.name, OMIC.iproteomic.name):
+      return [(j, i) for i, j in MARKER_ADT_GENE.items()]
+    if name1 in (OMIC.proteomic.name, OMIC.iproteomic.name) and \
+      name2 in (OMIC.transcriptomic.name, OMIC.itranscriptomic.name):
+      return [(i, j) for i, j in MARKER_ADT_GENE.items()]
+    return []
 
   @classmethod
   def is_omic_type(cls, o):

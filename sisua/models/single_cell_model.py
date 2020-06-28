@@ -27,8 +27,7 @@ from tqdm import tqdm
 from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
-from odin.bay import RandomVariable
-from odin.bay.distributions import concat_distribution
+from odin.bay import RandomVariable, concat_distributions
 from odin.bay.vi import BetaVAE
 from odin.networks import NetworkConfig
 from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
@@ -191,25 +190,25 @@ class SingleCellModel(BetaVAE, Visualizer):
       # multiple outputs
       if isinstance(X[0], (tuple, list)):
         X = tuple([
-            concat_distribution([x[idx] for x in X], \
+            concat_distributions([x[idx] for x in X], \
                                 axis=merging_axis,
                                 name=self.posteriors[idx].name)
             for idx in range(len(X[0]))
         ])
       # single output
       else:
-        X = concat_distribution(X,
+        X = concat_distributions(X,
                                 axis=merging_axis,
                                 name=self.posteriors[0].name)
       # multiple latents
       if isinstance(Z[0], (tuple, list)):
         Z = tuple([
-            concat_distribution([z[idx]
+            concat_distributions([z[idx]
                                  for z in Z], axis=0)
             for idx in range(len(Z[0]))
         ])
       else:
-        Z = concat_distribution(Z, axis=0)
+        Z = concat_distributions(Z, axis=0)
     return X, Z
 
   def fit(self,
@@ -258,21 +257,20 @@ class SingleCellModel(BetaVAE, Visualizer):
                        reduce_latents=lambda *Zs: tf.concat(Zs, axis=1),
                        verbose=True,
                        train_percent=0.8,
+                       test_sco=None,
                        random_state=1) -> Posterior:
     if not self.is_fitted:
       raise RuntimeError("fit() must be called before creating Posterior.")
-    if isinstance(train_percent, Number):
-      if not self.dataset is None:
-        raise ValueError("set_metadata() to track the fitted dataset.")
+    ###
+    if isinstance(test_sco, SingleCellOMIC):
+      test = test_sco
+    elif self.dataset is None:
+      raise ValueError(
+          "Call SingleCellModel.set_metadata() to track the fitted dataset.")
+    else:
       ds = get_dataset(self.dataset)
       _, test = ds.split(train_percent=train_percent, seed=random_state)
-    elif isinstance(train_percent, SingleCellOMIC):
-      test = train_percent
-    else:
-      raise ValueError(
-          "train_percent can be a number or SingleCellOMIC "
-          f"but given {type(train_percent)}"
-      )
+    ###
     return Posterior(scm=self,
                      sco=test,
                      dropout_rate=dropout_rate,
