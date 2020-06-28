@@ -164,6 +164,8 @@ for (path, train_ds, test_ds), post in all_posteriors.items():
   post.save_figures(path, separate_files=True, clear_figures=True, verbose=True)
 
   # post.plot_confusion_matrix('progenitor', 'iprogenitor')
+
+### Examples:
 # python evaluate.py -m sisua -ds1 8kx -ds2 eccx
 # python evaluate.py -m vae -ds1 8kx -ds2 eccx
 # python evaluate.py -m dca -ds1 8kx -ds2 eccx

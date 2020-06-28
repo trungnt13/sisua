@@ -167,7 +167,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                    clustering='louvain',
                    legend=True,
                    dimension_reduction='tsne',
-                   max_scatter_points=-1,
+                   max_scatter_points=5000,
                    ax=None,
                    fig=None,
                    title='',
@@ -196,7 +196,6 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
     max_scatter_points = int(max_scatter_points)
     ## prepare data
     X = self.dimension_reduce(omic, n_components=2, algo=dimension_reduction)
-    n_points = X.shape[0]
     color_name, colors = _process_omics(self,
                                         color_by,
                                         clustering=clustering,
@@ -213,6 +212,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
         colors = colors[ids]
       if markers is not None:
         markers = markers[ids]
+    n_points = X.shape[0]
     ## ploting
     kw = dict(color='b')
     if colors is not None:
@@ -542,7 +542,8 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
             **styles,
             ax=None,
             title=f"[{figname}_x:{omic2.name}_y:{omic1.name}]{title}"))
-    fig.tight_layout(rect=[0.0, 0.02, 1.0, 0.98])
+    with catch_warnings_ignore(UserWarning):
+      fig.tight_layout(rect=[0.0, 0.02, 1.0, 0.98])
     ## store and return
     if return_figure:
       return fig

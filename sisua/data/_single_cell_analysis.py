@@ -1210,6 +1210,8 @@ class _OMICanalyzer(_OMICbase):
 
     def _corr(ids):
       results = []
+      if not isinstance(ids[0], tuple):
+        ids = [ids]
       for i1, i2 in ids:
         y1 = x1[:, i1]
         y2 = x2[:, i2]

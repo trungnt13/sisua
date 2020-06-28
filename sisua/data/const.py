@@ -143,7 +143,7 @@ class OMIC(OrderedFlag):
       return list(MARKER_GENES)
     if name in (OMIC.chromatin.name, OMIC.ichromatin.name):
       return list(MARKER_ATAC)
-    return []
+    return None
 
   def marker_pairs(self, omic) -> List[Tuple[Text]]:
     name1 = self.name
@@ -154,7 +154,7 @@ class OMIC(OrderedFlag):
     if name1 in (OMIC.proteomic.name, OMIC.iproteomic.name) and \
       name2 in (OMIC.transcriptomic.name, OMIC.itranscriptomic.name):
       return [(i, j) for i, j in MARKER_ADT_GENE.items()]
-    return []
+    return None
 
   @classmethod
   def is_omic_type(cls, o):
