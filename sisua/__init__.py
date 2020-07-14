@@ -1,7 +1,9 @@
 from sisua.analysis import Posterior
 from sisua.data import (MARKER_ADT_GENE, MARKER_ADTS, MARKER_ATAC, MARKER_GENES,
-                        get_dataset, get_dataset_meta, OMIC)
+                        OMIC, PROTEIN_PAIR_NEGATIVE, PROTEIN_PAIR_POSITIVE,
+                        get_dataset, get_dataset_meta)
 from sisua.data.single_cell_dataset import SingleCellOMIC
-from sisua.models import (SCALE, SCVI, SISUA, VAE, DeepCountAutoencoder,
+from sisua.data.utils import standardize_protein_name
+from sisua.models import (MISA, SCALE, SCVI, SISUA, VAE, DeepCountAutoencoder,
                           NetworkConfig, RandomVariable, SingleCellModel)
 from sisua.train import SisuaExperimenter

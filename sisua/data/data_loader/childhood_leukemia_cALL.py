@@ -5,9 +5,9 @@ from collections import defaultdict
 
 import numpy as np
 import scanpy as sc
+from bigarray import MmapArray, MmapArrayWriter
 from scipy.io import mmread
 
-from bigarray import MmapArray, MmapArrayWriter
 from odin.utils import md5_checksum, md5_folder, one_hot
 from sisua.data.const import MARKER_GENES
 from sisua.data.path import DATA_DIR
@@ -34,15 +34,19 @@ __all__ = ['read_leukemia_BMMC']
 # Read PRE-T_2 (2748, 33694) int64 max:9810 min:0
 
 
-def _create_sco(X, rowname, colname, labels):
-  sco = SingleCellOMIC(X, cell_id=rowname, gene_id=colname, name="cALL")
+def _create_sco(X, rowname, colname, labels, filtered_genes):
+  sco = SingleCellOMIC(X,
+                       cell_id=rowname,
+                       gene_id=colname,
+                       name=f"cALL{'' if filtered_genes else 'all'}")
   mito = [i for i, gene in enumerate(sco.var_names) if 'MT' == gene[:2]]
   percent_mito = np.sum(sco.X[:, mito], axis=1) / np.sum(sco.X, axis=1)
   sco.obs['percent_mito'] = percent_mito
   # add another omic for labels
   if labels is not None:
-    sco.obs['labels'] = labels
+    sco.obs['individual_labels'] = labels
     labels = [i[:-2] for i in labels]
+    sco.obs['disease_labels'] = labels
     var_names = np.asarray(sorted(np.unique(labels)))
     ids = {j: i for i, j in enumerate(var_names)}
     labels = one_hot(np.asarray([ids[i] for i in labels]), len(var_names))
@@ -132,7 +136,8 @@ def read_leukemia_BMMC(path='~/bio_data/downloads/GSE132509_RAW.tar',
         with open(os.path.join(preprocessed_path, name), 'wb') as f:
           pickle.dump(x, f)
       # extract variables genes
-      sco = _create_sco(data.astype(np.float32), rowname, colname, labels)
+      sco = _create_sco(data.astype(np.float32), rowname, colname, labels,
+                        False)
       ids = sco.obs['percent_mito'] <= 0.08
       sco = sco[ids]
       sc.pp.filter_cells(sco, min_genes=200)
@@ -182,4 +187,4 @@ def read_leukemia_BMMC(path='~/bio_data/downloads/GSE132509_RAW.tar',
     ids = [colids[i] for i in genes]
     X = X[:, ids]
     colname = colname[ids]
-  return _create_sco(X, rowname, colname, labels)
+  return _create_sco(X, rowname, colname, labels, filtered_genes)

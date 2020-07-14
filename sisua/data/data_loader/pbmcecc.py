@@ -89,7 +89,7 @@ def read_PBMCeec(subset='ly',
                        cell_id=ds['X_row'],
                        gene_id=ds['X_col'],
                        omic='transcriptomic',
-                       name=f'ecc{subset}')
+                       name=f"ecc{subset}{'' if filtered_genes else 'all'}")
   sco.add_omic('proteomic', X=ds['y'], var_names=ds['y_col'])
   progenitor = ds['cell_types']
   sco.add_omic(

@@ -264,8 +264,8 @@ def read_leukemia_MixedPhenotypes(filtered_genes=True,
                            cell_id=cell_id,
                            gene_id=rna.genenames,
                            omic=OMIC.transcriptomic,
-                           name='mpalRNA')
-    #
+                           name='mpalRNAall')
+    # loading dataset
     if ignore_na:
       ids = np.logical_not(np.isnan(np.max(X_adt, axis=0)))
       sco.add_omic(OMIC.proteomic, X_adt[:, ids], adt.genenames[ids])

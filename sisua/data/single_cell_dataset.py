@@ -69,13 +69,13 @@ class SingleCellOMIC(_OMICvisualizer):
     >>>               y_train[x_train_train.indices].obs['cellid'])
     """
     self._record('split', locals())
-    assert 0 < train_percent < 1
+    train_percent = np.clip(train_percent, 0., 1.)
     ids = np.random.RandomState(seed=seed).permutation(
         self.n_obs).astype('int32')
-    ntrain = int(train_percent * self.n_obs)
-    train_ids = ids[:ntrain]
-    test_ids = ids[ntrain:]
+    n_train = int(train_percent * self.n_obs)
+    train_ids = ids[:n_train]
+    test_ids = ids[n_train:]
     om = self.copy() if copy else self
-    train = om[train_ids]
-    test = om[test_ids]
+    train = None if len(train_ids) == 0 else om[train_ids]
+    test = None if len(test_ids) == 0 else om[test_ids]
     return train, test

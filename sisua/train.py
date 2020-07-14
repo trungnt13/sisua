@@ -190,42 +190,7 @@ class SisuaExperimenter(Experimenter):
       )
 
   def on_plot(self, cfg, figure_dir):
-    model = self.model
-    sco = self.test
-    omics = sco.omics
-    # plot learning rate
-    model.plot_learning_curves(
-        os.path.join(figure_dir, f'{model.id}_learning_curves.png'),
-        summary_steps=[100, 10],
-        title=f"{model.dataset}_{model.id}",
-    )
-    figure_dir = os.path.join(figure_dir, model.id)
-    if not os.path.exists(figure_dir):
-      os.mkdir(figure_dir)
-    # plot analysis
-    post = Posterior(scm=model,
-                     sco=self.test,
-                     batch_size=16,
-                     sample_shape=10,
-                     verbose=False)
-    # post.plot_scatter('latent', color_by=label_omic, dimension_reduction='umap')
-    # continuous labels
-    if OMIC.proteomic in sco.omics:
-      post.plot_scatter('latent',
-                        color_by='proteomic',
-                        dimension_reduction='tsne')
-      # post.plot_heatmap('transcriptomic', group_by=label_omic, rank_vars=3)
-      # post.plot_violins('transcriptomic', group_by=label_omic, rank_vars=3)
-      # post.plot_correlation_matrix('transcriptomic', label_omic)
-      # post.plot_correlation_scatter('transcriptomic',
-      #                               label_omic,
-      #                               top=3,
-      #                               bottom=3)
-    # categorical labels
-    elif OMIC.celltype in sco.omics:
-      post.plot_distance_heatmap('transcriptomic', group_by='celltype')
-    # post.plot_correlation_matrix()
-    post.save_figures(figure_dir, dpi=80, separate_files=True)
+    pass
 
   def on_compare(self, configs, models, save_path):
     pass
@@ -244,7 +209,12 @@ if __name__ == "__main__":
 # -m -ncpu 4
 # --reset
 
-# model.name=sisua,dca,vae,scvi,scale
-# dataset.name=8kly,8klyall,callx,mpalx,8kx,eccx,vdj1x,vdj4x
-# -m -ncpu 4
+# model.name=sisua,dca,vae,scvi,scale,misa \
+# dataset.name=8kly,8klyall,callx,mpalx,8kx,eccx,vdj1x,vdj4x,pbmcx,cbmcx \
+# -m -ncpu 4 \
+# --reset
+
+# model.name=sisua,dca,vae,scvi \
+# dataset.name=8kly,8klyall,mpalx,8kx,eccx,vdj4x,pbmcx \
+# -m -ncpu 4 \
 # --reset

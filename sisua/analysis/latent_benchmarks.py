@@ -17,7 +17,7 @@ from sklearn.svm import SVC
 from odin import backend as K
 from odin.utils import catch_warnings_ignore, ctext, one_hot
 from odin.visual import plot_colorbar, plot_figure, plot_scatter, to_axis
-from sisua.data.const import (MARKER_ADT_GENE, PROTEIN_PAIR_COMPARISON,
+from sisua.data.const import (MARKER_ADT_GENE, PROTEIN_PAIR_NEGATIVE,
                               UNIVERSAL_RANDOM_SEED)
 from sisua.data.utils import standardize_protein_name
 from sisua.label_threshold import ProbabilisticEmbedding
@@ -413,7 +413,7 @@ def plot_latents_protein_pairs(Z,
     ])
     pairs = [i.split('*') for i in pairs]
   else:
-    for i, j in PROTEIN_PAIR_COMPARISON:
+    for i, j in PROTEIN_PAIR_NEGATIVE:
       if i in labels_index and j in labels_index:
         pairs.append((i, j))
   n_pairs = len(pairs)
@@ -435,23 +435,22 @@ def plot_latents_protein_pairs(Z,
     # normalize again to [-1, 1]
     val = 2 * (val - np.min(val)) / (np.max(val) - np.min(val)) - 1
     # ====== let plotting ====== #
-    plot_scatter(
-        x=Z[:, 0],
-        y=Z[:, 1],
-        val=val,
-        legend_enable=False,
-        color='bwr',
-        size=8,
-        elev=elev,
-        azim=azim,
-        alpha=1.,
-        fontsize=8,
-        grid=False,
-        ax=ax,
-        colorbar=True,
-        colorbar_horizontal=True,
-        colorbar_ticks=[labels_name[0], 'Others', labels_name[1]],
-        title='%s' % ('/'.join(labels_name)))
+    plot_scatter(x=Z[:, 0],
+                 y=Z[:, 1],
+                 val=val,
+                 legend_enable=False,
+                 color='bwr',
+                 size=8,
+                 elev=elev,
+                 azim=azim,
+                 alpha=1.,
+                 fontsize=8,
+                 grid=False,
+                 ax=ax,
+                 colorbar=True,
+                 colorbar_horizontal=True,
+                 colorbar_ticks=[labels_name[0], 'Others', labels_name[1]],
+                 title='%s' % ('/'.join(labels_name)))
   plt.suptitle(title)
   return fig
 
@@ -513,15 +512,15 @@ def plot_latents_binary(Z,
     for i, lab in enumerate(labels_name):
       val = K.log_norm(y[:, i], axis=0)
       plot_scatter(x=Z[:, 0],
-                           y=Z[:, 1],
-                           val=val / np.sum(val),
-                           ax=(nrow, ncol, i + 1),
-                           color=colormap,
-                           size=size,
-                           alpha=0.8,
-                           fontsize=8,
-                           grid=False,
-                           title=lab)
+                   y=Z[:, 1],
+                   val=val / np.sum(val),
+                   ax=(nrow, ncol, i + 1),
+                   color=colormap,
+                   size=size,
+                   alpha=0.8,
+                   fontsize=8,
+                   grid=False,
+                   title=lab)
 
     plt.grid(False)
     # big title

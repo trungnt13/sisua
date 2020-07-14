@@ -133,5 +133,5 @@ def read_CITEseq_PBMC(override=False,
       cell_id=ds['X_row'],
       gene_id=ds['X_col'],
       omic='transcriptomic',
-      name=f"pbmcCITEseq{'_filtered' if filtered_genes else ''}",
+      name=f"pbmcCITEseq{'' if filtered_genes else 'all'}",
   ).add_omic('proteomic', ds['y'], ds['y_col'])

@@ -423,7 +423,7 @@ def read_dataset10x(name,
                        cell_id=metadata['barcodes'],
                        gene_id=var_names,
                        omic=main_omic,
-                       name=dataset_name)
+                       name=f"{dataset_name}{'' if filtered_genes else 'all'}")
   for o in omics:
     if o != main_omic:
       sco.add_omic(omic=o,

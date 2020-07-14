@@ -18,7 +18,7 @@ from odin.utils import as_tuple, catch_warnings_ignore
 from odin.visual import Visualizer, to_axis
 from sisua.data._single_cell_analysis import _OMICanalyzer
 from sisua.data.const import (MARKER_ADT_GENE, MARKER_ADTS, MARKER_ATAC,
-                              MARKER_GENES, OMIC, PROTEIN_PAIR_COMPARISON)
+                              MARKER_GENES, OMIC)
 from sisua.data.utils import is_categorical_dtype
 
 
@@ -45,8 +45,14 @@ def _process_omics(sco, omic, clustering=None, allow_none=False):
   elif omic in sco.omics:
     # binary classes
     if np.all(sco.total_counts(omic).ravel() == 1.):
-      labels = sco.get_var_names(omic)
-      x = np.array([labels[i] for i in np.argmax(sco.get_omic(omic), axis=-1)])
+      label_name = f"{omic}_labels"
+      if label_name in sco.obs: # already stored labels
+        x = sco.obs[label_name]
+      else: # one-hot encoded to labels vector
+        labels = sco.get_var_names(omic)
+        x = np.array([labels[i] for i in np.argmax(sco.get_omic(omic), axis=-1)])
+        sco.obs[label_name] = x
+      omic = label_name
     # Use Louvain community detection
     elif isinstance(clustering, string_types):
       clustering = clustering.lower().strip()
@@ -164,7 +170,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                    X=OMIC.transcriptomic,
                    color_by=OMIC.proteomic,
                    marker_by=None,
-                   clustering='louvain',
+                   clustering='kmeans',
                    legend=True,
                    dimension_reduction='tsne',
                    max_scatter_points=5000,
@@ -244,7 +250,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                            group_by=OMIC.proteomic,
                            groups=None,
                            var_names='auto',
-                           clustering='louvain',
+                           clustering='kmeans',
                            rank_vars=0,
                            dendrogram=False,
                            standard_scale='var',
@@ -309,7 +315,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                    X=OMIC.transcriptomic,
                    group_by=OMIC.transcriptomic,
                    var_names='auto',
-                   clustering='louvain',
+                   clustering='kmeans',
                    rank_genes=0,
                    dendrogram=False,
                    standard_scale='var',
@@ -349,7 +355,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                    group_by=OMIC.proteomic,
                    groups=None,
                    var_names='auto',
-                   clustering='louvain',
+                   clustering='kmeans',
                    rank_vars=0,
                    dendrogram=False,
                    swap_axes=False,
@@ -418,7 +424,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
                             X=OMIC.transcriptomic,
                             group_by=OMIC.transcriptomic,
                             var_names='auto',
-                            clustering='louvain',
+                            clustering='kmeans',
                             cmap='bwr',
                             legend=True,
                             log=True,
@@ -502,7 +508,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
       names2 = np.array([i for i in var_names2 if i in om2_idx])
       matrix = matrix[:, [om2_idx[i] for i in names2]]
     ## find the best diagonal match
-    ids2 = search.diagonal_linear_assignment(matrix)
+    ids2 = search.diagonal_linear_assignment(matrix, nan_policy=0)
     matrix = matrix[:, ids2]
     names2 = names2[ids2].tolist()
     names1 = names1.tolist()

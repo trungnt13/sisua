@@ -545,7 +545,7 @@ class _OMICanalyzer(_OMICbase):
   # ******************** metrics ******************** #
   def neighbors(self,
                 omic=None,
-                n_neighbors=15,
+                n_neighbors=12,
                 n_pcs=100,
                 knn=True,
                 method='umap',
@@ -561,7 +561,7 @@ class _OMICanalyzer(_OMICbase):
     [Haghverdi16]_.
 
     Arguments:
-      n_neighbors : `int` (default=15)
+      n_neighbors : `int` (default=12)
         The size of local neighborhood (in terms of number of neighboring data
          points) used for manifold approximation. Larger values result in more
         global views of the manifold, while smaller values result in more local
@@ -583,7 +583,10 @@ class _OMICanalyzer(_OMICbase):
         Kernel to assign low weights to neighbors more distant than the
         `n_neighbors` nearest neighbor.
       method : {{'umap', 'gauss', `rapids`}}  (default: `'umap'`)
-        for computing connectivities.
+        Use 'umap' [McInnes18]_ or 'gauss' (Gauss kernel following [Coifman05]_
+        with adaptive width [Haghverdi16]_) for computing connectivities.
+        Use 'rapids' for the RAPIDS implementation of UMAP (experimental, GPU
+        only).
       metric : {`str`, `callable`} (default='euclidean')
         A known metric’s name or a callable that returns a distance.
 
@@ -605,16 +608,20 @@ class _OMICanalyzer(_OMICbase):
     omic = OMIC.parse(omic)
     name = f"{omic.name}_neighbors"
     if name not in self.uns:
-      self.dimension_reduce(omic, algo='pca', random_state=random_state)
-      obj = sc.pp.neighbors(self,
-                            n_neighbors=n_neighbors,
-                            knn=knn,
-                            method=method,
-                            metric=metric,
-                            n_pcs=int(n_pcs),
-                            use_rep=omic.name + '_pca',
-                            random_state=random_state,
-                            copy=True)
+      omic_name = omic.name
+      if self.get_dim(omic) > 100:
+        self.dimension_reduce(omic, algo='pca', random_state=random_state)
+        omic_name = omic.name + '_pca'
+      with catch_warnings_ignore(Warning):
+        obj = sc.pp.neighbors(self,
+                              n_neighbors=n_neighbors,
+                              knn=knn,
+                              method=method,
+                              metric=metric,
+                              n_pcs=int(n_pcs),
+                              use_rep=omic_name,
+                              random_state=random_state,
+                              copy=True)
       self.uns[name] = obj.uns['neighbors']
       self.obsp[f"{omic.name}_connectivities"] = obj.obsp['connectivities']
       self.obsp[f"{omic.name}_distances"] = obj.obsp['distances']
@@ -694,12 +701,13 @@ class _OMICanalyzer(_OMICbase):
     ## fit KNN
     elif algo == 'knn':
       connectivities, distances, nn = self.neighbors(omic)
-      n_neighbors = nn['params']['n_neighbors']
+      n_neighbors = min(nn['params']['n_neighbors'],
+                        np.min(np.sum(connectivities > 0, axis=1)))
       model = SpectralClustering(n_clusters=n_clusters,
                                  random_state=random_state,
                                  n_init=n_init,
                                  affinity='precomputed_nearest_neighbors',
-                                 n_neighbors=n_neighbors - 1)
+                                 n_neighbors=n_neighbors)
       labels = model.fit_predict(connectivities)
     else:
       raise NotImplementedError(algo)

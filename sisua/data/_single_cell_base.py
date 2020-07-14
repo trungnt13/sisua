@@ -325,7 +325,9 @@ class _OMICbase(sc.AnnData, MD5object):
       }
     return self.uns[name]
 
-  def get_var(self, omic) -> pd.DataFrame:
+  def get_var(self, omic=None) -> pd.DataFrame:
+    if omic is None:
+      omic = self.current_omic
     omic = OMIC.parse(omic)
     for om in list(omic):
       name = om.name + '_var'
@@ -339,7 +341,9 @@ class _OMICbase(sc.AnnData, MD5object):
       omic = self.current_omic
     return self.get_var(omic).index.values
 
-  def get_dim(self, omic):
+  def get_dim(self, omic=None):
+    if omic is None:
+      omic = self.current_omic
     return self.numpy(omic=omic).shape[1]
 
   def get_omic(self, omic):

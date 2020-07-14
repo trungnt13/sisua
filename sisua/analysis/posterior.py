@@ -45,7 +45,8 @@ from sisua.analysis.latent_benchmarks import (clustering_scores,
                                               plot_latents_protein_pairs,
                                               streamline_classifier)
 from sisua.data import (MARKER_ADT_GENE, MARKER_ADTS, MARKER_ATAC, MARKER_GENES,
-                        OMIC, SingleCellOMIC, apply_artificial_corruption,
+                        OMIC, PROTEIN_PAIR_NEGATIVE, PROTEIN_PAIR_POSITIVE,
+                        SingleCellOMIC, apply_artificial_corruption,
                         get_dataset)
 from sisua.data.path import EXP_DIR
 
@@ -330,12 +331,17 @@ class Posterior(Visualizer):
     # create the Criticizer
     if key not in self._criticizers:
       # check the factors is valid
-      factors = sco.get_omic(factor_omic)
+      factors = sco.numpy(factor_omic)
       factor_names = sco.get_var_names(factor_omic)
-      if not is_discrete(factors):
+      # perprocessing
+      if np.all(np.sum(factors, axis=1) == 1):
+        factors = np.argmax(factors, axis=1)[:, np.newaxis]
+        factor_names = np.asarray([factor_omic.name])
+      elif not is_discrete(factors):
         if self.verbose:
           print(f"Discretizing '{factor_omic.name}': {n_bins} - {strategy}")
         factors = discretizing(factors, n_bins=int(n_bins), strategy=strategy)
+      # only valid factors with > 1 classes
       ids = [len(np.unique(i)) > 1 for i in factors.T]
       if not any(ids):  # no valid factor found
         print(f"Ignore factor: {factor_omic.name}")
@@ -346,6 +352,7 @@ class Posterior(Visualizer):
       crt = Criticizer(vae=self.scm,
                        latent_indices=latent_indices,
                        random_state=self.rand.randint(1e8))
+      crt.factor_omic: OMIC = factor_omic
       with catch_warnings_ignore(UserWarning):
         latents = self.omics_data[('latent', 'corrupted')]
         crt.sample_batch(latents=latents,
@@ -663,7 +670,7 @@ class Posterior(Visualizer):
 
   def plot_disentanglement(self,
                            factor_omic='proteomic',
-                           factor_names=MARKER_ADTS,
+                           factor_names='auto',
                            n_bins_factors=10,
                            n_bins_latents=80,
                            corr_type='spearman',
@@ -671,6 +678,8 @@ class Posterior(Visualizer):
                            latent_indices=None):
     r""" Disentanglement plotting """
     factor_omic = OMIC.parse(factor_omic)
+    if isinstance(factor_names, string_types) and factor_names == 'auto':
+      factor_names = factor_omic.markers
     if factor_names is not None:
       var_names = self.dataset.get_var_names(factor_omic)
       org = factor_names
@@ -691,7 +700,7 @@ class Posterior(Visualizer):
 
   def plot_disentanglement_scatter(self,
                                    factor_omic='proteomic',
-                                   pairs=None,
+                                   pairs=PROTEIN_PAIR_NEGATIVE,
                                    corr_matrix=None,
                                    n_pairs=10,
                                    latents_per_pair=5,
@@ -704,8 +713,11 @@ class Posterior(Visualizer):
     Arguments:
       factor_omic : `OMIC`, the OMIC used as groundtruth factors
       pairs : list of `(factor_name1, factor_name2)` (optional)
+        This determines which pairs will be plotted.
       corr_matrix : correlation matrix between `factor_omic` and the latents,
         dimension must be `[n_factor_omic, n_latents]`.
+        This determines which latents dimension will be selected for plotting
+        the pairs.
       magnify : a Scalar (default: 1)
         a constant for magnifying the color divergence of
         the `factor_omic`, the higher, small differences lead to stronger
@@ -971,7 +983,7 @@ class Posterior(Visualizer):
       matrix = np.empty(shape=(len(var1), len(var2)), dtype=np.float64)
       for i1, i2, p, s in cor:
         matrix[i1, i2] = p if score_type == 'pearson' else s
-    elif score_type == 'mutual_info':
+    elif score_type == 'mi':
       matrix = sco.get_mutual_information(omic1, omic2)
     elif score_type == 'importance':
       matrix = sco.get_importance_matrix(omic1, omic2)
@@ -982,7 +994,7 @@ class Posterior(Visualizer):
       if name1 in var1 and name2 in var2:
         i1 = var1[name1]
         i2 = var2[name2]
-        scores[f"{name1}_{name2}"] = matrix[i1, i2]
+        scores[f"{score_type}_{name1}_{name2}"] = matrix[i1, i2]
     return scores
 
   def cal_pearson(self,
@@ -1018,7 +1030,7 @@ class Posterior(Visualizer):
                              var_names2=MARKER_ADT_GENE.keys()):
     r""" Return a dictionary of Mutual Information between variables' pair in
     `var_names1` and `var_names2` """
-    return self._matrix_scores(score_type='mutual_info',
+    return self._matrix_scores(score_type='mi',
                                omic1=omic1,
                                omic2=omic2,
                                var_names1=var_names1,
@@ -1042,40 +1054,48 @@ class Posterior(Visualizer):
                                var_names2=var_names2)
 
   ######## Disentanglement metrics
-  def cal_betavae(self):
+  def cal_betavae(self, predict_factor=False):
     r""" BetaVAE score """
     scores = {}
     for key, crt in self._criticizers.items():
       crt: Criticizer
+      if not predict_factor and crt.factor_omic.is_imputed:
+        continue
       for name, s in crt.cal_betavae_score(n_samples=10000,
                                            verbose=self.verbose).items():
         scores[f"{key}_{name}"] = s
     return scores
 
-  def cal_factorvae(self):
+  def cal_factorvae(self, predict_factor=False):
     r""" FactorVAE score """
     scores = {}
     for key, crt in self._criticizers.items():
       crt: Criticizer
+      if not predict_factor and crt.factor_omic.is_imputed:
+        continue
       for name, s in crt.cal_factorvae_score(n_samples=10000,
                                              verbose=self.verbose).items():
         scores[f"{key}_{name}"] = s
     return scores
 
-  def cal_mig(self):
+  def cal_mig(self, predict_factor=False):
     r""" Mutual Information Gap """
     scores = {}
     for key, crt in self._criticizers.items():
       crt: Criticizer
+      if not predict_factor and crt.factor_omic.is_imputed:
+        continue
       for name, s in crt.cal_mutual_info_gap(mean=True).items():
         scores[f"{key}_{name}"] = s
     return scores
 
-  def cal_dci(self):
+  def cal_dci(self, predict_factor=False):
     r""" Disentanglement, Completeness, Informativeness score"""
     scores = {}
     for key, crt in self._criticizers.items():
       crt: Criticizer
+      if not predict_factor and crt.factor_omic.is_imputed:
+        continue
       for name, s in crt.cal_dci_scores(mean=True).items():
         scores[f"{key}_{name}"] = s
     return scores

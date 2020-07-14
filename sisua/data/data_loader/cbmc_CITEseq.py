@@ -103,7 +103,7 @@ def read_CITEseq_CBMC(filtered_genes=True, override=False, verbose=True):
       cell_id=ds['X_row'],
       gene_id=ds['X_col'],
       omic='transcriptomic',
-      name=f"cbmcCITEseq{'_filtered' if filtered_genes else ''}",
+      name=f"cbmcCITEseq{'' if filtered_genes else 'all'}",
   ).add_omic('proteomic', ds['y'], ds['y_col'])
   if filtered_genes:
     with open(os.path.join(preprocessed_path, 'top_genes'), 'rb') as f:

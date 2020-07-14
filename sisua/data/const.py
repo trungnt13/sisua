@@ -10,14 +10,63 @@ UNIVERSAL_RANDOM_SEED = 5218
 # Choose 3D or 2D visualization here
 TSNE_DIM = 2
 
-# This contains pair of protein markers that
-# should not appear together, hence, good for
-# inspecting the biological plausibility of the model
-PROTEIN_PAIR_COMPARISON = [
-    ('CD8', 'CD4'),
-    ('CD56', 'NKT'),
-    ('CD45RA', 'CD45RO'),
-    ('TIGIT', 'CD127'),
+# This contains representative pairs of protein markers
+# 100 pairs
+PROTEIN_PAIR_POSITIVE = [
+    ('CD3', 'CD4'), ('CD14', 'CD4'), ('CD19', 'CD45RA'), ('CD14', 'CD19'),
+    ('CD3', 'CD8'), ('IgG1', 'IgG2a'), ('IgG2a', 'IgG2b'), ('IgG1', 'IgG2b'),
+    ('CD45RO', 'PD-1'), ('CD14', 'IgG2b'), ('CD19', 'IgG2a'), ('CD14', 'IgG2a'),
+    ('CD19', 'IgG1'), ('CD19', 'IgG2b'), ('CD14', 'CD8'), ('CD14', 'IgG1'),
+    ('CD4', 'IgG2a'), ('CCR7', 'CD19'), ('CD4', 'IgG1'), ('CCR7', 'CD4'),
+    ('CD4', 'IgG2b'), ('IgG1', 'PD-1'), ('CD16', 'CD56'), ('CCR7', 'CD14'),
+    ('IgG2a', 'PD-1'), ('CD14', 'PD-1'), ('CD4', 'PD-1'), ('CD19', 'PD-1'),
+    ('CCR7', 'IgG2a'), ('CCR7', 'CD45RA'), ('IgG2b', 'PD-1'),
+    ('CD16', 'CD45RA'), ('CD45RA', 'CD56'), ('CD14', 'CD3'), ('CCR7', 'IgG1'),
+    ('CD11c', 'CD14'), ('CCR7', 'IgG2b'), ('CCR7', 'CD3'), ('CD19', 'CD4'),
+    ('CD45RO', 'IgG1'), ('CD16', 'CD19'), ('CD19', 'CD8'), ('CD14', 'CD45RO'),
+    ('CD45RA', 'CD8'), ('CD127', 'CD3'), ('CD45RA', 'IgG2a'), ('CD8', 'PD-1'),
+    ('CD4', 'CD45RO'), ('CD127', 'CD4'), ('CD8', 'IgG2a'), ('CD8', 'IgG1'),
+    ('CD45RO', 'CD8'), ('CD11c', 'CD16'), ('CD45RA', 'IgG2b'), ('CD3', 'IgG2a'),
+    ('CD14', 'HLA-DR'), ('HLA-DR', 'IgG1'), ('HLA-DR', 'PD-1'), ('CD3', 'IgG1'),
+    ('CCR7', 'HLA-DR'), ('CD8', 'HLA-DR'), ('CD19', 'HLA-DR'), ('CD19', 'CD56'),
+    ('HLA-DR', 'IgG2a'), ('CD3', 'CD45RO'), ('CCR7', 'CD8'), ('CD8', 'IgG2b'),
+    ('CD3', 'PD-1'), ('CD3', 'IgG2b'), ('CD10', 'CD34'), ('CD45RO', 'HLA-DR'),
+    ('CD14', 'CD16'), ('HLA-DR', 'IgG2b'), ('CD2', 'CD3'), ('CCR7', 'PD-1'),
+    ('CD4', 'HLA-DR'), ('CD25', 'CD45RO'), ('CD25', 'PD-1'), ('CD56', 'TIGIT'),
+    ('CCR7', 'CD34'), ('CD16', 'TIGIT'), ('CD45RA', 'IgG1'), ('CD127', 'CD28'),
+    ('CD16', 'CD34'), ('CCR7', 'CD10'), ('CCR5', 'CD10'), ('CD28', 'CD4'),
+    ('CD27', 'CD28'), ('CCR7', 'CD16'), ('CD34', 'CD56'), ('CD11c', 'CD56'),
+    ('PD-1', 'TIGIT'), ('CCR5', 'CCR7'), ('CD3', 'CD45RA'), ('CD11c', 'CD34'),
+    ('CD3', 'HLA-DR'), ('CD15', 'IgG2a'), ('CD11c', 'CD8'), ('CD14', 'CD25'),
+    ('CD2', 'CD8')
+]
+PROTEIN_PAIR_NEGATIVE = [
+    ('CD45RA', 'CD45RO'), ('CD3', 'CD56'), ('CD16', 'CD3'), ('CD4', 'CD56'),
+    ('CD127', 'CD45RA'), ('CD45RA', 'PD-1'), ('CD19', 'CD2'), ('CD127', 'CD56'),
+    ('CD11b', 'CD27'), ('CD11c', 'CD3'), ('CD11b', 'CD28'), ('CD127', 'CD16'),
+    ('CD16', 'CD4'), ('CD4', 'CD45RA'), ('CD127', 'TIGIT'), ('CD11b', 'CD127'),
+    ('CD11c', 'CD2'), ('CD2', 'CD27'), ('CD28', 'CD8'), ('CD2', 'CD45RA'),
+    ('CD11b', 'CD4'), ('CD127', 'CD14'), ('CD3', 'TIGIT'), ('CD28', 'CD45RA'),
+    ('CD127', 'CD19'), ('CD4', 'CD8'), ('CD27', 'CD8'), ('CD11b', 'CD3'),
+    ('CD11b', 'CD5'), ('CD2', 'CD62L'), ('CD2', 'CD31'), ('CD2', 'PD-1;CD279'),
+    ('CD2', 'CD69'), ('CD2', 'MHCII'), ('CD5', 'CD56'), ('CD25', 'CD45RA'),
+    ('CD16', 'CD2'), ('CD4', 'TIGIT'), ('CCR7', 'CD2'), ('CD45RA', 'CD5'),
+    ('CD2', 'CD77'), ('CD26', 'CD8'), ('CD5', 'HLA-A'), ('CD2', 'HLA-A'),
+    ('CD44', 'CD45RA'), ('CD5', 'CD7'), ('CD31', 'CD5'), ('CD10', 'CD45'),
+    ('CD31', 'CD44'), ('CD5', 'CD8'), ('CD34', 'CD45'), ('CD31', 'CD4'),
+    ('CD5', 'CD77'), ('CD27', 'CD56'), ('CD11b', 'CD26'), ('CD11b', 'CD44'),
+    ('CD27', 'HLA-A'), ('CD8', 'PD-1;CD279'), ('CD38', 'CD90'),
+    ('CD7', 'MHCII'), ('CD366', 'CD5'), ('CD278', 'HLA-DR'), ('CD11b', 'CD278'),
+    ('CD366', 'CD44'), ('CD2', 'CD66b'), ('CD127', 'HLA-DR'), ('CD34', 'CD4'),
+    ('CD28', 'HLA-DR'), ('CD27', 'HLA-DR'), ('CD3', 'CD69'), ('CD3', 'CD366'),
+    ('CD8', 'PD1;CD279'), ('CD44', 'CD7'), ('CD278', 'CD86'), ('CD19', 'CD5'),
+    ('CD27', 'CD45RA'), ('CD44', 'CD77'), ('CD62L', 'CD8'), ('CD27', 'MHCII'),
+    ('CD2', 'CD28'), ('CD3', 'CD86'), ('CD2', 'CD366'), ('CD44', 'CD56'),
+    ('CD26', 'CD45RA'), ('CD127', 'MHCII'), ('CD5', 'MHCII'), ('CD16', 'CD27'),
+    ('CD3', 'CD34'), ('CD127', 'CD86'), ('CD16', 'CD5'), ('CD28', 'CD86'),
+    ('CD27', 'CD86'), ('CD28', 'CD56'), ('CD2', 'LAMP1'), ('CD14', 'CD27'),
+    ('CD127', 'CD2'), ('CD14', 'CD278'), ('CCR7', 'CD44'), ('CD16', 'CD44'),
+    ('CD2', 'CD34')
 ]
 
 # Mapping from protein to gene expression
@@ -114,7 +163,7 @@ class OMIC(OrderedFlag):
   celltype = 'celltype'
   disease = 'disease'
   progenitor = 'progenitor'
-  pmhc = 'pmhc' # peptide - major histocompatibility complex
+  pmhc = 'pmhc'  # peptide - major histocompatibility complex
   # reconstructed
   ochromatin = 'ochromatin'
   otranscriptomic = 'otranscriptomic'
@@ -135,7 +184,17 @@ class OMIC(OrderedFlag):
   latent = 'latent'
 
   @property
+  def is_imputed(self):
+    r""" Return True if the OMIC type is imputation """
+    if self in (OMIC.igenomic, OMIC.ichromatin, OMIC.itranscriptomic,
+                OMIC.iproteomic, OMIC.icelltype, OMIC.idisease,
+                OMIC.iprogenitor, OMIC.ipmhc):
+      return True
+    return False
+
+  @property
   def markers(self) -> List[Text]:
+    r""" Return list of all marker variables' name """
     name = self.name
     if name in (OMIC.proteomic.name, OMIC.iproteomic.name):
       return list(MARKER_ADTS)

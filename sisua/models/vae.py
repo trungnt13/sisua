@@ -45,7 +45,7 @@ class SISUA(MultitaskVAE, SingleCellModel):
 
 
 class MISA(SISUA):
-  r""" MIxture labels for Semi-supervised Autoencoder
+  r""" MIxture of labels for Semi-supervised Autoencoder
 
   Example:
   ```

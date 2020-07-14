@@ -41,12 +41,6 @@ variables:
   celltype:
     posterior: 'onehot'
     kwargs: {}
-  disease:
-    posterior: 'onehot'
-    kwargs: {}
-  progenitor:
-    posterior: 'onehot'
-    kwargs: {}
 
 train:
   optimizer: adam
