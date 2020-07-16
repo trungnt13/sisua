@@ -38,7 +38,7 @@ def get_dataset_meta():
   from sisua.data.data_loader.pbmcecc import read_PBMCeec
   from sisua.data.data_loader.centenarian import read_centenarian
   from sisua.data.utils import standardize_protein_name
-  from sisua.data.data_loader.leukemia_multiomics import read_leukemia_MixedPhenotypes
+  from sisua.data.data_loader.mixed_phenotype_acute_leukemia import read_leukemia_MixedPhenotypes
   from sisua.data.experimental_data.pbmc_cross_datasets import read_PBMC_crossdataset
   data_meta = {
       # ====== pbmc 8k ====== #

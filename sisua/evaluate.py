@@ -2,7 +2,11 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import shutil
+import sys
 import traceback
+from io import StringIO
+from itertools import product
+from multiprocessing import Process
 
 import numpy as np
 import tensorflow as tf
@@ -22,104 +26,13 @@ os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 tf.random.set_seed(1)
 np.random.seed(1)
 
-# ===========================================================================
-# Arguments
-# ===========================================================================
-args = ArgController(\
-).add("model", "The model alias" \
-).add("ds1", "The first dataset", "eccx" \
-).add("ds2", "The second dataset, if empty, only analyze the first one", "" \
-).add("-bs", "batch size", 4 \
-).add("--override", "remove exists folders", False \
-).add("--score", "re-calculating the model scores", False \
-).add("--plot", "plotting the analysis", False \
-).parse()
-
-MODEL = str(args.model)
-DS1 = str(args.ds1)
-DS2 = str(args.ds2)
-BATCH_SIZE = int(args.bs)
-assert len(DS1) > 0, "-ds1 option for the first dataset must be provided."
-
-SCORE = args.score
-PLOT = args.plot
-
-if not any([SCORE, PLOT]):
-  SCORE = True
-  PLOT = True
-print("Scoring :", SCORE)
-print("Plotting:", PLOT)
-######## paths
-se = SisuaExperimenter().eval_mode()
-result_dir = se.get_result_dir()
-
-path1 = os.path.join(result_dir, f"{MODEL}_{DS1}")
-# train on ds1, test on ds2
-path12 = os.path.join(result_dir, f"{MODEL}_{DS1}_{DS2}")
-# train on ds2, test on ds1
-path21 = os.path.join(result_dir, f"{MODEL}_{DS2}_{DS1}")
-
-if args.override:
-  for p in [path1, path12, path21]:
-    if os.path.exists(p):
-      print(f"Override path '{p}'")
-      shutil.rmtree(p)
-
-if not os.path.exists(path1):
-  os.makedirs(path1)
-if len(DS2) > 0:
-  if not os.path.exists(path12):
-    os.makedirs(path12)
-  if not os.path.exists(path21):
-    os.makedirs(path21)
-
-# ===========================================================================
-# Load the model and dataset
-# ===========================================================================
-hash1, cfg1, m1 = se.get_models(f"dataset.name={DS1} model.name={MODEL}",
-                                load_models=True,
-                                return_hash=True)
-test1: SingleCellOMIC = m1.test
-vae1: SingleCellModel = m1.model
-is_semi = vae1.is_semi_supervised
-
-if len(DS2) > 0:
-  hash2, cfg2, m2 = se.get_models(f"dataset.name={DS2} model.name={MODEL}",
-                                  load_models=True,
-                                  return_hash=True)
-  test2: SingleCellOMIC = m2.test
-  vae2: SingleCellModel = m2.model
-else:
-  test2 = None
-  vae2 = None
-  cfg2 = None
-  hash2 = None
-
-# ===========================================================================
-# Create the posterior
-# ===========================================================================
-kw = dict(batch_size=BATCH_SIZE, verbose=True)
-# mapping from:
-# tuple (save_path, train_dsname, test_dsname) -> SingleCellModel
-all_posteriors = {}
-if vae2 is None:
-  post = Posterior(vae1, test1, name=f"{MODEL}_{DS1}", **kw)
-  all_posteriors[(path1, DS1, DS1)] = post
-else:
-  all_posteriors[(path12, DS1, DS2)] = Posterior(vae1,
-                                                 test2,
-                                                 name=f"{MODEL}_{DS1}_{DS2}",
-                                                 **kw)
-  all_posteriors[(path21, DS2, DS1)] = Posterior(vae2,
-                                                 test1,
-                                                 name=f"{MODEL}_{DS2}_{DS1}",
-                                                 **kw)
+SE = SisuaExperimenter().eval_mode()
 
 
 # ===========================================================================
 # Helper
 # ===========================================================================
-def scoring(path: str, train_ds: str, test_ds: str, post: Posterior):
+def scoring(post: Posterior, path: str, train_ds: str, test_ds: str):
   name = os.path.basename(path)
   scores = dict(name=name)
   # incompatible shape
@@ -133,10 +46,10 @@ def scoring(path: str, train_ds: str, test_ds: str, post: Posterior):
   scores.update(post.cal_mutual_information())
   scores.update(post.cal_pearson())
   scores.update(post.cal_spearman())
-  se.write(table=f"scores_{test_ds}", unique='name', replace=True, **scores)
+  SE.write(table=f"scores_{test_ds}", unique='name', replace=True, **scores)
 
 
-def plotting(path: str, train_ds: str, test_ds: str, post: Posterior):
+def plotting(post: Posterior, path: str, train_ds: str, test_ds: str):
   input_omics = [OMIC.parse(i) for i in post.input_omics]
   output_omics = [OMIC.parse(i) for i in post.output_omics]
   _save = lambda: post.save_figures(
@@ -223,26 +136,154 @@ def plotting(path: str, train_ds: str, test_ds: str, post: Posterior):
 # ===========================================================================
 # Evaluating
 # ===========================================================================
-for (path, train_ds, test_ds), post in all_posteriors.items():
-  print(f"Evaluate model:'{MODEL}' train:'{train_ds}' test:'{test_ds}', "
-        f"save results at: '{path}'")
-  post: Posterior
-  name = os.path.basename(path)
-  with catch_warnings_ignore(UserWarning):
-    ### calculateing the scores
-    if SCORE:
-      try:
-        scoring(path, train_ds, test_ds, post)
-      except Exception as e:
-        traceback.print_exc()
-        print(e)
-    ### plotting the figures
-    if PLOT:
-      try:
-        plotting(path, train_ds, test_ds, post)
-      except Exception as e:
-        traceback.print_exc()
-        print(e)
+def main(model,
+         ds1,
+         ds2,
+         batch_size,
+         score_enable,
+         plot_enable,
+         override=False):
+  print("Start evaluation:")
+  print(f" - model     : {model}")
+  print(f" - dataset1  : {ds1}")
+  print(f" - dataset2  : {ds2}")
+  print(f" - batch_size: {batch_size}")
+  print(f" - override  : {override}")
+  print(f" - plot:{plot_enable} score:{score_enable}")
+  result_dir = SE.get_result_dir()
+  path1 = os.path.join(result_dir, f"{model}_{ds1}")
+  # train on ds1, test on ds2
+  path12 = os.path.join(result_dir, f"{model}_{ds1}_{ds2}")
+  # train on ds2, test on ds1
+  path21 = os.path.join(result_dir, f"{model}_{ds2}_{ds1}")
+  # overriding exist paths
+  if override:
+    for p in [path1, path12, path21]:
+      if os.path.exists(p):
+        print(f"Override path '{p}'")
+        shutil.rmtree(p)
+  if not os.path.exists(path1):
+    os.makedirs(path1)
+  # cross datasets
+  if len(ds2) > 0:
+    if not os.path.exists(path12):
+      os.makedirs(path12)
+    if not os.path.exists(path21):
+      os.makedirs(path21)
+  ### Load the model and dataset
+  hash1, cfg1, m1 = SE.get_models(f"dataset.name={ds1} model.name={model}",
+                                  load_models=True,
+                                  return_hash=True)
+  test1: SingleCellOMIC = m1.test
+  vae1: SingleCellModel = m1.model
+  is_semi = vae1.is_semi_supervised
+  if len(ds2) > 0:
+    hash2, cfg2, m2 = SE.get_models(f"dataset.name={ds2} model.name={model}",
+                                    load_models=True,
+                                    return_hash=True)
+    test2: SingleCellOMIC = m2.test
+    vae2: SingleCellModel = m2.model
+  else:
+    test2 = None
+    vae2 = None
+    cfg2 = None
+    hash2 = None
+  # Create the posterior
+  kw = dict(batch_size=batch_size, verbose=True)
+  # mapping from:
+  # tuple (save_path, train_dsname, test_dsname) -> SingleCellModel
+  all_posteriors = {}
+  if vae2 is None:
+    post = Posterior(vae1, test1, name=f"{model}_{ds1}", **kw)
+    all_posteriors[(path1, ds1, ds1)] = post
+  else:
+    all_posteriors[(path12, ds1, ds2)] = Posterior(vae1,
+                                                   test2,
+                                                   name=f"{model}_{ds1}_{ds2}",
+                                                   **kw)
+    all_posteriors[(path21, ds2, ds1)] = Posterior(vae2,
+                                                   test1,
+                                                   name=f"{model}_{ds2}_{ds1}",
+                                                   **kw)
+  ### running the evaluation
+  for (path, train_ds, test_ds), post in all_posteriors.items():
+    print(f"Evaluate model:'{model}' train:'{train_ds}' test:'{test_ds}', "
+          f"save results at: '{path}'")
+    post: Posterior
+    name = os.path.basename(path)
+    with catch_warnings_ignore(UserWarning):
+      # calculateing the scores
+      if score_enable:
+        scoring(post, path, train_ds, test_ds)
+      # plotting the figures
+      if plot_enable:
+        plotting(post, path, train_ds, test_ds)
+
+
+# ===========================================================================
+# Main
+# ===========================================================================
+if __name__ == "__main__":
+  args = ArgController(\
+  ).add("model", "The model alias, multiple model separated by comma" \
+  ).add("ds1", "The first dataset", "eccx" \
+  ).add("-ds2", "The second dataset, if empty, only analyze the first one", "" \
+  ).add("-bs", "batch size", 4 \
+  ).add("--score", "re-calculating the model scores", False \
+  ).add("--plot", "plotting the analysis", False \
+  ).add("--override", "remove exists folders", False \
+  ).parse()
+  # preprocess the arguments
+  models = args.model.split(",")
+  ds1s = args.ds1.split(",")
+  ds2s = args.ds2.split(",")
+  assert len(ds1s) > 0 and len(ds1s[0])> 0,\
+    "-ds1 option for the first dataset must be provided."
+  # evaluation modes
+  plot = bool(args.plot)
+  score = bool(args.score)
+  if not (plot or score):
+    plot = True
+    score = True
+
+  def _eval_fn(model_name, ds1_name, ds2_name):
+    try:
+      main(model=model_name,
+           ds1=ds1_name,
+           ds2=ds2_name,
+           batch_size=int(args.bs),
+           score_enable=score,
+           plot_enable=plot,
+           override=bool(args.override))
+    except Exception as e:
+      text = StringIO()
+      traceback.print_exception(*sys.exc_info(),
+                                limit=None,
+                                file=text,
+                                chain=True)
+      text.seek(0)
+      text = text.read().strip()
+      text += f"\n{e}"
+      SE.write_error(traceback=text,
+                     method_name="evaluate",
+                     config=f"model:{model_name} ds1:{ds1_name} ds2:{ds2_name}")
+  # iterate over all possibility
+  configs = list(
+      set([(m, d1, "" if d1 == d2 else d2)
+           for m, d1, d2 in product(models, ds1s, ds2s)]))
+  np.random.shuffle(configs)
+  print(f"Running {len(configs)} configurations:")
+  for cfg in configs:
+    print(f" - {', '.join(cfg)}")
+  proc = [Process(target=_eval_fn, args=(m, d1, d2)) for m, d1, d2 in configs]
+  for p in proc:
+    try:
+      p.start()
+      p.join()
+      if p.is_alive():
+        p.terminate()
+    except Exception as e:
+      print(e)
 
 ### Examples:
 # python evaluate.py sisua -ds1 8kx

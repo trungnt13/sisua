@@ -446,7 +446,8 @@ class Posterior(Visualizer):
     """
     X = OMIC.parse(X)
     color_by = OMIC.parse(color_by)
-    title = f"scatter_{X.name}_{color_by.name}"
+    title = f"scatter_{X.name}_{color_by.name}_" + \
+      f"{clustering.lower()}_{dimension_reduction.lower()}"
     fig = plt.figure(figsize=(8, 8))
     self.dataset.plot_scatter(X=X,
                               color_by=color_by,

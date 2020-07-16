@@ -46,11 +46,12 @@ def _process_omics(sco, omic, clustering=None, allow_none=False):
     # binary classes
     if np.all(sco.total_counts(omic).ravel() == 1.):
       label_name = f"{omic}_labels"
-      if label_name in sco.obs: # already stored labels
+      if label_name in sco.obs:  # already stored labels
         x = sco.obs[label_name]
-      else: # one-hot encoded to labels vector
+      else:  # one-hot encoded to labels vector
         labels = sco.get_var_names(omic)
-        x = np.array([labels[i] for i in np.argmax(sco.get_omic(omic), axis=-1)])
+        x = np.array(
+            [labels[i] for i in np.argmax(sco.get_omic(omic), axis=-1)])
         sco.obs[label_name] = x
       omic = label_name
     # Use Louvain community detection
@@ -508,7 +509,10 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
       names2 = np.array([i for i in var_names2 if i in om2_idx])
       matrix = matrix[:, [om2_idx[i] for i in names2]]
     ## find the best diagonal match
-    ids2 = search.diagonal_linear_assignment(matrix, nan_policy=0)
+    if is_marker_pairs:
+      ids2 = list(range(len(names2)))
+    else:
+      ids2 = search.diagonal_linear_assignment(matrix, nan_policy=0)
     matrix = matrix[:, ids2]
     names2 = names2[ids2].tolist()
     names1 = names1.tolist()
@@ -517,19 +521,20 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
 
     ## helper for marking the marker
     def _mark(ax):
-      if is_marker_pairs:
-        for v1, v2 in zip(var_names1, var_names2):
-          x = names2.index(v2)
-          y = names1.index(v1)
-          ax.text(x + 0.02,
-                  y + 0.03,
-                  s='X',
-                  horizontalalignment='center',
-                  verticalalignment='center',
-                  fontsize=88 / np.log1p(max(n1, n2)),
-                  color='magenta',
-                  alpha=0.8,
-                  weight='regular')
+      # row is yaxis and col is xaxis
+      for y, row in enumerate(matrix):
+        # sort descending order
+        order = np.argsort(row)[::-1]
+        x = order[0]
+        ax.text(x + 0.02,
+                y + 0.03,
+                s=f"{matrix[y, x]:.2f}",
+                horizontalalignment='center',
+                verticalalignment='center',
+                fontsize=32 / np.log1p(max(n1, n2)),
+                color='magenta',
+                alpha=0.8,
+                weight='regular')
 
     ## plotting
     styles = dict(cmap="bwr",

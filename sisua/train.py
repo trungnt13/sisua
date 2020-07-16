@@ -214,7 +214,7 @@ if __name__ == "__main__":
 # -m -ncpu 4 \
 # --reset
 
-# model.name=sisua,dca,vae,scvi \
+# model.name=fvae,sisua,dca,vae,scvi \
 # dataset.name=8kly,8klyall,mpalx,8kx,eccx,vdj4x,pbmcx \
 # -m -ncpu 4 \
 # --reset
