@@ -198,13 +198,13 @@ class SingleCellModel(BetaVAE, Visualizer):
       # single output
       else:
         X = concat_distributions(X,
-                                axis=merging_axis,
-                                name=self.posteriors[0].name)
+                                 axis=merging_axis,
+                                 name=self.posteriors[0].name)
       # multiple latents
       if isinstance(Z[0], (tuple, list)):
         Z = tuple([
             concat_distributions([z[idx]
-                                 for z in Z], axis=0)
+                                  for z in Z], axis=0)
             for idx in range(len(Z[0]))
         ])
       else:
@@ -249,6 +249,7 @@ class SingleCellModel(BetaVAE, Visualizer):
     return name.lower()
 
   def create_posterior(self,
+                       test_sco: SingleCellOMIC = None,
                        dropout_rate=0.2,
                        retain_rate=0.2,
                        corrupt_distribution='binomial',
@@ -257,8 +258,8 @@ class SingleCellModel(BetaVAE, Visualizer):
                        reduce_latents=lambda *Zs: tf.concat(Zs, axis=1),
                        verbose=True,
                        train_percent=0.8,
-                       test_sco=None,
                        random_state=1) -> Posterior:
+    r""" Create a `Posterior` object for evaluation """
     if not self.is_fitted:
       raise RuntimeError("fit() must be called before creating Posterior.")
     ###

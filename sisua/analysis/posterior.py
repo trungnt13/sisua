@@ -333,14 +333,21 @@ class Posterior(Visualizer):
       # check the factors is valid
       factors = sco.numpy(factor_omic)
       factor_names = sco.get_var_names(factor_omic)
-      # perprocessing
+      kw = dict(n_bins=int(n_bins), strategy=None)
+      # binary classes
       if np.all(np.sum(factors, axis=1) == 1):
         factors = np.argmax(factors, axis=1)[:, np.newaxis]
         factor_names = np.asarray([factor_omic.name])
-      elif not is_discrete(factors):
-        if self.verbose:
-          print(f"Discretizing '{factor_omic.name}': {n_bins} - {strategy}")
-        factors = discretizing(factors, n_bins=int(n_bins), strategy=strategy)
+      # continuous or discrete cases
+      elif factor_omic in (OMIC.proteomic, OMIC.pmhc):
+        kw['strategy'] = strategy
+      # categorical factors
+      elif factor_omic in (OMIC.progenitor, OMIC.celltype):
+        pass
+      # unknown factor
+      else:
+        raise RuntimeError(
+            f"No support for discretization of OMIC {factor_omic}")
       # only valid factors with > 1 classes
       ids = [len(np.unique(i)) > 1 for i in factors.T]
       if not any(ids):  # no valid factor found
@@ -357,7 +364,8 @@ class Posterior(Visualizer):
         latents = self.omics_data[('latent', 'corrupted')]
         crt.sample_batch(latents=latents,
                          factors=factors,
-                         factor_names=factor_names)
+                         factor_names=factor_names,
+                         **kw)
       self._criticizers[key] = crt
     return self._criticizers[key]
 
@@ -677,18 +685,30 @@ class Posterior(Visualizer):
                            corr_type='spearman',
                            show_all_latents=False,
                            latent_indices=None):
-    r""" Disentanglement plotting """
+    r""" Ploting the histogram colored by the activation in each factor, i.e.
+    disentanglement plotting
+
+    Arguments:
+      factor_omic : OMIC, which OMIC used as ground truth factor
+      factor_names : {'auto', list of factors}, which subset of factors will be
+        shown
+      latent_indices : an Integer or list of Integers.
+        Indicates which latent will be used for `Criticizer`
+    """
     factor_omic = OMIC.parse(factor_omic)
     if isinstance(factor_names, string_types) and factor_names == 'auto':
       factor_names = factor_omic.markers
+    # creating the criticizer
+    crt = self.get_criticizer(factor_omic=factor_omic,
+                              latent_indices=latent_indices)
+    # filter relevant factor from the markers' list
     if factor_names is not None:
-      var_names = self.dataset.get_var_names(factor_omic)
+      var_names = crt.factor_names
       org = factor_names
       factor_names = list(
           filter(lambda x: x in var_names, tf.nest.flatten(factor_names)))
       assert len(factor_names) > 0, f"No matching factor names for {org}"
-    crt = self.get_criticizer(factor_omic=factor_omic,
-                              latent_indices=latent_indices)
+    # plotting
     fig = crt.plot_disentanglement(factor_names=factor_names,
                                    n_bins_factors=n_bins_factors,
                                    n_bins_codes=n_bins_latents,

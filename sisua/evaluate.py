@@ -29,6 +29,23 @@ np.random.seed(1)
 SE = SisuaExperimenter().eval_mode()
 
 
+def robust_run(method_name, log_text, fn, *args, **kwargs):
+  assert callable(fn)
+  with catch_warnings_ignore(UserWarning):
+    try:
+      fn(*args, **kwargs)
+    except Exception as e:
+      text = StringIO()
+      traceback.print_exception(*sys.exc_info(),
+                                limit=None,
+                                file=text,
+                                chain=True)
+      text.seek(0)
+      text = text.read().strip()
+      text += f"\n{e}"
+      SE.write_error(traceback=text, method_name=method_name, config=log_text)
+
+
 # ===========================================================================
 # Helper
 # ===========================================================================
@@ -173,14 +190,14 @@ def main(model,
   ### Load the model and dataset
   hash1, cfg1, m1 = SE.get_models(f"dataset.name={ds1} model.name={model}",
                                   load_models=True,
-                                  return_hash=True)
+                                  return_hash=True)[0]
   test1: SingleCellOMIC = m1.test
   vae1: SingleCellModel = m1.model
   is_semi = vae1.is_semi_supervised
   if len(ds2) > 0:
     hash2, cfg2, m2 = SE.get_models(f"dataset.name={ds2} model.name={model}",
                                     load_models=True,
-                                    return_hash=True)
+                                    return_hash=True)[0]
     test2: SingleCellOMIC = m2.test
     vae2: SingleCellModel = m2.model
   else:
@@ -214,10 +231,12 @@ def main(model,
     with catch_warnings_ignore(UserWarning):
       # calculateing the scores
       if score_enable:
-        scoring(post, path, train_ds, test_ds)
+        robust_run("evaluate_scoring", f"model:{model} ds1:{ds1} ds2:{ds2}",
+                   scoring, post, path, train_ds, test_ds)
       # plotting the figures
       if plot_enable:
-        plotting(post, path, train_ds, test_ds)
+        robust_run("evaluate_plotting", f"model:{model} ds1:{ds1} ds2:{ds2}",
+                   plotting, post, path, train_ds, test_ds)
 
 
 # ===========================================================================
@@ -232,6 +251,7 @@ if __name__ == "__main__":
   ).add("--score", "re-calculating the model scores", False \
   ).add("--plot", "plotting the analysis", False \
   ).add("--override", "remove exists folders", False \
+  ).add("--only-cross", "Only do cross dataset experiments", False \
   ).parse()
   # preprocess the arguments
   models = args.model.split(",")
@@ -247,43 +267,35 @@ if __name__ == "__main__":
     score = True
 
   def _eval_fn(model_name, ds1_name, ds2_name):
-    try:
-      main(model=model_name,
-           ds1=ds1_name,
-           ds2=ds2_name,
-           batch_size=int(args.bs),
-           score_enable=score,
-           plot_enable=plot,
-           override=bool(args.override))
-    except Exception as e:
-      text = StringIO()
-      traceback.print_exception(*sys.exc_info(),
-                                limit=None,
-                                file=text,
-                                chain=True)
-      text.seek(0)
-      text = text.read().strip()
-      text += f"\n{e}"
-      SE.write_error(traceback=text,
-                     method_name="evaluate",
-                     config=f"model:{model_name} ds1:{ds1_name} ds2:{ds2_name}")
+    main(model=model_name,
+         ds1=ds1_name,
+         ds2=ds2_name,
+         batch_size=int(args.bs),
+         score_enable=score,
+         plot_enable=plot,
+         override=bool(args.override))
+
   # iterate over all possibility
   configs = list(
       set([(m, d1, "" if d1 == d2 else d2)
            for m, d1, d2 in product(models, ds1s, ds2s)]))
+  if args.only_cross:
+    configs = [(m, d1, d2) for m, d1, d2 in configs if len(d2) > 0]
   np.random.shuffle(configs)
   print(f"Running {len(configs)} configurations:")
   for cfg in configs:
     print(f" - {', '.join(cfg)}")
-  proc = [Process(target=_eval_fn, args=(m, d1, d2)) for m, d1, d2 in configs]
-  for p in proc:
-    try:
-      p.start()
-      p.join()
-      if p.is_alive():
-        p.terminate()
-    except Exception as e:
-      print(e)
+  # only run if there is config
+  if len(configs) > 0:
+    proc = [Process(target=_eval_fn, args=(m, d1, d2)) for m, d1, d2 in configs]
+    for p in proc:
+      try:
+        p.start()
+        p.join()
+        if p.is_alive():
+          p.terminate()
+      except Exception as e:
+        print(e)
 
 ### Examples:
 # python evaluate.py sisua -ds1 8kx
