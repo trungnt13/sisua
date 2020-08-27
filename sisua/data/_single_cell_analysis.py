@@ -111,19 +111,19 @@ class _OMICanalyzer(_OMICbase):
     return om
 
   def filter_highly_variable_genes(self,
-                                   min_disp=1.0,
-                                   max_disp=np.inf,
-                                   min_mean=0.01,
-                                   max_mean=8,
-                                   n_top_genes=1000,
-                                   n_bins=20,
-                                   flavor='seurat',
-                                   inplace=True):
+                                   min_disp: float = 1.0,
+                                   max_disp: float = np.inf,
+                                   min_mean: float = 0.01,
+                                   max_mean: float = 8,
+                                   n_top_genes: int = 1000,
+                                   n_bins: int = 20,
+                                   flavor: str = 'seurat',
+                                   inplace: bool = True):
     r""" Annotate highly variable genes [Satija15]_ [Zheng17]_.
 
     https://www.rdocumentation.org/packages/Seurat/versions/2.3.4/topics/FindVariableGenes
 
-    Expects logarithmized data.
+    `Expects logarithmized data`.
 
     Depending on `flavor`, this reproduces the R-implementations of Seurat
     [Satija15]_ and Cell Ranger [Zheng17]_.

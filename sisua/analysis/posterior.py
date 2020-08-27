@@ -7,6 +7,7 @@ import shutil
 import time
 import warnings
 from collections import OrderedDict, defaultdict
+from functools import partial
 from itertools import product, zip_longest
 from typing import Optional, Union
 
@@ -113,7 +114,7 @@ class Posterior(Visualizer):
                batch_size=8,
                sample_shape=10,
                random_state=1,
-               reduce_latents=lambda *Zs: tf.concat(Zs, axis=1),
+               reduce_latents=partial(tf.concat, axis=1),
                name=None,
                verbose=True):
     super(Posterior, self).__init__()
@@ -242,7 +243,8 @@ class Posterior(Visualizer):
     # add the latents
     Zs = self.omics_data[('latent', 'corrupted')]
     if len(Zs) > 1:
-      Zs = self.reduce_latents([z.mean() for z in Zs])
+      means = [z.mean() for z in Zs]
+      Zs = self.reduce_latents(means)
     else:
       Zs = Zs[0].mean()
     with catch_warnings_ignore(UserWarning, RuntimeWarning):
@@ -339,19 +341,22 @@ class Posterior(Visualizer):
         factors = np.argmax(factors, axis=1)[:, np.newaxis]
         factor_names = np.asarray([factor_omic.name])
       # continuous or discrete cases
-      elif factor_omic in (OMIC.proteomic, OMIC.pmhc):
+      elif factor_omic in (OMIC.proteomic, OMIC.iproteomic, OMIC.pmhc,
+                           OMIC.ipmhc):
         kw['strategy'] = strategy
       # categorical factors
-      elif factor_omic in (OMIC.progenitor, OMIC.celltype):
+      elif factor_omic in (OMIC.progenitor, OMIC.iprogenitor, OMIC.celltype,
+                           OMIC.icelltype):
         pass
       # unknown factor
       else:
-        raise RuntimeError(
-            f"No support for discretization of OMIC {factor_omic}")
+        warnings.warn(f"No support for discretization of OMIC: {factor_omic}",
+                      RuntimeWarning)
+        return
       # only valid factors with > 1 classes
       ids = [len(np.unique(i)) > 1 for i in factors.T]
       if not any(ids):  # no valid factor found
-        print(f"Ignore factor: {factor_omic.name}")
+        warnings.warn(f"Not a valid factor: {factor_omic.name}", RuntimeWarning)
         return
       factors = factors[:, ids]
       factor_names = factor_names[ids]

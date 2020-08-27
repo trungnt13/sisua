@@ -11,7 +11,7 @@ from sisua.data.const import MARKER_GENES
 from sisua.data.data_loader.cbmc_CITEseq import read_CITEseq_CBMC
 from sisua.data.data_loader.childhood_leukemia_cALL import read_leukemia_BMMC
 from sisua.data.data_loader.dataset10x import read_dataset10x
-from sisua.data.data_loader.leukemia_multiomics import \
+from sisua.data.data_loader.mixed_phenotype_acute_leukemia import \
     read_leukemia_MixedPhenotypes
 from sisua.data.data_loader.pbmc8k import read_PBMC8k
 from sisua.data.data_loader.pbmc_CITEseq import read_CITEseq_PBMC

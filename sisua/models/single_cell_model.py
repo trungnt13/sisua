@@ -79,7 +79,6 @@ class SingleCellModel(BetaVAE, Visualizer):
                                              batchnorm=True,
                                              input_dropout=0.3),
       decoder: NetworkConfig = NetworkConfig([64, 64], batchnorm=True),
-      analytic=True,
       log_norm=True,
       beta=1.0,
       name=None,
@@ -89,13 +88,13 @@ class SingleCellModel(BetaVAE, Visualizer):
                      latents=latents,
                      encoder=encoder,
                      decoder=decoder,
+                     analytic=True,
                      beta=beta,
                      name=name,
                      reduce_latent=kwargs.pop('reduce_latent', 'concat'),
                      input_shape=kwargs.pop('input_shape', None),
                      step=kwargs.pop('step', 0.),
                      path=kwargs.pop('path', None))
-    self._analytic = bool(analytic)
     self._log_norm = bool(log_norm)
     self.dataset = None
     self.metadata = dict()
@@ -215,12 +214,9 @@ class SingleCellModel(BetaVAE, Visualizer):
           train: Union[SingleCellOMIC, DatasetV2],
           valid: Union[SingleCellOMIC, DatasetV2] = None,
           metadata: SingleCellOMIC = None,
-          analytic=None,
           **kwargs):
     r""" This fit function is the combination of both
     `Model.compile` and `Model.fit` """
-    if analytic is None:
-      analytic = self._analytic
     ## preprocessing the data
     if isinstance(train, SingleCellOMIC):
       self.set_metadata(train)
@@ -255,7 +251,7 @@ class SingleCellModel(BetaVAE, Visualizer):
                        corrupt_distribution='binomial',
                        batch_size=8,
                        sample_shape=10,
-                       reduce_latents=lambda *Zs: tf.concat(Zs, axis=1),
+                       reduce_latents=partial(tf.concat, axis=1),
                        verbose=True,
                        train_percent=0.8,
                        random_state=1) -> Posterior:

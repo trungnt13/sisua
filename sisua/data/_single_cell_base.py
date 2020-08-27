@@ -6,7 +6,7 @@ import os
 import warnings
 from contextlib import contextmanager
 from numbers import Number
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -15,7 +15,7 @@ import scipy as sp
 import tensorflow as tf
 from anndata._core.aligned_mapping import AxisArrays
 from bigarray import MmapArrayWriter
-from scipy.sparse import issparse
+from scipy import sparse
 from scipy.stats import pearsonr, spearmanr
 from six import string_types
 
@@ -34,9 +34,13 @@ from sisua.label_threshold import ProbabilisticEmbedding
 
 # Heuristic constants
 BATCH_SIZE = 4096
+
 # TODO: take into account obsp and varp
 
 
+# ===========================================================================
+# Helpers
+# ===========================================================================
 def get_all_omics(sco: sc.AnnData):
   assert isinstance(sco, sc.AnnData)
   if hasattr(sco, 'omics'):
@@ -55,16 +59,26 @@ def get_all_omics(sco: sc.AnnData):
   return o
 
 
+def _check_array(x: Union[np.ndarray, sparse.spmatrix]):
+  if isinstance(x, sparse.spmatrix):
+    if isinstance(x, sparse.coo_matrix):
+      x = x.tocsr()
+  return x
+
+
+# ===========================================================================
+# Main
+# ===========================================================================
 class _OMICbase(sc.AnnData, MD5object):
 
   def __init__(self,
-               X,
-               cell_id=None,
-               gene_id=None,
-               dtype=None,
-               omic=OMIC.transcriptomic,
-               name=None,
-               duplicated_var=False,
+               X: Union[np.ndarray, sparse.spmatrix],
+               cell_id: Optional[List[str]] = None,
+               gene_id: Optional[List[str]] = None,
+               dtype: Optional[str] = None,
+               omic: OMIC = OMIC.transcriptomic,
+               name: Optional[str] = None,
+               duplicated_var: bool = False,
                **kwargs):
     omic = OMIC.parse(omic)
     # directly first time init from file
@@ -100,7 +114,7 @@ class _OMICbase(sc.AnnData, MD5object):
         for v in u[c > 1]:
           ids[gene_id == v] = False
         gene_id = gene_id[ids]
-        X = X[:, ids]
+        X = _check_array(X)[:, ids]
       kwargs['dtype'] = dtype
       kwargs['obs'] = pd.DataFrame(index=cell_id)
       kwargs['var'] = pd.DataFrame(index=gene_id)
@@ -213,7 +227,7 @@ class _OMICbase(sc.AnnData, MD5object):
       omic = OMIC.parse(omic)
     X = self.numpy(omic)
     # start processing
-    if sp.sparse.issparse(X):
+    if sparse.issparse(X):
       total_counts = np.sum(X, axis=1)
       if total_counts.ndim < 2:
         total_counts = np.expand_dims(total_counts, axis=-1)
@@ -647,4 +661,3 @@ class _OMICbase(sc.AnnData, MD5object):
 
   def __hash__(self):
     return id(self)
-

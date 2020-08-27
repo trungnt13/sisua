@@ -30,6 +30,8 @@ SE = SisuaExperimenter().eval_mode()
 
 
 def robust_run(method_name, log_text, fn, *args, **kwargs):
+  r""" Run an evaluation function and catch exception without interupting the
+  execution """
   assert callable(fn)
   with catch_warnings_ignore(UserWarning):
     try:
@@ -168,25 +170,16 @@ def main(model,
   print(f" - override  : {override}")
   print(f" - plot:{plot_enable} score:{score_enable}")
   result_dir = SE.get_result_dir()
-  path1 = os.path.join(result_dir, f"{model}_{ds1}")
-  # train on ds1, test on ds2
-  path12 = os.path.join(result_dir, f"{model}_{ds1}_{ds2}")
-  # train on ds2, test on ds1
-  path21 = os.path.join(result_dir, f"{model}_{ds2}_{ds1}")
+  if len(ds2) == 0:
+    outpath = os.path.join(result_dir, f"{model}_{ds1}")
+  else:
+    outpath = os.path.join(result_dir, f"{model}_{ds1}_{ds2}")
   # overriding exist paths
-  if override:
-    for p in [path1, path12, path21]:
-      if os.path.exists(p):
-        print(f"Override path '{p}'")
-        shutil.rmtree(p)
-  if not os.path.exists(path1):
-    os.makedirs(path1)
-  # cross datasets
-  if len(ds2) > 0:
-    if not os.path.exists(path12):
-      os.makedirs(path12)
-    if not os.path.exists(path21):
-      os.makedirs(path21)
+  if override and os.path.exists(outpath):
+    print(f"Override path '{outpath}'")
+    shutil.rmtree(outpath)
+  if not os.path.exists(outpath):
+    os.makedirs(outpath)
   ### Load the model and dataset
   hash1, cfg1, m1 = SE.get_models(f"dataset.name={ds1} model.name={model}",
                                   load_models=True,
@@ -208,35 +201,24 @@ def main(model,
   # Create the posterior
   kw = dict(batch_size=batch_size, verbose=True)
   # mapping from:
-  # tuple (save_path, train_dsname, test_dsname) -> SingleCellModel
-  all_posteriors = {}
   if vae2 is None:
-    post = Posterior(vae1, test1, name=f"{model}_{ds1}", **kw)
-    all_posteriors[(path1, ds1, ds1)] = post
+    posterior = Posterior(vae1, test1, name=f"{model}_{ds1}", **kw)
   else:
-    all_posteriors[(path12, ds1, ds2)] = Posterior(vae1,
-                                                   test2,
-                                                   name=f"{model}_{ds1}_{ds2}",
-                                                   **kw)
-    all_posteriors[(path21, ds2, ds1)] = Posterior(vae2,
-                                                   test1,
-                                                   name=f"{model}_{ds2}_{ds1}",
-                                                   **kw)
+    posterior = Posterior(vae1, test2, name=f"{model}_{ds1}_{ds2}", **kw)
   ### running the evaluation
-  for (path, train_ds, test_ds), post in all_posteriors.items():
-    print(f"Evaluate model:'{model}' train:'{train_ds}' test:'{test_ds}', "
-          f"save results at: '{path}'")
-    post: Posterior
-    name = os.path.basename(path)
-    with catch_warnings_ignore(UserWarning):
-      # calculateing the scores
-      if score_enable:
-        robust_run("evaluate_scoring", f"model:{model} ds1:{ds1} ds2:{ds2}",
-                   scoring, post, path, train_ds, test_ds)
-      # plotting the figures
-      if plot_enable:
-        robust_run("evaluate_plotting", f"model:{model} ds1:{ds1} ds2:{ds2}",
-                   plotting, post, path, train_ds, test_ds)
+  train_ds = ds1
+  test_ds = ds2
+  with catch_warnings_ignore(UserWarning):
+    # calculateing the scores
+    if score_enable:
+      robust_run("evaluate_scoring",
+                 f"model:{model} train:{train_ds} test:{test_ds}", scoring,
+                 posterior, outpath, train_ds, test_ds)
+    # plotting the figures
+    if plot_enable:
+      robust_run("evaluate_plotting",
+                 f"model:{model} train:{train_ds} test:{test_ds}", plotting,
+                 posterior, outpath, train_ds, test_ds)
 
 
 # ===========================================================================

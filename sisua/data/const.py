@@ -164,6 +164,7 @@ class OMIC(OrderedFlag):
   disease = 'disease'
   progenitor = 'progenitor'
   pmhc = 'pmhc'  # peptide - major histocompatibility complex
+  rpkm = 'rpkm'
   # reconstructed
   ochromatin = 'ochromatin'
   otranscriptomic = 'otranscriptomic'
@@ -180,7 +181,7 @@ class OMIC(OrderedFlag):
   epigenomic = 'epigenomic'
   metabolomic = 'metabolomic'
   microbiomic = 'microbiomic'
-  #
+  # others
   latent = 'latent'
 
   @property
