@@ -519,7 +519,7 @@ class _OMICbase(sc.AnnData, MD5object):
     r""" Shortcut for creating `RandomVariable` for given OMIC type """
     omic = OMIC.parse(omic)
     if distribution is None:
-      if omic in (OMIC.transcriptomic, OMIC.chromatin):
+      if omic in (OMIC.transcriptomic, OMIC.atac):
         distribution = 'zinb'
       elif omic == OMIC.proteomic:
         distribution = 'nb'

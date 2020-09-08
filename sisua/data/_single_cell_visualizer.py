@@ -104,7 +104,7 @@ def _process_varnames(sco, input_omic, var_names):
         markers = set(MARKER_GENES)
       elif input_omic == OMIC.proteomic:
         markers = set(MARKER_ADTS)
-      elif input_omic == OMIC.chromatin:
+      elif input_omic == OMIC.atac:
         markers = set(MARKER_ATAC)
       else:  # just take all variables
         markers = set(sco.var_names)

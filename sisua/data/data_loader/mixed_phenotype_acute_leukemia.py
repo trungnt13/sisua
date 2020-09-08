@@ -282,7 +282,7 @@ def read_leukemia_MixedPhenotypes(filtered_genes=True,
     sco = SingleCellOMIC(atac.X.astype(np.float32),
                          cell_id=atac.celldata['Barcode'],
                          gene_id=atac.genenames,
-                         omic=OMIC.chromatin,
+                         omic=OMIC.atac,
                          name='mpalATAC')
     y, labels = _celltypes(atac.celldata['ProjectClassification'].values)
     sco.add_omic(OMIC.celltype, y, labels)

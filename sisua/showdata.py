@@ -57,7 +57,7 @@ def main(dsname, outpath):
     print(f" n_zero_cols: {sum(np.sum(x, axis=0) == 0)}")
     print(f" n_zero_rows: {sum(np.sum(x, axis=1) == 0)}")
   # relevant factor or color OMIC
-  for data_omic in (OMIC.transcriptomic, OMIC.chromatin):
+  for data_omic in (OMIC.transcriptomic, OMIC.atac):
     if data_omic in ds.omics:
       break
     else:

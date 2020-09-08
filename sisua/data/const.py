@@ -157,7 +157,7 @@ class OMIC(OrderedFlag):
   r""" Enum class to represent all possible OMIC type """
 
   genomic = 'genomic'
-  chromatin = 'chromatin'
+  atac = 'atac'
   transcriptomic = 'transcriptomic'
   proteomic = 'proteomic'
   celltype = 'celltype'
@@ -165,18 +165,21 @@ class OMIC(OrderedFlag):
   progenitor = 'progenitor'
   pmhc = 'pmhc'  # peptide - major histocompatibility complex
   rpkm = 'rpkm'
+  ercc = 'ercc'
   # reconstructed
-  ochromatin = 'ochromatin'
+  oatac = 'oatac'
   otranscriptomic = 'otranscriptomic'
   # imputed
   igenomic = 'igenomic'
-  ichromatin = 'ichromatin'
+  iatac = 'iatac'
   itranscriptomic = 'itranscriptomic'
   iproteomic = 'iproteomic'
   icelltype = 'icelltype'
   idisease = 'idisease'
   iprogenitor = 'iprogenitor'
   ipmhc = 'ipmhc'
+  irpkm = 'irpkm'
+  iercc = 'iercc'
   #
   epigenomic = 'epigenomic'
   metabolomic = 'metabolomic'
@@ -187,7 +190,7 @@ class OMIC(OrderedFlag):
   @property
   def is_imputed(self):
     r""" Return True if the OMIC type is imputation """
-    if self in (OMIC.igenomic, OMIC.ichromatin, OMIC.itranscriptomic,
+    if self in (OMIC.igenomic, OMIC.iatac, OMIC.itranscriptomic,
                 OMIC.iproteomic, OMIC.icelltype, OMIC.idisease,
                 OMIC.iprogenitor, OMIC.ipmhc):
       return True
@@ -201,7 +204,7 @@ class OMIC(OrderedFlag):
       return list(MARKER_ADTS)
     if name in (OMIC.transcriptomic.name, OMIC.itranscriptomic.name):
       return list(MARKER_GENES)
-    if name in (OMIC.chromatin.name, OMIC.ichromatin.name):
+    if name in (OMIC.atac.name, OMIC.iatac.name):
       return list(MARKER_ATAC)
     return None
 

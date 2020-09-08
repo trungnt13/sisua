@@ -40,8 +40,14 @@ def get_dataset_meta():
   from sisua.data.utils import standardize_protein_name
   from sisua.data.data_loader.mixed_phenotype_acute_leukemia import read_leukemia_MixedPhenotypes
   from sisua.data.experimental_data.pbmc_cross_datasets import read_PBMC_crossdataset
+  from sisua.data.data_loader.human_preimplantation_embryos import read_human_embryos
+  from sisua.data.data_loader.cisTopic_data import read_melanoma_cisTopicData
   data_meta = {
-      # ====== pbmc 8k ====== #
+      "embryo":
+          read_human_embryos,
+      "embryoall":
+          partial(read_human_embryos, filtered_genes=False),
+      # ====== call ====== #
       "call":
           read_leukemia_BMMC,
       "callall":
@@ -182,6 +188,9 @@ def get_dataset_meta():
           read_Retina,
       'hemato':
           read_Hemato,
+      # ====== cisTopic ====== #
+      'melanoma':
+          read_melanoma_cisTopicData
   }
   # add 10xgenomics data
   for alias, name in [

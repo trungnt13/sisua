@@ -195,4 +195,7 @@ def read_human_embryos(filtered_genes=True,
   sco.add_omic(omic=OMIC.celltype,
                X=one_hot(labels, len(labels_name)),
                var_names=list(labels_name.keys()))
+  sco.add_omic(omic=OMIC.ercc,
+               X=data['ercc.counts.txt_x'],
+               var_names=data['ercc.counts.txt_col'])
   return sco

@@ -272,14 +272,14 @@ def read_dataset10x(name,
       peaks = contents['peaks']
       X_peaks = peaks[:, 2].astype(np.float32) - peaks[:, 1].astype(np.float32)
       X_col_name = np.array([':'.join(i) for i in peaks])
-      save_data = [(OMIC.chromatin.name, X)]
-      save_metadata = dict(main_omic=OMIC.chromatin.name,
+      save_data = [(OMIC.atac.name, X)]
+      save_metadata = dict(main_omic=OMIC.atac.name,
                            barcodes=barcodes,
                            chromatin_var=X_col_name)
       sco = SingleCellOMIC(X,
                            cell_id=barcodes,
                            gene_id=X_col_name,
-                           omic=OMIC.chromatin,
+                           omic=OMIC.atac,
                            name=name)
     ### cell-exp and cell-vdj
     elif exp in ('cell-exp', 'cell-vdj'):
