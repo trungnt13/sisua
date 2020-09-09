@@ -161,6 +161,7 @@ class OMIC(OrderedFlag):
   transcriptomic = 'transcriptomic'
   proteomic = 'proteomic'
   celltype = 'celltype'
+  tissue = 'tissue'
   disease = 'disease'
   progenitor = 'progenitor'
   pmhc = 'pmhc'  # peptide - major histocompatibility complex
@@ -175,6 +176,7 @@ class OMIC(OrderedFlag):
   itranscriptomic = 'itranscriptomic'
   iproteomic = 'iproteomic'
   icelltype = 'icelltype'
+  itissue = 'itissue'
   idisease = 'idisease'
   iprogenitor = 'iprogenitor'
   ipmhc = 'ipmhc'

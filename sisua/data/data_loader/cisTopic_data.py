@@ -23,7 +23,9 @@ _URL = [
 ]
 
 
-def read_melanoma_cisTopicData(filtered_genes=True, override=False, verbose=True):
+def read_melanoma_cisTopicData(filtered_genes=True,
+                               override=False,
+                               verbose=True):
   r""" melanoma ATAC data from (Bravo González-Blas, et al. 2019)
 
   Reference:
