@@ -8,7 +8,7 @@ from sisua.analysis.sc_metrics import CorrelationScores, NegativeLogLikelihood
 from sisua.data import get_dataset
 from sisua.models.autoencoder import DeepCountAutoencoder
 from sisua.models.scvi_models import SCVI
-from sisua.models.semi_supervised import MultitaskVAE
+from sisua.models.semi_supervised import multitaskVAE
 from sisua.models.variational_autoencoder import VariationalAutoEncoder
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -71,7 +71,7 @@ VariationalAutoEncoder.fit_hyper(
     algorithm=algorithm,
     verbose=True)
 
-MultitaskVAE.fit_hyper(
+multitaskVAE.fit_hyper(
     (x, y),
     loss_name='nllk0',
     model_kwargs=dict(units=(gene, prot), xdist=['zinbd', 'nbd']),
@@ -126,7 +126,7 @@ VariationalAutoEncoder.fit_hyper(
     algorithm=algorithm,
     verbose=True)
 
-MultitaskVAE.fit_hyper(
+multitaskVAE.fit_hyper(
     (x, y),
     loss_name='pearson_mean',
     model_kwargs=dict(units=(gene, prot), xdist=['zinbd', 'nbd']),

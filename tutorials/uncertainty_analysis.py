@@ -14,7 +14,7 @@ from odin.ml import fast_pca, fast_tsne, fast_umap
 from sisua.data import get_dataset, standardize_protein_name
 from sisua.label_threshold import ProbabilisticEmbedding
 from sisua.models import (SCALE, SCVI, SISUA, DeepCountAutoencoder,
-                          NetworkConfig, RandomVariable, VariationalAutoEncoder)
+                          NetConf, RVmeta, VariationalAutoEncoder)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
@@ -36,7 +36,7 @@ train_config = dict(batch_size=64, epochs=200, verbose=True)
 sample_shape = 2
 latent_dim = 10
 
-network = NetworkConfig(use_conv=True, pyramid=True, conv_proj=128)
+network = NetConf(use_conv=True, pyramid=True, conv_proj=128)
 kl = interpolation.const(vmax=1)
 # kl = interpolation.linear(vmin=0,
 #                           vmax=10,
@@ -55,8 +55,8 @@ X_train, X_test = gene.split()
 y_train, y_test = prot.split()
 print("Labels:", prot.var)
 
-gene_rv = RandomVariable(gene.n_vars, posterior='zinbd', name='rna')
-prot_rv = RandomVariable(prot.n_vars, posterior='nb', name='adt')
+gene_rv = RVmeta(gene.n_vars, posterior='zinbd', name='rna')
+prot_rv = RVmeta(prot.n_vars, posterior='nb', name='adt')
 
 # ====== prepare the labels ====== #
 labels_name = standardize_protein_name(prot.var.iloc[:, 0].to_numpy())

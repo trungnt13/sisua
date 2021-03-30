@@ -6,8 +6,8 @@ from typing import List
 
 import tensorflow as tf
 
-from odin.bay.vi.autoencoder import MultitaskVAE
-from sisua.models.single_cell_model import RandomVariable, SingleCellModel
+from odin.bay.vi.autoencoder import multitaskVAE
+from sisua.models.single_cell_model import RVmeta, SingleCellModel
 
 __all__ = ['VAE', 'SISUA', 'MISA']
 
@@ -16,18 +16,18 @@ class VAE(SingleCellModel):
   r""" Variational Auto Encoder """
 
 
-class SISUA(MultitaskVAE, SingleCellModel):
+class SISUA(multitaskVAE, SingleCellModel):
   r""" Multi-task SemI-SUpervised Autoencoder
 
     - Transcriptomic : zero-inflated negative binomial distribution
     - Proteomic : negative binomial or onehot-categorical distribution
     - Latent : multi-variate normal with diagonal covariance
 
-    The following RandomVariable configurations are used in the paper:
+    The following RVmeta configurations are used in the paper:
 
     ```
-    RandomVariable(rna_dim, 'zinbd'/'zinb', projection=True, name='RNA')
-    RandomVariable(adt_dim, 'onehot'/'nbd'/'nb', True, 'ADT')
+    RVmeta(rna_dim, 'zinbd'/'zinb', projection=True, name='RNA')
+    RVmeta(adt_dim, 'onehot'/'nbd'/'nb', True, 'ADT')
     ```
 
   Reference:
@@ -53,9 +53,9 @@ class MISA(SISUA):
   train, test = sco.split()
   print(train)
   # train.corrupt()
-  rna = RandomVariable(sco.get_dim('transcriptomic'), 'zinb', True,
+  rna = RVmeta(sco.get_dim('transcriptomic'), 'zinb', True,
                        'transcriptomic')
-  adt = RandomVariable(sco.get_dim('proteomic'), 'mixtril', True, 'proteomic')
+  adt = RVmeta(sco.get_dim('proteomic'), 'mixtril', True, 'proteomic')
   ######## Test
   vae = MISA(rna, adt, n_components=2)
   print(vae)

@@ -4,7 +4,7 @@ import warnings
 
 import tensorflow as tf
 
-from sisua.models.single_cell_model import RandomVariable, SingleCellModel
+from sisua.models.single_cell_model import RVmeta, SingleCellModel
 from sisua.models.vae import SISUA
 
 __all__ = ['SCALE', 'SCALAR']
@@ -25,7 +25,7 @@ class SCALE(SingleCellModel):
 
   def __init__(self,
                outputs,
-               latents=RandomVariable(10, 'mixgaus', True, name="Latents"),
+               latents=RVmeta(10, 'mixgaus', True, name="Latents"),
                n_components=10,
                covariance='none',
                tie_mixtures=False,

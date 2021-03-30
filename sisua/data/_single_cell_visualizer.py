@@ -937,7 +937,7 @@ class _OMICvisualizer(_OMICanalyzer, Visualizer):
       max_mask = arr <= p_max
       mask = np.logical_and(min_mask, max_mask)
       a = arr[mask]
-      _, bins = vs.plot_histogram(
+      _, bins, _ = vs.plot_histogram(
           a,
           bins=120,
           ax=(n_row, n_col, i + 1),

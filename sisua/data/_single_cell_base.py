@@ -20,7 +20,7 @@ from scipy.stats import pearsonr, spearmanr
 from six import string_types
 
 from odin import visual as vs
-from odin.bay import RandomVariable
+from odin.bay import RVmeta
 from odin.search import diagonal_beam_search, diagonal_bruteforce_search
 from odin.stats import describe, sparsity_percentage, train_valid_test_split
 from odin.utils import (IndexedList, MD5object, as_tuple, batching,
@@ -515,8 +515,8 @@ class _OMICbase(sc.AnnData, MD5object):
     return counts
 
   # ******************** logging and io ******************** #
-  def get_rv(self, omic, distribution=None) -> RandomVariable:
-    r""" Shortcut for creating `RandomVariable` for given OMIC type """
+  def get_rv(self, omic, distribution=None) -> RVmeta:
+    r""" Shortcut for creating `RVmeta` for given OMIC type """
     omic = OMIC.parse(omic)
     if distribution is None:
       if omic in (OMIC.transcriptomic, OMIC.atac):
@@ -527,13 +527,13 @@ class _OMICbase(sc.AnnData, MD5object):
         distribution = 'onehot'
       else:
         raise ValueError(f"No default distribution for OMIC {omic.name}")
-    return RandomVariable(event_shape=self.get_dim(omic),
+    return RVmeta(event_shape=self.get_dim(omic),
                           posterior=distribution,
                           projection=True,
                           name=omic.name)
 
-  def create_rv(self, omic, distribution=None) -> RandomVariable:
-    r""" Shortcut for creating `RandomVariable` for given OMIC type """
+  def create_rv(self, omic, distribution=None) -> RVmeta:
+    r""" Shortcut for creating `RVmeta` for given OMIC type """
     return self.get_rv(omic, distribution)
 
   def create_dataset(self,

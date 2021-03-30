@@ -15,7 +15,6 @@ from sisua.data.single_cell_dataset import SingleCellOMIC
 from sisua.data.utils import download_file, read_compressed, validate_data_dir
 
 # https://cloud.tsinghua.edu.cn/d/eb4371c556bc46ef8516/?p=%2F&mode=list
-# The md5 change everytime
 _URL = b'aHR0cHM6Ly9haS1kYXRhc2V0cy5zMy5hbWF6b25hd3MuY29tL3NjYWxlX2RhdGFzZXRzLnppcA==\n'
 _MD5 = r"5fc7c52108220e30a04f033e355716c0"
 

@@ -1093,7 +1093,7 @@ class Posterior(Visualizer):
     return scores
 
   def cal_factorvae(self, predict_factor=False):
-    r""" FactorVAE score """
+    r""" factorVAE score """
     scores = {}
     for key, crt in self._criticizers.items():
       crt: Criticizer

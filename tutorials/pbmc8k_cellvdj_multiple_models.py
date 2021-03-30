@@ -14,7 +14,7 @@ from tensorflow_probability.python.layers.distribution_layer import (
 from odin.bay.distributions import Independent, ZeroInflated
 from odin.networks import MixtureDensityNetwork
 from sisua.data import SingleCellOMIC, get_dataset, standardize_protein_name
-from sisua.models import (SCVI, DeepCountAutoencoder, MultitaskVAE, MultitaskVI,
+from sisua.models import (SCVI, DeepCountAutoencoder, multitaskVAE, MultitaskVI,
                           SCScope, VariationalAutoEncoder)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -64,7 +64,7 @@ all_models = [
     DeepCountAutoencoder(units=n_genes),
     SCVI(units=n_genes),
     VariationalAutoEncoder(units=n_genes),
-    MultitaskVAE(units=[n_genes, n_prot]),
+    multitaskVAE(units=[n_genes, n_prot]),
     MultitaskVI(units=[n_genes, n_prot]),
 ]
 

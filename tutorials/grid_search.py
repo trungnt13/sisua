@@ -14,7 +14,7 @@ from sisua.analysis import Posterior
 from sisua.data import get_dataset
 from sisua.models.autoencoder import DeepCountAutoencoder
 from sisua.models.scvi_models import SCVI
-from sisua.models.semi_supervised import MultitaskAutoEncoder, MultitaskVAE
+from sisua.models.semi_supervised import MultitaskAutoEncoder, multitaskVAE
 from sisua.models.variational_autoencoder import VariationalAutoEncoder
 
 # turn off TF logging and set reproducibile random seed
@@ -63,7 +63,7 @@ for nlayers in [1, 2, 3]:
   for hdim in [32, 128, 512]:
     for zdim in [16, 32, 64]:
       for model in [
-          SCVI, DeepCountAutoencoder, VariationalAutoEncoder, MultitaskVAE
+          SCVI, DeepCountAutoencoder, VariationalAutoEncoder, multitaskVAE
       ]:
         jobs.append((nlayers, hdim, zdim, model))
 
@@ -75,7 +75,7 @@ def run_training(args):
   n, h, z, model = args
   kw = dict(nlayers=n, hdim=h, zdim=z)
   name = model.id + '_%d_%d_%d' % (n, h, z)
-  if model == MultitaskVAE:
+  if model == multitaskVAE:
     model = model((gene, prot), **kw)
   else:
     model = model(gene, **kw)

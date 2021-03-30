@@ -10,7 +10,7 @@ from tensorflow_probability.python.distributions import Independent, Normal
 from odin.bay.layers import (DenseDistribution, NegativeBinomialDispLayer,
                              ZINegativeBinomialDispLayer)
 from odin.networks import Identity
-from sisua.models.single_cell_model import (NetworkConfig, RandomVariable,
+from sisua.models.single_cell_model import (NetConf, RVmeta,
                                             SingleCellModel)
 
 __all__ = ['SCVI']
@@ -33,13 +33,13 @@ class SCVI(SingleCellModel):
   def __init__(
       self,
       outputs,
-      latents=RandomVariable(10, 'diag', True, "Latents"),
-      library=RandomVariable(1, 'normal', True, "Library"),
-      encoder=NetworkConfig([64, 64],
+      latents=RVmeta(10, 'diag', True, "Latents"),
+      library=RVmeta(1, 'normal', True, "Library"),
+      encoder=NetConf([64, 64],
                             batchnorm=True,
                             dropout=0.1,
                             name='Encoder'),
-      encoder_l=NetworkConfig([64],
+      encoder_l=NetConf([64],
                               batchnorm=True,
                               dropout=0.1,
                               name='EncoderL'),

@@ -7,10 +7,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sbn
 import tensorflow as tf
-from sklearn.metrics import (confusion_matrix, explained_variance_score,
-                             f1_score, mean_absolute_error, mean_squared_error,
-                             r2_score)
-
 from odin import backend as K
 from odin.utils import async_mpi, catch_warnings_ignore, ctext, one_hot
 from odin.visual import (generate_random_colors, generate_random_marker,
@@ -19,6 +15,9 @@ from odin.visual import (generate_random_colors, generate_random_marker,
                          plot_scatter, plot_scatter_layers,
                          plot_series_statistics, subplot)
 from sisua.utils.others import anything2image
+from sklearn.metrics import (confusion_matrix, explained_variance_score,
+                             f1_score, mean_absolute_error, mean_squared_error,
+                             r2_score)
 
 sbn.set()
 
@@ -489,7 +488,7 @@ def plot_evaluate_regressor(y_pred, y_true, labels, title):
 
   # ====== helper ====== #
   def plot_hist(hist, ax, name):
-    count, bins = plot_histogram(true,
+    _, count, bins = plot_histogram(true,
                                  bins=nbins,
                                  ax=ax,
                                  title=name,

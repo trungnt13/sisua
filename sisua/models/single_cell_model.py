@@ -27,9 +27,9 @@ from tqdm import tqdm
 from odin.backend import interpolation
 from odin.backend.keras_callbacks import EarlyStopping
 from odin.backend.keras_helpers import layer2text
-from odin.bay import RandomVariable, concat_distributions
+from odin.bay import RVmeta, concat_distributions
 from odin.bay.vi import BetaVAE
-from odin.networks import NetworkConfig
+from odin.networks import NetConf
 from odin.utils import (cache_memory, catch_warnings_ignore, classproperty,
                         is_primitive)
 from odin.visual import Visualizer
@@ -37,7 +37,7 @@ from sisua.analysis.posterior import Posterior
 from sisua.data import OMIC, SingleCellOMIC, get_dataset
 
 __all__ = [
-    'SingleCellModel', 'NetworkConfig', 'RandomVariable', 'interpolation'
+    'SingleCellModel', 'NetConf', 'RVmeta', 'interpolation'
 ]
 
 
@@ -73,12 +73,12 @@ class SingleCellModel(BetaVAE, Visualizer):
 
   def __init__(
       self,
-      outputs: RandomVariable,
-      latents: RandomVariable = RandomVariable(10, 'diag', True, 'Latents'),
-      encoder: NetworkConfig = NetworkConfig([64, 64],
+      outputs: RVmeta,
+      latents: RVmeta = RVmeta(10, 'diag', True, 'Latents'),
+      encoder: NetConf = NetConf([64, 64],
                                              batchnorm=True,
                                              input_dropout=0.3),
-      decoder: NetworkConfig = NetworkConfig([64, 64], batchnorm=True),
+      decoder: NetConf = NetConf([64, 64], batchnorm=True),
       log_norm=True,
       beta=1.0,
       name=None,

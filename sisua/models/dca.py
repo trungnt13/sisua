@@ -7,7 +7,7 @@ import warnings
 
 import tensorflow as tf
 
-from sisua.models.single_cell_model import RandomVariable, SingleCellModel
+from sisua.models.single_cell_model import RVmeta, SingleCellModel
 
 
 class DeepCountAutoencoder(SingleCellModel):
@@ -15,7 +15,7 @@ class DeepCountAutoencoder(SingleCellModel):
 
   def __init__(self,
                outputs,
-               latents=RandomVariable(10, 'relu', True, name="Latents"),
+               latents=RVmeta(10, 'relu', True, name="Latents"),
                **kwargs):
     # force a deterministic latent space
     latents = tf.nest.flatten(latents)

@@ -15,7 +15,7 @@ from odin.ml import fast_pca
 from odin.utils import catch_warnings_ignore, md5_checksum
 from sisua.data import OMIC, get_dataset, normalization_recipes
 from sisua.models import (MISA, SCALE, SCVI, SISUA, DeepCountAutoencoder,
-                          NetworkConfig, RandomVariable, VariationalAutoEncoder,
+                          NetConf, RVmeta, VariationalAutoEncoder,
                           load, save)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -124,15 +124,15 @@ class SaveLoadModelTest(unittest.TestCase):
       n_gene = sco.numpy(om1).shape[1]
       n_prot = sco.numpy(om2).shape[1]
       rvs = [
-          RandomVariable(n_gene, 'zinbd', om1.name),
-          RandomVariable(n_prot, 'onehot', om2.name)
+          RVmeta(n_gene, 'zinbd', om1.name),
+          RVmeta(n_prot, 'onehot', om2.name)
       ]
       all_models = [DeepCountAutoencoder, SCALE, SCVI, VariationalAutoEncoder]
       all_configs = [
-          NetworkConfig(),
-          NetworkConfig(pyramid=True),
-          NetworkConfig(use_conv=True),
-          NetworkConfig(pyramid=True, use_conv=True)
+          NetConf(),
+          NetConf(pyramid=True),
+          NetConf(use_conv=True),
+          NetConf(pyramid=True, use_conv=True)
       ]
       return train, test, rvs, all_models, all_configs
 

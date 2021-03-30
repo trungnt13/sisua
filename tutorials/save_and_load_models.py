@@ -16,7 +16,7 @@ from odin.ml import fast_pca, fast_umap
 from odin.utils import ArgController, md5_checksum
 from sisua.data import OMIC, get_dataset, normalization_recipes
 from sisua.models import (MISA, SCALE, SCVI, SISUA, DeepCountAutoencoder,
-                          NetworkConfig, RandomVariable, VariationalAutoEncoder,
+                          NetConf, RVmeta, VariationalAutoEncoder,
                           load, save)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -94,15 +94,15 @@ train, test = sco.split(train_percent=0.8, seed=1)
 n_gene = sco.numpy(OMIC.transcriptomic).shape[1]
 n_prot = sco.numpy(OMIC.celltype).shape[1]
 
-gene_rv = RandomVariable(n_gene, 'zinb', 'rna')
-prot_rv = RandomVariable(n_prot, 'nb', 'adt')
+gene_rv = RVmeta(n_gene, 'zinb', 'rna')
+prot_rv = RVmeta(n_prot, 'nb', 'adt')
 latent_dim = 10
 all_models = [SCALE, SCVI, DeepCountAutoencoder, VariationalAutoEncoder]
 all_configs = [
-    NetworkConfig(),
-    NetworkConfig(pyramid=True),
-    NetworkConfig(use_conv=True),
-    NetworkConfig(pyramid=True, use_conv=True)
+    NetConf(),
+    NetConf(pyramid=True),
+    NetConf(use_conv=True),
+    NetConf(pyramid=True, use_conv=True)
 ]
 
 # ===========================================================================

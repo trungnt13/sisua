@@ -9,8 +9,8 @@ import tensorflow as tf
 
 from odin import bay
 from sisua.data import OMIC, get_dataset
-from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, NetworkConfig,
-                          RandomVariable, SingleCellModel,
+from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, NetConf,
+                          RVmeta, SingleCellModel,
                           VariationalAutoEncoder, get_all_models, get_model)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -41,7 +41,7 @@ class ModelTest(unittest.TestCase):
   def test_random_variable(self):
     x = np.random.rand(8, 12).astype(np.float32)
 
-    rv = RandomVariable(dim=12, posterior='diag')
+    rv = RVmeta(dim=12, posterior='diag')
     dist = rv.create_posterior()
     y = dist(x)
     z = tf.convert_to_tensor(y)
@@ -57,7 +57,7 @@ class ModelTest(unittest.TestCase):
     self.assertTrue(y.event_shape == (12,))
     self.assertTrue(z.shape == (1, 8, 12))
 
-    rv = RandomVariable(dim=12, posterior='nbd')
+    rv = RVmeta(dim=12, posterior='nbd')
     dist = rv.create_posterior()
     y = dist(x)
     self.assertFalse(rv.is_zero_inflated)
@@ -67,7 +67,7 @@ class ModelTest(unittest.TestCase):
     self.assertTrue(
         isinstance(y.distribution, bay.distributions.NegativeBinomialDisp))
 
-    rv = RandomVariable(dim=12, posterior='zinb')
+    rv = RVmeta(dim=12, posterior='zinb')
     dist = rv.create_posterior()
     y = dist(x)
     self.assertTrue(rv.is_zero_inflated)
@@ -79,7 +79,7 @@ class ModelTest(unittest.TestCase):
         isinstance(y.distribution.count_distribution,
                    bay.distributions.NegativeBinomial))
 
-    rv = RandomVariable(dim=12, posterior='mse')
+    rv = RVmeta(dim=12, posterior='mse')
     dist = rv.create_posterior()
     y = dist(x)
     self.assertFalse(rv.is_zero_inflated)
@@ -94,7 +94,7 @@ class ModelTest(unittest.TestCase):
     sco = get_dataset(_DS)
     train, test = sco.split()
     self.assertTrue(sco.n_omics >= 2)
-    dca = DeepCountAutoencoder(outputs=RandomVariable(dim=sco.n_vars,
+    dca = DeepCountAutoencoder(outputs=RVmeta(dim=sco.n_vars,
                                                       posterior='mse'),
                                latent_dim=10)
     dca.fit(train, epochs=_EPOCHS, verbose=False)
@@ -118,8 +118,8 @@ class ModelTest(unittest.TestCase):
     n_genes = sco.n_vars
     n_prots = sco.numpy(OMIC.proteomic).shape[1]
     vae = VariationalAutoEncoder(outputs=[
-        RandomVariable(dim=n_genes, posterior='zinb', name=OMIC.transcriptomic),
-        RandomVariable(dim=n_prots, posterior='nbd', name=OMIC.proteomic)
+        RVmeta(dim=n_genes, posterior='zinb', name=OMIC.transcriptomic),
+        RVmeta(dim=n_prots, posterior='nbd', name=OMIC.proteomic)
     ])
     vae.fit(sco, epochs=_EPOCHS, verbose=False)
     self._loss_not_rise(vae.train_history['loss'])
@@ -167,7 +167,7 @@ class ModelTest(unittest.TestCase):
   def test_scvi(self):
     sco = get_dataset(_DS)
     train, test = sco.split()
-    scvi = SCVI(RandomVariable(sco.n_vars, posterior='zinbd', name='rna'))
+    scvi = SCVI(RVmeta(sco.n_vars, posterior='zinbd', name='rna'))
     scvi.fit(train, epochs=_EPOCHS, verbose=False)
     pX, (qZ, qL) = scvi.predict(test, verbose=False)
 

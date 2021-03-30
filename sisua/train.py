@@ -14,7 +14,7 @@ from odin.exp import Experimenter
 from sisua.analysis import Posterior
 from sisua.data import (CONFIG_PATH, DATA_DIR, EXP_DIR, OMIC, SingleCellOMIC,
                         get_dataset, get_dataset_meta)
-from sisua.models import (NetworkConfig, RandomVariable, get_all_models,
+from sisua.models import (NetConf, RVmeta, get_all_models,
                           get_model)
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -72,14 +72,14 @@ class SisuaExperimenter(Experimenter):
     model = cfg.model
     cls = get_model(model.name)
     # parse networks
-    encoder = _from_config(model.encoder, NetworkConfig)
-    decoder = _from_config(model.decoder, NetworkConfig)
+    encoder = _from_config(model.encoder, NetConf)
+    decoder = _from_config(model.decoder, NetConf)
     # parse random variables
     omics = {o.name: self.sco.get_dim(o) for o in self.sco.omics}
     rv = {
         k:
         _from_config(v,
-                     RandomVariable,
+                     RVmeta,
                      overrides=dict(
                          event_shape=omics[k] if k in omics else v.event_shape,
                          projection=True,

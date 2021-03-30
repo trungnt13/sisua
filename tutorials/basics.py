@@ -10,8 +10,8 @@ from sklearn.decomposition import PCA
 
 from sisua.analysis import Posterior
 from sisua.data import OMIC, get_dataset, standardize_protein_name
-from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, NetworkConfig,
-                          RandomVariable, VariationalAutoEncoder)
+from sisua.models import (SCVI, SISUA, DeepCountAutoencoder, NetConf,
+                          RVmeta, VariationalAutoEncoder)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
@@ -28,9 +28,9 @@ train, test = sco.split(train_percent=0.9)
 n_genes = sco.numpy(OMIC.transcriptomic).shape[1]
 n_prots = sco.numpy(OMIC.proteomic).shape[1]
 
-gene_omic = RandomVariable(n_genes, posterior='zinb', name='rna')
-prot_omic = RandomVariable(n_prots, posterior='nb', name='adt')
-network = NetworkConfig(nlayers=1,
+gene_omic = RVmeta(n_genes, posterior='zinb', name='rna')
+prot_omic = RVmeta(n_prots, posterior='nb', name='adt')
+network = NetConf(nlayers=1,
                         hidden_dim=64,
                         pyramid=True,
                         use_conv=False,

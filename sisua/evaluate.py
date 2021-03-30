@@ -16,7 +16,7 @@ from odin.bay.vi.downstream_metrics import predictive_strength
 from odin.stats import sparsity_percentage
 from odin.utils import ArgController, catch_warnings_ignore
 from sisua import (MARKER_ADTS, MARKER_GENES, OMIC, PROTEIN_PAIR_NEGATIVE,
-                   SISUA, Posterior, RandomVariable, SingleCellModel,
+                   SISUA, Posterior, RVmeta, SingleCellModel,
                    SingleCellOMIC, SisuaExperimenter, get_dataset)
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
