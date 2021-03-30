@@ -57,16 +57,23 @@ d. Benchmarks:
     * `Scalability test`__
     * `Fine-tuning networks`
     * `Data normalization`
-e. Further development:
-    * `Roadmap`__
-    * `SISUA 2`__
 
 .. __: https://github.com/trungnt13/sisua/blob/master/docs/dataset_description.md
 .. __: https://github.com/trungnt13/sisua/blob/master/tutorials/basics.py
 .. __: https://github.com/trungnt13/sisua/blob/master/tutorials/probabilistic_embedding.py
 .. __: https://github.com/trungnt13/sisua/blob/master/tests/scalability.py
-.. __:
-.. __:
+
+Roadmap
+*******
+
+1. [x] Multi-OMICs single-cell dataset (`link`__)
+2. [x] Disentanglement VAE for multi-OMICs data (`link`__)
+3. [ ] Better imputation via hierarchical latents model.
+4. [ ] New model: FactorVAE, BetaVAE, MIxture Semi-supervised Autoencoder (MISA)
+5. [ ] Release SISUA 2
+
+.. __: https://github.com/trungnt13/sisua/blob/master/sisua/data/single_cell_dataset.py
+.. __: https://github.com/trungnt13/sisua/blob/master/sisua/models/fvae.py
 
 Toolkits
 ********
