@@ -68,12 +68,13 @@ Roadmap
 
 1. [x] Multi-OMICs single-cell dataset (`link`__)
 2. [x] Disentanglement VAE for multi-OMICs data (`link`__)
-3. [ ] Better imputation via hierarchical latents model.
-4. [ ] New model: FactorVAE, BetaVAE, MIxture Semi-supervised Autoencoder (MISA)
+3. [x] New model: FactorVAE, BetaVAE, MIxture Semi-supervised Autoencoder (MISA)  (`link`__)
+4. [ ] Better imputation via hierarchical latents model.
 5. [ ] Release SISUA 2
 
 .. __: https://github.com/trungnt13/sisua/blob/master/sisua/data/single_cell_dataset.py
 .. __: https://github.com/trungnt13/sisua/blob/master/sisua/models/fvae.py
+.. __: https://github.com/trungnt13/sisua/blob/master/sisua/models/vae.py
 
 Toolkits
 ********
